@@ -76,6 +76,8 @@ enum {
   DATA_ALU,     /* the arriving byte feeds the latched ALU operation */
   DATA_INC_DEC, /* the arriving byte is incremented/decremented into the latch */
   DATA_F,       /* the flag register moved wholesale (PUSH/POP AF), not via the ALU */
+  DATA_PC_LOW,  /* CALL and RST push the resume address */
+  DATA_PC_HIGH,
   DATA_NONE,
 };
 
@@ -83,7 +85,9 @@ enum {
    only exist after the bus cycles ran. */
 enum {
   FINISH_NONE = 0,
-  FINISH_HL_FROM_WZ, /* EX (SP),HL: the value read into WZ becomes HL */
+  FINISH_HL_FROM_WZ,    /* EX (SP),HL: the value read into WZ becomes HL */
+  FINISH_PC_FROM_WZ,    /* jumps, calls, returns: the target travels through WZ */
+  FINISH_JUMP_RELATIVE, /* JR and DJNZ: PC moves by the signed displacement in the latch */
 };
 
 /* z80_t.alu_operation: the alu table per the decoding doc, indexed by y, plus
@@ -299,6 +303,10 @@ static uint8_t z80_get_operand(z80_t *cpu, uint8_t code) {
       return cpu->data_latch;
     case DATA_F:
       return cpu->f;
+    case DATA_PC_LOW:
+      return (uint8_t)(cpu->pc & 0xFF);
+    case DATA_PC_HIGH:
+      return (uint8_t)(cpu->pc >> 8);
     default:
       return *z80_register8(cpu, code);
   }
@@ -359,11 +367,44 @@ static void z80_instruction_done(z80_t *cpu) {
 /* Starts the micro-program's next machine cycle, or the next instruction when
    the program is exhausted. Address side effects (PC and WZ movement) happen
    here, at the cycle boundary. */
+/* the cc table per the decoding doc: NZ Z NC C PO PE P M — the flag chosen
+   by the index's high bits, the sense by its low bit */
+static bool z80_condition(const z80_t *cpu, uint8_t index) {
+  uint8_t flag;
+  switch (index >> 1) {
+    case 0:
+      flag = Z80_FLAG_Z;
+      break;
+    case 1:
+      flag = Z80_FLAG_C;
+      break;
+    case 2:
+      flag = Z80_FLAG_PV;
+      break;
+    default:
+      flag = Z80_FLAG_S;
+      break;
+  }
+  const bool set = (cpu->f & flag) != 0;
+  return (index & 1) ? set : !set;
+}
+
 static void z80_start_next_cycle(z80_t *cpu) {
   if (cpu->program_index == cpu->program_length) {
-    if (cpu->finish == FINISH_HL_FROM_WZ) {
-      cpu->h = (uint8_t)(cpu->wz >> 8);
-      cpu->l = (uint8_t)(cpu->wz & 0xFF);
+    switch (cpu->finish) {
+      case FINISH_HL_FROM_WZ:
+        cpu->h = (uint8_t)(cpu->wz >> 8);
+        cpu->l = (uint8_t)(cpu->wz & 0xFF);
+        break;
+      case FINISH_PC_FROM_WZ:
+        cpu->pc = cpu->wz;
+        break;
+      case FINISH_JUMP_RELATIVE:
+        cpu->pc = (uint16_t)(cpu->pc + (int8_t)cpu->data_latch);
+        cpu->wz = cpu->pc;
+        break;
+      default:
+        break;
     }
     z80_instruction_done(cpu);
     return;
@@ -449,6 +490,20 @@ static void z80_decode(z80_t *cpu) {
           cpu->a = (uint8_t)(cpu->af_ >> 8);
           cpu->f = (uint8_t)(cpu->af_ & 0xFF);
           cpu->af_ = exchanged;
+        } else if (y == 2) { /* DJNZ d: the B decrement extends M1 one T-state */
+          cpu->b--;
+          z80_append_internal(cpu, 1);
+          z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_LATCH);
+          if (cpu->b != 0) {
+            z80_append_internal(cpu, 5);
+            cpu->finish = FINISH_JUMP_RELATIVE;
+          }
+        } else if (y >= 3) { /* JR d and JR cc[y-4],d */
+          z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_LATCH);
+          if (y == 3 || z80_condition(cpu, y - 4)) {
+            z80_append_internal(cpu, 5);
+            cpu->finish = FINISH_JUMP_RELATIVE;
+          }
         }
         break;
       case 1:
@@ -538,10 +593,45 @@ static void z80_decode(z80_t *cpu) {
   } else if (x == 3 && z == 6) { /* alu[y] with immediate operand */
     cpu->alu_operation = y;
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_ALU);
+  } else if (x == 3 && z == 0) { /* RET cc[y]: the test extends M1 one T-state */
+    z80_append_internal(cpu, 1);
+    if (z80_condition(cpu, y)) {
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_Z);
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_W);
+      cpu->finish = FINISH_PC_FROM_WZ;
+    }
+  } else if (x == 3 && z == 2) { /* JP cc[y],nn: the operand is read either way */
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W);
+    if (z80_condition(cpu, y)) {
+      cpu->finish = FINISH_PC_FROM_WZ;
+    }
+  } else if (x == 3 && z == 4) { /* CALL cc[y],nn: the operand is read either way */
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
+    if (z80_condition(cpu, y)) {
+      z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W, 1);
+      z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_HIGH);
+      z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_LOW);
+      cpu->finish = FINISH_PC_FROM_WZ;
+    } else {
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W);
+    }
+  } else if (x == 3 && z == 7) { /* RST y*8 */
+    cpu->wz = (uint16_t)(y * 8);
+    z80_append_internal(cpu, 1);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_HIGH);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_LOW);
+    cpu->finish = FINISH_PC_FROM_WZ;
   } else if (x == 3 && z == 1) {
     if (q == 0) { /* POP rp2[p]: low byte first, post-increment */
       z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, register_pair2_low[p]);
       z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, register_pair2_high[p]);
+    } else if (p == 0) { /* RET */
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_Z);
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_W);
+      cpu->finish = FINISH_PC_FROM_WZ;
+    } else if (p == 2) { /* JP (HL): no memory access despite the name; WZ untouched */
+      cpu->pc = (uint16_t)((cpu->h << 8) | cpu->l);
     } else if (p == 1) { /* EXX */
       uint16_t exchanged = (uint16_t)((cpu->b << 8) | cpu->c);
       cpu->b = (uint8_t)(cpu->bc_ >> 8);
@@ -559,6 +649,10 @@ static void z80_decode(z80_t *cpu) {
       cpu->sp = (uint16_t)((cpu->h << 8) | cpu->l);
       z80_append_internal(cpu, 2);
     }
+  } else if (x == 3 && z == 3 && y == 0) { /* JP nn */
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W);
+    cpu->finish = FINISH_PC_FROM_WZ;
   } else if (x == 3 && z == 3 && y == 4) { /* EX (SP),HL */
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP, DATA_Z);
     z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_SP_PLUS_1, DATA_W, 1);
@@ -576,6 +670,12 @@ static void z80_decode(z80_t *cpu) {
     z80_append_internal(cpu, 1);
     z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_high[p]);
     z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_low[p]);
+  } else if (x == 3 && z == 5 && p == 0) { /* CALL nn */
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
+    z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W, 1);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_HIGH);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_LOW);
+    cpu->finish = FINISH_PC_FROM_WZ;
   }
   /* everything unimplemented decodes to an empty program and runs as NOP, so
      a machine can keep ticking */
