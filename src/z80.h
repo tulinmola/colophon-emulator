@@ -90,9 +90,10 @@ typedef struct {
   uint8_t i, r;
   uint8_t im; /* interrupt mode 0..2 */
   bool iff1, iff2;
-  bool ei;   /* EI just executed: interrupt acceptance blocked for one instruction */
-  uint8_t p; /* last instruction was LD A,I / LD A,R (IFF2-read bug tracking) */
-  uint8_t q; /* copy of F if the last instruction modified flags, else 0 */
+  bool halted; /* HALT executed: fetches idle as NOPs, PC held, HALT pin asserted */
+  bool ei;     /* EI just executed: interrupt acceptance blocked for one instruction */
+  uint8_t p;   /* last instruction was LD A,I / LD A,R (IFF2-read bug tracking) */
+  uint8_t q;   /* copy of F if the last instruction modified flags, else 0 */
 
   /* cycle-stepping state: which T-state of the current instruction is next */
   uint8_t step;

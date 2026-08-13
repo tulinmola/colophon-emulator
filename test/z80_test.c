@@ -119,6 +119,8 @@ static int check_final(const z80_t *cpu, const json_value *final, int verbose) {
 static int run_test(const json_value *test, int verbose) {
   const json_value *name = json_get(test, "name");
   const json_value *cycles = json_get(test, "cycles");
+  const json_value *ports = json_get(test, "ports");
+  size_t port_index = 0;
   z80_t cpu;
   load_state(&cpu, json_get(test, "initial"));
 
@@ -175,8 +177,32 @@ static int run_test(const json_value *test, int verbose) {
       data_was_fed = 1;
     } else if ((pins & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR)) {
       ram[address] = z80_data(pins);
+    } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
+      /* each I/O pulse consumes the test's next ports entry, which states the
+         expected address, the value, and the direction */
+      fed_data = 0;
+      if (ports && port_index < ports->length) {
+        const json_value *entry = &ports->items[port_index++];
+        if ((uint16_t)entry->items[0].number != address || entry->items[2].string[0] != 'r') {
+          mismatch_count++;
+        }
+        fed_data = (uint8_t)entry->items[1].number;
+      } else {
+        mismatch_count++;
+      }
+      pins = z80_set_data(pins, fed_data);
+      data_was_fed = 1;
+    } else if ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
+      if (ports && port_index < ports->length) {
+        const json_value *entry = &ports->items[port_index++];
+        if ((uint16_t)entry->items[0].number != address || entry->items[2].string[0] != 'w' ||
+            (uint8_t)entry->items[1].number != z80_data(pins)) {
+          mismatch_count++;
+        }
+      } else {
+        mismatch_count++;
+      }
     }
-    /* I/O (IORQ) servicing arrives with the IN/OUT opcodes. */
   }
   mismatch_count += check_final(&cpu, json_get(test, "final"), verbose);
 

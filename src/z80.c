@@ -24,6 +24,16 @@ enum {
   MEM_WRITE_T1,
   MEM_WRITE_T2,
   MEM_WRITE_T3,
+  /* I/O cycles are four T-states: the silicon inserts one wait state itself,
+     so the pulse sits in the third and data passes in the fourth */
+  IO_READ_T1,
+  IO_READ_T2,
+  IO_READ_T3,
+  IO_READ_T4,
+  IO_WRITE_T1,
+  IO_WRITE_T2,
+  IO_WRITE_T3,
+  IO_WRITE_T4,
   STRETCH_T, /* internal T-states: bus released, address held, counted down */
 };
 
@@ -34,6 +44,8 @@ enum {
 enum {
   CYCLE_MEM_READ = 0,
   CYCLE_MEM_WRITE,
+  CYCLE_IO_READ,
+  CYCLE_IO_WRITE,
   CYCLE_INTERNAL,
 };
 
@@ -206,6 +218,71 @@ static void z80_alu(z80_t *cpu, uint8_t operation, uint8_t value) {
       cpu->a = result8;
       break;
     }
+  }
+  z80_set_flags(cpu, flags);
+}
+
+/* The accumulator rotates touch only H, N, C and the X/Y copies (from the
+   result); S, Z and P/V survive. Their CB-prefixed forms set everything. */
+static void z80_rotate_accumulator(z80_t *cpu, uint8_t which) {
+  const uint8_t a = cpu->a;
+  uint8_t carry_out;
+  uint8_t result;
+  switch (which) {
+    case 0: /* RLCA */
+      carry_out = a >> 7;
+      result = (uint8_t)((a << 1) | carry_out);
+      break;
+    case 1: /* RRCA */
+      carry_out = a & 1;
+      result = (uint8_t)((a >> 1) | (carry_out << 7));
+      break;
+    case 2: /* RLA */
+      carry_out = a >> 7;
+      result = (uint8_t)((a << 1) | (cpu->f & Z80_FLAG_C));
+      break;
+    default: /* RRA */
+      carry_out = a & 1;
+      result = (uint8_t)((a >> 1) | ((cpu->f & Z80_FLAG_C) << 7));
+      break;
+  }
+  cpu->a = result;
+  z80_set_flags(cpu, (uint8_t)((cpu->f & (Z80_FLAG_S | Z80_FLAG_Z | Z80_FLAG_PV)) |
+                               (result & (Z80_FLAG_X | Z80_FLAG_Y)) | carry_out));
+}
+
+/* DAA per "The Undocumented Z80 Documented" ch. 4: the correction is 0x06,
+   0x60 or 0x66 chosen from H, C and the digit values; N decides its sign. */
+static void z80_daa(z80_t *cpu) {
+  const uint8_t a = cpu->a;
+  uint8_t correction = 0;
+  uint8_t flags = cpu->f & Z80_FLAG_N;
+  if ((cpu->f & Z80_FLAG_H) || (a & 0x0F) > 9) {
+    correction = 0x06;
+  }
+  if ((cpu->f & Z80_FLAG_C) || a > 0x99) {
+    correction |= 0x60;
+    flags |= Z80_FLAG_C;
+  }
+  const uint8_t result = (uint8_t)((cpu->f & Z80_FLAG_N) ? a - correction : a + correction);
+  flags |= (a ^ result) & Z80_FLAG_H;
+  flags |= z80_flags_from_result(result, result) | z80_flag_parity(result);
+  cpu->a = result;
+  z80_set_flags(cpu, flags);
+}
+
+/* SCF and CCF copy X/Y from ((Q ^ F) | A): when the previous instruction
+   wrote flags, A alone decides; when it did not, F's old bits leak in too.
+   Zilog NMOS behavior, cracked by Patrik Rak (2012), verified against every
+   test. Q here is the previous instruction's, captured before decode resets
+   it. */
+static void z80_carry_flag(z80_t *cpu, bool invert, uint8_t previous_q) {
+  uint8_t flags = cpu->f & (Z80_FLAG_S | Z80_FLAG_Z | Z80_FLAG_PV);
+  flags |= ((previous_q ^ cpu->f) | cpu->a) & (Z80_FLAG_X | Z80_FLAG_Y);
+  if (invert) {
+    flags |= (cpu->f & Z80_FLAG_C) ? Z80_FLAG_H : Z80_FLAG_C;
+  } else {
+    flags |= Z80_FLAG_C;
   }
   z80_set_flags(cpu, flags);
 }
@@ -451,6 +528,12 @@ static void z80_start_next_cycle(z80_t *cpu) {
     case CYCLE_MEM_WRITE:
       cpu->step = MEM_WRITE_T1;
       break;
+    case CYCLE_IO_READ:
+      cpu->step = IO_READ_T1;
+      break;
+    case CYCLE_IO_WRITE:
+      cpu->step = IO_WRITE_T1;
+      break;
     default: /* CYCLE_INTERNAL: stretch only, bus untouched */
       cpu->step = STRETCH_T;
       break;
@@ -476,7 +559,9 @@ static void z80_decode(z80_t *cpu) {
   const uint8_t q = y & 1;
 
   /* per-instruction trackers reset at the start so the instruction's own
-     work can set them: Q via z80_set_flags, EI and P by their opcodes */
+     work can set them: Q via z80_set_flags, EI and P by their opcodes.
+     SCF/CCF read the previous instruction's Q, so it survives in a local. */
+  const uint8_t previous_q = cpu->q;
   cpu->q = 0;
   cpu->ei = false;
   cpu->p = 0;
@@ -572,11 +657,38 @@ static void z80_decode(z80_t *cpu) {
           z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, y);
         }
         break;
-      default: /* 0x00 NOP; the rest of the x=0 page is not implemented yet */
+      case 7:
+        switch (y) {
+          case 0:
+          case 1:
+          case 2:
+          case 3:
+            z80_rotate_accumulator(cpu, y);
+            break;
+          case 4:
+            z80_daa(cpu);
+            break;
+          case 5: /* CPL */
+            cpu->a = (uint8_t)~cpu->a;
+            z80_set_flags(
+                cpu, (uint8_t)((cpu->f & (Z80_FLAG_S | Z80_FLAG_Z | Z80_FLAG_PV | Z80_FLAG_C)) |
+                               Z80_FLAG_H | Z80_FLAG_N | (cpu->a & (Z80_FLAG_X | Z80_FLAG_Y))));
+            break;
+          case 6: /* SCF */
+            z80_carry_flag(cpu, false, previous_q);
+            break;
+          default: /* CCF */
+            z80_carry_flag(cpu, true, previous_q);
+            break;
+        }
+        break;
+      default: /* 0x00 NOP */
         break;
     }
-  } else if (x == 1 && cpu->opcode != 0x76) { /* the LD r,r' page; 0x76 is HALT */
-    if (z == 6) {                             /* LD r,(HL) */
+  } else if (x == 1) {         /* the LD r,r' page */
+    if (cpu->opcode == 0x76) { /* HALT */
+      cpu->halted = true;
+    } else if (z == 6) { /* LD r,(HL) */
       z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_HL, y);
     } else if (y == 6) { /* LD (HL),r */
       z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, z);
@@ -666,6 +778,19 @@ static void z80_decode(z80_t *cpu) {
     exchanged = cpu->e;
     cpu->e = cpu->l;
     cpu->l = exchanged;
+  } else if (x == 3 && z == 3 && y == 2) { /* OUT (n),A: port A:n, W preloaded with A */
+    cpu->wz = (uint16_t)((cpu->a << 8) | (cpu->wz & 0xFF));
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
+    z80_append_cycle(cpu, CYCLE_IO_WRITE, ADDRESS_WZ_THEN_A_HIGH, REGISTER_A);
+  } else if (x == 3 && z == 3 && y == 3) { /* IN A,(n): port A:n, no flags */
+    cpu->wz = (uint16_t)((cpu->a << 8) | (cpu->wz & 0xFF));
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
+    z80_append_cycle(cpu, CYCLE_IO_READ, ADDRESS_WZ_INCREMENT, REGISTER_A);
+  } else if (x == 3 && z == 3 && y == 6) { /* DI */
+    cpu->iff1 = cpu->iff2 = false;
+  } else if (x == 3 && z == 3 && y == 7) { /* EI: acceptance stays blocked one instruction */
+    cpu->iff1 = cpu->iff2 = true;
+    cpu->ei = true;
   } else if (x == 3 && z == 5 && q == 0) { /* PUSH rp2[p]: high byte first, pre-decrement */
     z80_append_internal(cpu, 1);
     z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_high[p]);
@@ -685,12 +810,17 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
   switch (cpu->step) {
     case M1_T1:
       pins = z80_set_address(pins & ~Z80_OUT_PINS, cpu->pc) | Z80_M1;
+      if (cpu->halted) {
+        pins |= Z80_HALT;
+      }
       cpu->step = M1_T2;
       break;
 
     case M1_T2:
       pins |= Z80_MREQ | Z80_RD;
-      cpu->pc++;
+      if (!cpu->halted) {
+        cpu->pc++; /* a halted CPU keeps fetching but stands still */
+      }
       cpu->step = M1_T3;
       break;
 
@@ -702,7 +832,7 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
       if (pins & Z80_WAIT) {
         return pins;
       }
-      cpu->opcode = z80_data(pins);
+      cpu->opcode = cpu->halted ? 0x00 : z80_data(pins);
       pins = z80_set_address(pins & ~Z80_OUT_PINS, (uint16_t)((cpu->i << 8) | cpu->r)) | Z80_RFSH;
       /* R is a 7-bit counter; bit 7 changes only via LD R,A. */
       cpu->r = (cpu->r & 0x80) | ((cpu->r + 1) & 0x7F);
@@ -758,6 +888,51 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
       } else {
         z80_start_next_cycle(cpu);
       }
+      break;
+
+    case IO_READ_T1:
+      pins = z80_set_address(pins & ~Z80_OUT_PINS, cpu->operand_address);
+      cpu->step = IO_READ_T2;
+      break;
+
+    case IO_READ_T2:
+      cpu->step = IO_READ_T3;
+      break;
+
+    case IO_READ_T3:
+      pins |= Z80_IORQ | Z80_RD;
+      cpu->step = IO_READ_T4;
+      break;
+
+    case IO_READ_T4:
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
+      z80_set_operand(cpu, cpu->operand_data, z80_data(pins));
+      pins &= ~Z80_OUT_PINS;
+      z80_start_next_cycle(cpu);
+      break;
+
+    case IO_WRITE_T1:
+      pins = z80_set_address(pins & ~Z80_OUT_PINS, cpu->operand_address);
+      cpu->step = IO_WRITE_T2;
+      break;
+
+    case IO_WRITE_T2:
+      cpu->step = IO_WRITE_T3;
+      break;
+
+    case IO_WRITE_T3:
+      pins = z80_set_data(pins, z80_get_operand(cpu, cpu->operand_data)) | Z80_IORQ | Z80_WR;
+      cpu->step = IO_WRITE_T4;
+      break;
+
+    case IO_WRITE_T4:
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
+      pins &= ~Z80_OUT_PINS;
+      z80_start_next_cycle(cpu);
       break;
 
     case STRETCH_T:
