@@ -59,6 +59,17 @@ static inline uint64_t z80_set_data(uint64_t pins, uint8_t data) {
   return (pins & ~0xFF0000ULL) | ((uint64_t)data << 16);
 }
 
+/* Flag register bits. X and Y are the undocumented copies of result bits 3
+ * and 5 ("The Undocumented Z80 Documented" ch. 2). */
+#define Z80_FLAG_C (1 << 0)  /* carry */
+#define Z80_FLAG_N (1 << 1)  /* add/subtract */
+#define Z80_FLAG_PV (1 << 2) /* parity/overflow */
+#define Z80_FLAG_X (1 << 3)
+#define Z80_FLAG_H (1 << 4) /* half carry */
+#define Z80_FLAG_Y (1 << 5)
+#define Z80_FLAG_Z (1 << 6) /* zero */
+#define Z80_FLAG_S (1 << 7) /* sign */
+
 /* One machine cycle of an instruction's micro-program: what kind of cycle,
  * where its address comes from, and which operand it moves (see z80.c). */
 typedef struct {
@@ -90,8 +101,10 @@ typedef struct {
   uint8_t program_index;
   /* latched for the machine cycle in progress */
   uint16_t operand_address;
-  uint8_t operand_data; /* operand code, see z80.c */
-  uint8_t data_latch;   /* internal temporary for operands in flight that must not touch WZ */
+  uint8_t operand_data;  /* operand code, see z80.c */
+  uint8_t operand_cycle; /* cycle kind, see z80.c */
+  uint8_t data_latch;    /* internal temporary for operands in flight that must not touch WZ */
+  uint8_t alu_operation; /* operation latched at decode for cycles that compute, see z80.c */
 } z80_t;
 
 /* Reset state per "The Undocumented Z80 Documented": AF=FFFF, SP=FFFF,
