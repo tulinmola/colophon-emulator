@@ -21,19 +21,20 @@ enum {
   MEM_READ_T1,
   MEM_READ_T2,
   MEM_READ_T3,
-  MEM_READ_T4,
   MEM_WRITE_T1,
   MEM_WRITE_T2,
   MEM_WRITE_T3,
+  STRETCH_T, /* internal T-states: bus released, address held, counted down */
 };
 
-/* z80_micro_op.cycle: what kind of machine cycle. The extended read is the
-   read-modify-write form (INC/DEC (HL)): one internal T-state after the data
-   arrives, bus released, address held. */
+/* z80_micro_op.cycle: what kind of machine cycle. Any cycle can carry stretch
+   T-states at its end (read-modify-write reads, the second write of
+   EX (SP),HL); CYCLE_INTERNAL is stretch alone, the bus idling while the CPU
+   computes (16-bit arithmetic, PUSH's pre-decrement setup). */
 enum {
   CYCLE_MEM_READ = 0,
-  CYCLE_MEM_READ_EXTENDED,
   CYCLE_MEM_WRITE,
+  CYCLE_INTERNAL,
 };
 
 /* z80_micro_op.address: where the cycle's address comes from. Indirect
@@ -44,11 +45,16 @@ enum {
    https://raw.githubusercontent.com/floooh/emu-info/master/z80/memptr_eng.txt:
    single accesses leave WZ = address + 1; LD (addr),A leaves W = A. */
 enum {
-  ADDRESS_PC_INCREMENT = 0, /* the address is PC, which moves past it */
-  ADDRESS_HL,               /* (HL) operands do not involve WZ */
-  ADDRESS_WZ_INCREMENT,     /* the address is WZ, then WZ = WZ + 1 */
-  ADDRESS_WZ,               /* the address is WZ, untouched */
-  ADDRESS_WZ_THEN_A_HIGH,   /* store-A quirk: WZ = A:((WZ + 1) & 0xFF) */
+  ADDRESS_NONE = 0,       /* internal cycles leave the bus address alone */
+  ADDRESS_PC_INCREMENT,   /* the address is PC, which moves past it */
+  ADDRESS_HL,             /* (HL) operands do not involve WZ */
+  ADDRESS_WZ_INCREMENT,   /* the address is WZ, then WZ = WZ + 1 */
+  ADDRESS_WZ,             /* the address is WZ, untouched */
+  ADDRESS_WZ_THEN_A_HIGH, /* store-A quirk: WZ = A:((WZ + 1) & 0xFF) */
+  ADDRESS_SP_INCREMENT,   /* the address is SP, then SP = SP + 1 (POP) */
+  ADDRESS_SP_DECREMENT,   /* SP = SP - 1 first, then it is the address (PUSH) */
+  ADDRESS_SP,
+  ADDRESS_SP_PLUS_1,
 };
 
 /* z80_micro_op.data: which operand a cycle reads into or writes from.
@@ -69,6 +75,15 @@ enum {
   DATA_LATCH,   /* plain temporary; LD (HL),n leaves WZ untouched, so Z cannot carry its n */
   DATA_ALU,     /* the arriving byte feeds the latched ALU operation */
   DATA_INC_DEC, /* the arriving byte is incremented/decremented into the latch */
+  DATA_F,       /* the flag register moved wholesale (PUSH/POP AF), not via the ALU */
+  DATA_NONE,
+};
+
+/* z80_t.finish: work applied when the micro-program ends, for results that
+   only exist after the bus cycles ran. */
+enum {
+  FINISH_NONE = 0,
+  FINISH_HL_FROM_WZ, /* EX (SP),HL: the value read into WZ becomes HL */
 };
 
 /* z80_t.alu_operation: the alu table per the decoding doc, indexed by y, plus
@@ -219,6 +234,57 @@ static uint8_t z80_decrement(z80_t *cpu, uint8_t value) {
   return result;
 }
 
+/* 16-bit register pair table per the decoding doc: BC DE HL SP, indexed by p. */
+static uint16_t z80_register_pair(z80_t *cpu, uint8_t index) {
+  switch (index) {
+    case 0:
+      return (uint16_t)((cpu->b << 8) | cpu->c);
+    case 1:
+      return (uint16_t)((cpu->d << 8) | cpu->e);
+    case 2:
+      return (uint16_t)((cpu->h << 8) | cpu->l);
+    default:
+      return cpu->sp;
+  }
+}
+
+static void z80_set_register_pair(z80_t *cpu, uint8_t index, uint16_t value) {
+  switch (index) {
+    case 0:
+      cpu->b = (uint8_t)(value >> 8);
+      cpu->c = (uint8_t)(value & 0xFF);
+      break;
+    case 1:
+      cpu->d = (uint8_t)(value >> 8);
+      cpu->e = (uint8_t)(value & 0xFF);
+      break;
+    case 2:
+      cpu->h = (uint8_t)(value >> 8);
+      cpu->l = (uint8_t)(value & 0xFF);
+      break;
+    default:
+      cpu->sp = value;
+      break;
+  }
+}
+
+/* ADD HL,ss touches only H, N, C and the X/Y copies — taken from the high
+   byte of the result; S, Z and P/V survive. WZ = HL + 1, from the pre-add HL. */
+static void z80_add16(z80_t *cpu, uint16_t value) {
+  const uint16_t hl = (uint16_t)((cpu->h << 8) | cpu->l);
+  cpu->wz = (uint16_t)(hl + 1);
+  const unsigned result = hl + value;
+  uint8_t flags = cpu->f & (Z80_FLAG_S | Z80_FLAG_Z | Z80_FLAG_PV);
+  flags |= ((hl ^ value ^ result) >> 8) & Z80_FLAG_H; /* carry out of bit 11 */
+  if (result > 0xFFFF) {
+    flags |= Z80_FLAG_C;
+  }
+  flags |= (result >> 8) & (Z80_FLAG_X | Z80_FLAG_Y);
+  cpu->h = (uint8_t)(result >> 8);
+  cpu->l = (uint8_t)(result & 0xFF);
+  z80_set_flags(cpu, flags);
+}
+
 static uint8_t z80_get_operand(z80_t *cpu, uint8_t code) {
   switch (code) {
     case DATA_Z:
@@ -231,6 +297,8 @@ static uint8_t z80_get_operand(z80_t *cpu, uint8_t code) {
       return (uint8_t)(cpu->sp >> 8);
     case DATA_LATCH:
       return cpu->data_latch;
+    case DATA_F:
+      return cpu->f;
     default:
       return *z80_register8(cpu, code);
   }
@@ -260,14 +328,26 @@ static void z80_set_operand(z80_t *cpu, uint8_t code, uint8_t value) {
       cpu->data_latch = cpu->alu_operation == OPERATION_INCREMENT ? z80_increment(cpu, value)
                                                                   : z80_decrement(cpu, value);
       break;
+    case DATA_F:
+      cpu->f = value; /* wholesale load, not a computation: Q stays clear */
+      break;
     default:
       *z80_register8(cpu, code) = value;
       break;
   }
 }
 
+static void z80_append_cycle_stretched(z80_t *cpu, uint8_t cycle, uint8_t address, uint8_t data,
+                                       uint8_t stretch) {
+  cpu->program[cpu->program_length++] = (z80_micro_op){cycle, address, data, stretch};
+}
+
 static void z80_append_cycle(z80_t *cpu, uint8_t cycle, uint8_t address, uint8_t data) {
-  cpu->program[cpu->program_length++] = (z80_micro_op){cycle, address, data};
+  z80_append_cycle_stretched(cpu, cycle, address, data, 0);
+}
+
+static void z80_append_internal(z80_t *cpu, uint8_t ticks) {
+  z80_append_cycle_stretched(cpu, CYCLE_INTERNAL, ADDRESS_NONE, DATA_NONE, ticks);
 }
 
 static void z80_instruction_done(z80_t *cpu) {
@@ -281,13 +361,19 @@ static void z80_instruction_done(z80_t *cpu) {
    here, at the cycle boundary. */
 static void z80_start_next_cycle(z80_t *cpu) {
   if (cpu->program_index == cpu->program_length) {
+    if (cpu->finish == FINISH_HL_FROM_WZ) {
+      cpu->h = (uint8_t)(cpu->wz >> 8);
+      cpu->l = (uint8_t)(cpu->wz & 0xFF);
+    }
     z80_instruction_done(cpu);
     return;
   }
   const z80_micro_op operation = cpu->program[cpu->program_index++];
   cpu->operand_data = operation.data;
-  cpu->operand_cycle = operation.cycle;
+  cpu->stretch_remaining = operation.stretch;
   switch (operation.address) {
+    case ADDRESS_NONE:
+      break;
     case ADDRESS_PC_INCREMENT:
       cpu->operand_address = cpu->pc++;
       break;
@@ -300,12 +386,34 @@ static void z80_start_next_cycle(z80_t *cpu) {
     case ADDRESS_WZ:
       cpu->operand_address = cpu->wz;
       break;
-    default: /* ADDRESS_WZ_THEN_A_HIGH */
+    case ADDRESS_WZ_THEN_A_HIGH:
       cpu->operand_address = cpu->wz;
       cpu->wz = (uint16_t)((cpu->a << 8) | ((cpu->wz + 1) & 0xFF));
       break;
+    case ADDRESS_SP_INCREMENT:
+      cpu->operand_address = cpu->sp++;
+      break;
+    case ADDRESS_SP_DECREMENT:
+      cpu->operand_address = --cpu->sp;
+      break;
+    case ADDRESS_SP:
+      cpu->operand_address = cpu->sp;
+      break;
+    default: /* ADDRESS_SP_PLUS_1 */
+      cpu->operand_address = (uint16_t)(cpu->sp + 1);
+      break;
   }
-  cpu->step = operation.cycle == CYCLE_MEM_WRITE ? MEM_WRITE_T1 : MEM_READ_T1;
+  switch (operation.cycle) {
+    case CYCLE_MEM_READ:
+      cpu->step = MEM_READ_T1;
+      break;
+    case CYCLE_MEM_WRITE:
+      cpu->step = MEM_WRITE_T1;
+      break;
+    default: /* CYCLE_INTERNAL: stretch only, bus untouched */
+      cpu->step = STRETCH_T;
+      break;
+  }
 }
 
 /* Opcode fields x/y/z/p/q per "Decoding Z80 Opcodes" (Cristian Dinu),
@@ -314,6 +422,10 @@ static void z80_start_next_cycle(z80_t *cpu) {
    DE HL SP) is indexed by p. */
 static const uint8_t register_pair_low[4] = {REGISTER_C, REGISTER_E, REGISTER_L, DATA_SP_LOW};
 static const uint8_t register_pair_high[4] = {REGISTER_B, REGISTER_D, REGISTER_H, DATA_SP_HIGH};
+
+/* the rp2 table (PUSH/POP): BC DE HL AF, indexed by p */
+static const uint8_t register_pair2_low[4] = {REGISTER_C, REGISTER_E, REGISTER_L, DATA_F};
+static const uint8_t register_pair2_high[4] = {REGISTER_B, REGISTER_D, REGISTER_H, REGISTER_A};
 
 static void z80_decode(z80_t *cpu) {
   const uint8_t x = cpu->opcode >> 6;
@@ -327,14 +439,30 @@ static void z80_decode(z80_t *cpu) {
   cpu->q = 0;
   cpu->ei = false;
   cpu->p = 0;
+  cpu->finish = FINISH_NONE;
 
   if (x == 0) {
     switch (z) {
+      case 0:
+        if (y == 1) { /* EX AF,AF' */
+          const uint16_t exchanged = (uint16_t)((cpu->a << 8) | cpu->f);
+          cpu->a = (uint8_t)(cpu->af_ >> 8);
+          cpu->f = (uint8_t)(cpu->af_ & 0xFF);
+          cpu->af_ = exchanged;
+        }
+        break;
       case 1:
         if (q == 0) { /* LD rp[p],nn */
           z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, register_pair_low[p]);
           z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, register_pair_high[p]);
+        } else { /* ADD HL,rp[p] */
+          z80_add16(cpu, z80_register_pair(cpu, p));
+          z80_append_internal(cpu, 7);
         }
+        break;
+      case 3: /* INC/DEC rp[p]: computed while the bus idles two T-states */
+        z80_set_register_pair(cpu, p, (uint16_t)(z80_register_pair(cpu, p) + (q == 0 ? 1 : -1)));
+        z80_append_internal(cpu, 2);
         break;
       case 2:
         switch (p) {
@@ -374,7 +502,7 @@ static void z80_decode(z80_t *cpu) {
       case 5:         /* DEC r[y] */
         if (y == 6) { /* INC/DEC (HL): read, modify into the latch, write back */
           cpu->alu_operation = z == 4 ? OPERATION_INCREMENT : OPERATION_DECREMENT;
-          z80_append_cycle(cpu, CYCLE_MEM_READ_EXTENDED, ADDRESS_HL, DATA_INC_DEC);
+          z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_INC_DEC, 1);
           z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
         } else {
           uint8_t *reg = z80_register8(cpu, y);
@@ -410,6 +538,44 @@ static void z80_decode(z80_t *cpu) {
   } else if (x == 3 && z == 6) { /* alu[y] with immediate operand */
     cpu->alu_operation = y;
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_ALU);
+  } else if (x == 3 && z == 1) {
+    if (q == 0) { /* POP rp2[p]: low byte first, post-increment */
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, register_pair2_low[p]);
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, register_pair2_high[p]);
+    } else if (p == 1) { /* EXX */
+      uint16_t exchanged = (uint16_t)((cpu->b << 8) | cpu->c);
+      cpu->b = (uint8_t)(cpu->bc_ >> 8);
+      cpu->c = (uint8_t)(cpu->bc_ & 0xFF);
+      cpu->bc_ = exchanged;
+      exchanged = (uint16_t)((cpu->d << 8) | cpu->e);
+      cpu->d = (uint8_t)(cpu->de_ >> 8);
+      cpu->e = (uint8_t)(cpu->de_ & 0xFF);
+      cpu->de_ = exchanged;
+      exchanged = (uint16_t)((cpu->h << 8) | cpu->l);
+      cpu->h = (uint8_t)(cpu->hl_ >> 8);
+      cpu->l = (uint8_t)(cpu->hl_ & 0xFF);
+      cpu->hl_ = exchanged;
+    } else if (p == 3) { /* LD SP,HL */
+      cpu->sp = (uint16_t)((cpu->h << 8) | cpu->l);
+      z80_append_internal(cpu, 2);
+    }
+  } else if (x == 3 && z == 3 && y == 4) { /* EX (SP),HL */
+    z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP, DATA_Z);
+    z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_SP_PLUS_1, DATA_W, 1);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_PLUS_1, REGISTER_H);
+    z80_append_cycle_stretched(cpu, CYCLE_MEM_WRITE, ADDRESS_SP, REGISTER_L, 2);
+    cpu->finish = FINISH_HL_FROM_WZ;
+  } else if (x == 3 && z == 3 && y == 5) { /* EX DE,HL */
+    uint8_t exchanged = cpu->d;
+    cpu->d = cpu->h;
+    cpu->h = exchanged;
+    exchanged = cpu->e;
+    cpu->e = cpu->l;
+    cpu->l = exchanged;
+  } else if (x == 3 && z == 5 && q == 0) { /* PUSH rp2[p]: high byte first, pre-decrement */
+    z80_append_internal(cpu, 1);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_high[p]);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_low[p]);
   }
   /* everything unimplemented decodes to an empty program and runs as NOP, so
      a machine can keep ticking */
@@ -465,15 +631,11 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
       }
       z80_set_operand(cpu, cpu->operand_data, z80_data(pins));
       pins &= ~Z80_OUT_PINS;
-      if (cpu->operand_cycle == CYCLE_MEM_READ_EXTENDED) {
-        cpu->step = MEM_READ_T4;
+      if (cpu->stretch_remaining) {
+        cpu->step = STRETCH_T;
       } else {
         z80_start_next_cycle(cpu);
       }
-      break;
-
-    case MEM_READ_T4: /* internal T-state of the read-modify-write form */
-      z80_start_next_cycle(cpu);
       break;
 
     case MEM_WRITE_T1:
@@ -491,7 +653,17 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
         return pins;
       }
       pins &= ~Z80_OUT_PINS;
-      z80_start_next_cycle(cpu);
+      if (cpu->stretch_remaining) {
+        cpu->step = STRETCH_T;
+      } else {
+        z80_start_next_cycle(cpu);
+      }
+      break;
+
+    case STRETCH_T:
+      if (--cpu->stretch_remaining == 0) {
+        z80_start_next_cycle(cpu);
+      }
       break;
 
     default: /* unreachable; recover to an instruction boundary */
