@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Out-of-memory in the test harness is fatal by design. */
 static void *alloc_or_exit(size_t size) {
   void *memory = malloc(size);
   if (!memory) {
@@ -72,8 +71,22 @@ static int hex_digit(char c) {
 /* Assumes *p->cursor == '"'. Returns a malloc'd decoded string, or NULL on error. */
 static char *parse_string_raw(parser_t *p) {
   p->cursor++;
-  char *buffer = alloc_or_exit((size_t)(p->end - p->cursor) + 1);
+  /* find the closing quote first and size the buffer by the raw span; a
+     rest-of-the-file-sized allocation per string dominates the whole run */
+  const char *scan = p->cursor;
+  while (scan < p->end && *scan != '"') {
+    if (*scan == '\\' && scan + 1 < p->end) {
+      scan++;
+    }
+    scan++;
+  }
+  char *buffer = alloc_or_exit((size_t)(scan - p->cursor) + 1);
   size_t length = 0;
+  /* in bounds: the loop below emits at most one byte per input byte consumed
+     (escapes consume two or six per byte emitted), so length never exceeds the
+     raw span the buffer was sized by; the analyzer cannot follow the invariant
+     across the two loops */
+  /* NOLINTBEGIN(clang-analyzer-security.ArrayBound) */
   while (p->cursor < p->end) {
     char c = *p->cursor;
     if (c == '"') {
@@ -142,6 +155,7 @@ static char *parse_string_raw(parser_t *p) {
       p->cursor++;
     }
   }
+  /* NOLINTEND(clang-analyzer-security.ArrayBound) */
   if (p->ok) {
     fail(p, "unterminated string");
   }
@@ -282,7 +296,7 @@ static int parse_value(parser_t *p, json_value *out) {
   if (c == '{') {
     return parse_object(p, out);
   }
-  /* number; the input buffer is NUL-terminated so strtod cannot overrun */
+  /* the input buffer is NUL-terminated by json_parse_file, so strtod cannot overrun */
   char *number_end;
   double d = strtod(p->cursor, &number_end);
   if (number_end == p->cursor) {
