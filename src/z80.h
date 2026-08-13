@@ -1,0 +1,89 @@
+/*
+ * z80.h — Zilog Z80 CPU, cycle-stepped.
+ *
+ * One z80_tick() call advances the CPU by one T-state (one clock cycle). The
+ * CPU is not a controller: it is a chip that reads and drives bus pins each
+ * tick, and the machine wiring around it decides what those pins mean. All
+ * machine-specific timing (e.g. the Amstrad CPC's 4T alignment) is produced
+ * by wiring — this file knows nothing about any machine.
+ *
+ * Sources:
+ * - "The Undocumented Z80 Documented" (Sean Young),
+ *   https://raw.githubusercontent.com/floooh/emu-info/master/z80/z80-documented.pdf
+ *   — register model incl. WZ, reset state, undocumented flag behavior.
+ * - SingleStepTests/z80, https://github.com/SingleStepTests/z80 (MIT) — our
+ *   per-cycle ground truth. We adopt its bus conventions: MREQ/RD and MREQ/WR
+ *   pulse for a single T-state, and the refresh address I:R is on the address
+ *   bus during T3/T4 of an opcode fetch. Its `q` (flags-modified tracker) and
+ *   `p` (LD A,I / LD A,R tracker) internals are modeled as state fields.
+ * - "A new cycle-stepped Z80 emulator" (Andre Weissflog),
+ *   https://floooh.github.io/2021/12/17/cycle-stepped-z80.html — the
+ *   architectural pattern: pin-mask bus, CPU as an ordinary tickable chip. We
+ *   follow its pin-layout convention (address bits 0-15, data bits 16-23) and
+ *   its tick API.
+ */
+#ifndef COLOPHON_Z80_H
+#define COLOPHON_Z80_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+/* Bus pin layout in the 64-bit pin mask:
+ * bits 0..15  A0..A15 (address bus)
+ * bits 16..23 D0..D7  (data bus)
+ * bits 24..   control pins
+ * Pin names are the datasheet's. Bit set = pin asserted: on silicon most of
+ * these are active-low (/MREQ), but the mask models assertion, not voltage. */
+#define Z80_M1 (1ULL << 24)    /* opcode fetch cycle in progress */
+#define Z80_MREQ (1ULL << 25)  /* memory request */
+#define Z80_IORQ (1ULL << 26)  /* I/O request */
+#define Z80_RD (1ULL << 27)    /* read */
+#define Z80_WR (1ULL << 28)    /* write */
+#define Z80_RFSH (1ULL << 29)  /* refresh address on bus */
+#define Z80_HALT (1ULL << 30)  /* CPU halted */
+#define Z80_WAIT (1ULL << 31)  /* input: stretch the current machine cycle */
+#define Z80_INT (1ULL << 32)   /* input: maskable interrupt request */
+#define Z80_NMI (1ULL << 33)   /* input: non-maskable interrupt request */
+#define Z80_RESET (1ULL << 34) /* input: reset */
+
+/* Pins driven by the CPU, cleared and re-driven every tick. Input pins
+ * (WAIT/INT/NMI/RESET) and the data bus are owned by the machine wiring. */
+#define Z80_OUT_PINS (Z80_M1 | Z80_MREQ | Z80_IORQ | Z80_RD | Z80_WR | Z80_RFSH | Z80_HALT)
+
+static inline uint16_t z80_address(uint64_t pins) { return (uint16_t)(pins & 0xFFFF); }
+static inline uint8_t z80_data(uint64_t pins) { return (uint8_t)((pins >> 16) & 0xFF); }
+static inline uint64_t z80_set_address(uint64_t pins, uint16_t address) {
+  return (pins & ~0xFFFFULL) | address;
+}
+static inline uint64_t z80_set_data(uint64_t pins, uint8_t data) {
+  return (pins & ~0xFF0000ULL) | ((uint64_t)data << 16);
+}
+
+typedef struct {
+  /* main register set */
+  uint8_t a, f, b, c, d, e, h, l;
+  /* shadow set AF' BC' DE' HL': the underscore renders the prime mark */
+  uint16_t af_, bc_, de_, hl_;
+  uint16_t ix, iy, sp, pc;
+  uint16_t wz; /* internal address latch ("MEMPTR") */
+  uint8_t i, r;
+  uint8_t im; /* interrupt mode 0..2 */
+  bool iff1, iff2;
+  bool ei;   /* EI just executed: interrupt acceptance blocked for one instruction */
+  uint8_t p; /* last instruction was LD A,I / LD A,R (IFF2-read bug tracking) */
+  uint8_t q; /* copy of F if the last instruction modified flags, else 0 */
+
+  /* cycle-stepping state: which T-state of the current instruction is next */
+  uint8_t step;
+  uint8_t opcode;
+} z80_t;
+
+/* Reset state per "The Undocumented Z80 Documented": AF=FFFF, SP=FFFF,
+ * PC/I/R/IM zero, interrupts disabled; remaining registers are undefined on
+ * real silicon (zero here, for determinism). */
+void z80_init(z80_t *cpu);
+
+/* Advance one T-state. Takes the current bus pins, returns the new ones. */
+uint64_t z80_tick(z80_t *cpu, uint64_t pins);
+
+#endif

@@ -1,0 +1,9 @@
+# Local working notes and raw research — not part of the published record.
+# Sources get cited at their point of use, in the code and docs that use them.
+notes/
+
+# Build output.
+build/
+
+# Downloaded test data (see tools/fetch-tests.sh).
+test/data/
