@@ -5,7 +5,8 @@ BUILD = build
 SRC_C = src/z80.c test/z80_test.c test/json.c
 SRC_ALL = $(SRC_C) src/z80.h test/json.h
 
-TEST_DATA = test/data/v1/00.json
+TEST_MANIFEST = test/manifest.txt
+TEST_DATA = $(addprefix test/data/v1/,$(shell cat $(TEST_MANIFEST)))
 
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
@@ -17,9 +18,9 @@ $(BUILD)/z80_test: $(SRC_ALL)
 	$(CC) $(CFLAGS) -Isrc $(SRC_C) -o $@
 
 test: $(BUILD)/z80_test $(TEST_DATA)
-	$(BUILD)/z80_test $(TEST_DATA)
+	@$(BUILD)/z80_test $(TEST_DATA)
 
-$(TEST_DATA):
+test/data/v1/%.json:
 	sh tools/fetch-tests.sh
 
 format:

@@ -76,6 +76,9 @@ typedef struct {
   /* cycle-stepping state: which T-state of the current instruction is next */
   uint8_t step;
   uint8_t opcode;
+  /* pending memory-operand machine cycle, set at decode */
+  uint16_t operand_address;
+  uint8_t operand_register; /* 8-bit register table index, see z80.c */
 } z80_t;
 
 /* Reset state per "The Undocumented Z80 Documented": AF=FFFF, SP=FFFF,

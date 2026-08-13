@@ -28,6 +28,7 @@ For development there are also `make format` (clang-format, config in `.clang-fo
 No scribe worked alone. Every claim in this codebase cites its source at the line that depends on it; this list is the other view — what Colophon is built on, and what each source gives us.
 
 - [The Undocumented Z80 Documented](https://raw.githubusercontent.com/floooh/emu-info/master/z80/z80-documented.pdf) (Sean Young) — the Z80's full register model, including the internals official documentation never mentioned: WZ/MEMPTR, the X/Y flags, reset state. Our `z80_t` follows it.
+- ["Decoding Z80 Opcodes"](http://www.z80.info/decoding.htm) (Cristian Dinu) — the octal structure of the opcode map: the x/y/z fields and register tables our decoder computes, the way the silicon does.
 - [SingleStepTests/z80](https://github.com/SingleStepTests/z80) — a thousand randomized tests per opcode, with the expected bus state after every clock cycle, recorded. Our definition of implemented: an opcode exists when its file passes. Its simplified bus conventions (single-tick read/write pulses, refresh address on the bus during T3/T4) are our bus contract.
 - ["A new cycle-stepped Z80 emulator"](https://floooh.github.io/2021/12/17/cycle-stepped-z80.html) (Andre Weissflog) — the architecture we follow: the CPU not as a controller but as an ordinary chip, ticked once per clock cycle, speaking through a mask of bus pins.
 - [json.org](https://www.json.org) — the grammar behind the test harness's hand-rolled JSON reader.

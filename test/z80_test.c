@@ -192,7 +192,8 @@ int main(int argc, char **argv) {
     fprintf(stderr, "usage: %s <test.json>...\n", argv[0]);
     return 2;
   }
-  int total_files = 0, failed_files = 0;
+  int failed_files = 0;
+  long total_tests = 0, total_passed = 0;
   for (int i = 1; i < argc; i++) {
     char error[256];
     json_value *root = json_parse_file(argv[i], error, sizeof error);
@@ -208,16 +209,14 @@ int main(int argc, char **argv) {
         pass++;
       }
     }
-    printf("%s: %d/%d pass\n", argv[i], pass, pass + fail);
-    total_files++;
     if (fail) {
+      printf("%s: %d/%d pass\n", argv[i], pass, pass + fail);
       failed_files++;
     }
+    total_tests += pass + fail;
+    total_passed += pass;
     json_free(root);
   }
-  if (failed_files) {
-    printf("%d/%d files failing\n", failed_files, total_files);
-    return 1;
-  }
-  return 0;
+  printf("%d files, %ld/%ld tests pass\n", argc - 1, total_passed, total_tests);
+  return failed_files ? 1 : 0;
 }
