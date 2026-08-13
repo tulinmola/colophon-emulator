@@ -209,14 +209,16 @@ int main(int argc, char **argv) {
         pass++;
       }
     }
+    putchar(fail ? 'F' : '.');
+    fflush(stdout);
     if (fail) {
-      printf("%s: %d/%d pass\n", argv[i], pass, pass + fail);
+      printf("\n%s: %d/%d pass\n", argv[i], pass, pass + fail);
       failed_files++;
     }
     total_tests += pass + fail;
     total_passed += pass;
     json_free(root);
   }
-  printf("%d files, %ld/%ld tests pass\n", argc - 1, total_passed, total_tests);
+  printf("\n%d files, %ld/%ld tests pass\n", argc - 1, total_passed, total_tests);
   return failed_files ? 1 : 0;
 }

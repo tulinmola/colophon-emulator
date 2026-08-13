@@ -59,6 +59,14 @@ static inline uint64_t z80_set_data(uint64_t pins, uint8_t data) {
   return (pins & ~0xFF0000ULL) | ((uint64_t)data << 16);
 }
 
+/* One machine cycle of an instruction's micro-program: what kind of cycle,
+ * where its address comes from, and which operand it moves (see z80.c). */
+typedef struct {
+  uint8_t cycle;
+  uint8_t address;
+  uint8_t data;
+} z80_micro_op;
+
 typedef struct {
   /* main register set */
   uint8_t a, f, b, c, d, e, h, l;
@@ -76,9 +84,14 @@ typedef struct {
   /* cycle-stepping state: which T-state of the current instruction is next */
   uint8_t step;
   uint8_t opcode;
-  /* pending memory-operand machine cycle, set at decode */
+  /* the instruction's machine cycles after M1, filled at decode */
+  z80_micro_op program[4];
+  uint8_t program_length;
+  uint8_t program_index;
+  /* latched for the machine cycle in progress */
   uint16_t operand_address;
-  uint8_t operand_register; /* 8-bit register table index, see z80.c */
+  uint8_t operand_data; /* operand code, see z80.c */
+  uint8_t data_latch;   /* internal temporary for operands in flight that must not touch WZ */
 } z80_t;
 
 /* Reset state per "The Undocumented Z80 Documented": AF=FFFF, SP=FFFF,
