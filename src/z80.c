@@ -63,10 +63,12 @@ enum {
   ADDRESS_WZ_INCREMENT,   /* the address is WZ, then WZ = WZ + 1 */
   ADDRESS_WZ,             /* the address is WZ, untouched */
   ADDRESS_WZ_THEN_A_HIGH, /* store-A quirk: WZ = A:((WZ + 1) & 0xFF) */
+  ADDRESS_WZ_DECREMENT,   /* the address is WZ, then WZ = WZ - 1 (IND, OUTD) */
   ADDRESS_SP_INCREMENT,   /* the address is SP, then SP = SP + 1 (POP) */
   ADDRESS_SP_DECREMENT,   /* SP = SP - 1 first, then it is the address (PUSH) */
   ADDRESS_SP,
   ADDRESS_SP_PLUS_1,
+  ADDRESS_DE, /* the LD block instructions write through DE */
 };
 
 /* z80_micro_op.data: which operand a cycle reads into or writes from.
@@ -90,18 +92,28 @@ enum {
   DATA_F,       /* the flag register moved wholesale (PUSH/POP AF), not via the ALU */
   DATA_PC_LOW,  /* CALL and RST push the resume address */
   DATA_PC_HIGH,
-  DATA_CB,  /* the arriving byte runs the latched CB operation into the latch */
-  DATA_BIT, /* the arriving byte is bit-tested; X/Y leak from W (see z80_bit) */
-  DATA_NONE,
+  DATA_CB,           /* the arriving byte runs the latched CB operation into the latch */
+  DATA_BIT,          /* the arriving byte is bit-tested; X/Y leak from W (see z80_bit) */
+  DATA_IN,           /* IN r,(C): flags from the value; register y, or none for y=6 */
+  DATA_ROTATE_DIGIT, /* RRD/RLD: nibbles turn between A and the latch */
+  DATA_BLOCK_LD,     /* LDI/LDD family: transfer bookkeeping on arrival */
+  DATA_BLOCK_CP,
+  DATA_BLOCK_IN,
+  DATA_BLOCK_OUT,
+  DATA_NONE, /* reads as zero: OUT (C),0, the NMOS behavior */
 };
 
 /* z80_t.finish: work applied when the micro-program ends, for results that
    only exist after the bus cycles ran. */
 enum {
   FINISH_NONE = 0,
-  FINISH_HL_FROM_WZ,    /* EX (SP),HL: the value read into WZ becomes HL */
-  FINISH_PC_FROM_WZ,    /* jumps, calls, returns: the target travels through WZ */
-  FINISH_JUMP_RELATIVE, /* JR and DJNZ: PC moves by the signed displacement in the latch */
+  FINISH_HL_FROM_WZ,       /* EX (SP),HL: the value read into WZ becomes HL */
+  FINISH_PC_FROM_WZ,       /* jumps, calls, returns: the target travels through WZ */
+  FINISH_JUMP_RELATIVE,    /* JR and DJNZ: PC moves by the signed displacement in the latch */
+  FINISH_BLOCK_LD,         /* LDI/LDD family: DE moves; repeats rewind */
+  FINISH_BLOCK_IN,         /* INI/IND family: HL moves; repeats rewind */
+  FINISH_BLOCK_CP_REPEAT,  /* CPIR/CPDR taking another round */
+  FINISH_BLOCK_OUT_REPEAT, /* OTIR/OTDR taking another round */
 };
 
 /* z80_t.alu_operation: the alu table per the decoding doc, indexed by y, plus
@@ -118,6 +130,10 @@ enum {
   OPERATION_INCREMENT,
   OPERATION_DECREMENT,
 };
+
+/* CPIR/CPDR decide whether to repeat only once the compared byte arrives, so
+   the operand handler extends the running program itself. */
+static void z80_append_internal(z80_t *cpu, uint8_t ticks);
 
 /* 8-bit register table per the decoding doc (see z80_decode): B C D E H L
    (HL) A. Index 6 is the (HL) memory operand, not a register; decode routes
@@ -428,6 +444,107 @@ static void z80_add16(z80_t *cpu, uint16_t value) {
   z80_set_flags(cpu, flags);
 }
 
+/* ADC/SBC HL set the full flag set from the 16-bit result: S from bit 15,
+   X/Y from the high byte, H from bit 11, overflow across the word. */
+static void z80_adc16(z80_t *cpu, uint16_t value, bool subtract) {
+  const uint16_t hl = (uint16_t)((cpu->h << 8) | cpu->l);
+  cpu->wz = (uint16_t)(hl + 1);
+  const unsigned carry = cpu->f & Z80_FLAG_C;
+  unsigned result;
+  uint8_t flags;
+  if (subtract) {
+    result = hl - value - carry;
+    flags = Z80_FLAG_N;
+    if (((hl ^ value) & (hl ^ result)) & 0x8000) {
+      flags |= Z80_FLAG_PV;
+    }
+  } else {
+    result = hl + value + carry;
+    flags = 0;
+    if ((~(hl ^ value) & (hl ^ result)) & 0x8000) {
+      flags |= Z80_FLAG_PV;
+    }
+  }
+  if ((hl ^ value ^ result) & 0x1000) {
+    flags |= Z80_FLAG_H;
+  }
+  if (result & 0x10000) {
+    flags |= Z80_FLAG_C;
+  }
+  const uint16_t result16 = (uint16_t)result;
+  flags |= (result16 >> 8) & (Z80_FLAG_S | Z80_FLAG_X | Z80_FLAG_Y);
+  if (result16 == 0) {
+    flags |= Z80_FLAG_Z;
+  }
+  cpu->h = (uint8_t)(result16 >> 8);
+  cpu->l = (uint8_t)(result16 & 0xFF);
+  z80_set_flags(cpu, flags);
+}
+
+/* Repeating block instructions rewind PC onto the prefix and leave
+   WZ = PC + 1; X/Y are replaced from PC's high byte. Derived from the
+   recorded traces — a page-crossing case distinguishes PC from PC + 1. */
+static void z80_block_repeat(z80_t *cpu) {
+  cpu->pc = (uint16_t)(cpu->pc - 2);
+  cpu->wz = (uint16_t)(cpu->pc + 1);
+  z80_set_flags(cpu, (uint8_t)((cpu->f & ~(Z80_FLAG_X | Z80_FLAG_Y)) |
+                               ((cpu->pc >> 8) & (Z80_FLAG_X | Z80_FLAG_Y))));
+}
+
+/* The block I/O flag rules ("The Undocumented Z80 Documented" ch. 4): S, Z,
+   X, Y from the decremented B; N from the transferred byte's top bit; H and C
+   from the byte plus an adjuster (C±1 for IN, the moved L for OUT)
+   overflowing; P/V a parity mix of both. */
+static void z80_block_io_flags(z80_t *cpu, uint8_t value, uint8_t adjusted) {
+  const unsigned sum = value + adjusted;
+  uint8_t flags = z80_flags_from_result(cpu->b, cpu->b);
+  if (value & 0x80) {
+    flags |= Z80_FLAG_N;
+  }
+  if (sum > 0xFF) {
+    flags |= Z80_FLAG_H | Z80_FLAG_C;
+  }
+  flags |= z80_flag_parity((uint8_t)((sum & 7) ^ cpu->b));
+  z80_set_flags(cpu, flags);
+}
+
+/* Repeating I/O forms additionally rewrite H and P/V from B and the carry —
+   behavior the community only pinned down in the 2010s; these formulas are
+   fitted to and verified against every recorded repeat case. */
+static void z80_block_io_repeat_flags(z80_t *cpu) {
+  const uint8_t b = cpu->b;
+  uint8_t flags = cpu->f;
+  unsigned even = (flags & Z80_FLAG_PV) ? 1 : 0;
+  flags &= (uint8_t)~(Z80_FLAG_H | Z80_FLAG_PV);
+  if (flags & Z80_FLAG_C) {
+    if (flags & Z80_FLAG_N) {
+      if ((b & 0x0F) == 0x00) {
+        flags |= Z80_FLAG_H;
+      }
+      even ^= (z80_flag_parity((uint8_t)((b - 1) & 7)) ? 1u : 0u) ^ 1u;
+    } else {
+      if ((b & 0x0F) == 0x0F) {
+        flags |= Z80_FLAG_H;
+      }
+      even ^= (z80_flag_parity((uint8_t)((b + 1) & 7)) ? 1u : 0u) ^ 1u;
+    }
+  } else {
+    even ^= (z80_flag_parity((uint8_t)(b & 7)) ? 1u : 0u) ^ 1u;
+  }
+  if (even) {
+    flags |= Z80_FLAG_PV;
+  }
+  z80_set_flags(cpu, flags);
+}
+
+/* HL, DE and BC move by one during the block instructions; bit 3 of the
+   opcode picks the direction. */
+static void z80_move_pair(uint8_t *high, uint8_t *low, bool decrement) {
+  const uint16_t moved = (uint16_t)(((*high << 8) | *low) + (decrement ? -1 : 1));
+  *high = (uint8_t)(moved >> 8);
+  *low = (uint8_t)(moved & 0xFF);
+}
+
 static uint8_t z80_get_operand(z80_t *cpu, uint8_t code) {
   switch (code) {
     case DATA_Z:
@@ -446,6 +563,8 @@ static uint8_t z80_get_operand(z80_t *cpu, uint8_t code) {
       return (uint8_t)(cpu->pc & 0xFF);
     case DATA_PC_HIGH:
       return (uint8_t)(cpu->pc >> 8);
+    case DATA_NONE:
+      return 0;
     default:
       return *z80_register8(cpu, code);
   }
@@ -492,6 +611,75 @@ static void z80_set_operand(z80_t *cpu, uint8_t code, uint8_t value) {
     }
     case DATA_BIT:
       z80_bit(cpu, (cpu->alu_operation >> 3) & 7, value, (uint8_t)(cpu->wz >> 8));
+      break;
+    case DATA_IN:
+      z80_set_flags(cpu, (uint8_t)((cpu->f & Z80_FLAG_C) | z80_flags_from_result(value, value) |
+                                   z80_flag_parity(value)));
+      if (cpu->alu_operation != 6) {
+        *z80_register8(cpu, cpu->alu_operation) = value;
+      }
+      break;
+    case DATA_ROTATE_DIGIT:
+      if (cpu->alu_operation == 4) { /* RRD */
+        cpu->data_latch = (uint8_t)((cpu->a << 4) | (value >> 4));
+        cpu->a = (uint8_t)((cpu->a & 0xF0) | (value & 0x0F));
+      } else { /* RLD */
+        cpu->data_latch = (uint8_t)((value << 4) | (cpu->a & 0x0F));
+        cpu->a = (uint8_t)((cpu->a & 0xF0) | (value >> 4));
+      }
+      z80_set_flags(cpu, (uint8_t)((cpu->f & Z80_FLAG_C) | z80_flags_from_result(cpu->a, cpu->a) |
+                                   z80_flag_parity(cpu->a)));
+      break;
+    case DATA_BLOCK_LD: {
+      cpu->data_latch = value;
+      const bool decrement = (cpu->alu_operation & 0x08) != 0;
+      z80_move_pair(&cpu->h, &cpu->l, decrement);
+      z80_move_pair(&cpu->b, &cpu->c, true);
+      /* X from bit 3 and Y from bit 1 of A plus the moved byte */
+      const uint8_t mixed = (uint8_t)(cpu->a + value);
+      uint8_t flags = (uint8_t)((cpu->f & (Z80_FLAG_S | Z80_FLAG_Z | Z80_FLAG_C)) |
+                                (mixed & Z80_FLAG_X) | ((mixed & 0x02) << 4));
+      if (cpu->b | cpu->c) {
+        flags |= Z80_FLAG_PV;
+      }
+      z80_set_flags(cpu, flags);
+      break;
+    }
+    case DATA_BLOCK_CP: {
+      const bool decrement = (cpu->alu_operation & 0x08) != 0;
+      const uint8_t a = cpu->a;
+      const uint8_t result = (uint8_t)(a - value);
+      z80_move_pair(&cpu->h, &cpu->l, decrement);
+      z80_move_pair(&cpu->b, &cpu->c, true);
+      cpu->wz = (uint16_t)(cpu->wz + (decrement ? -1 : 1));
+      const uint8_t half = (a ^ value ^ result) & 0x10;
+      const uint8_t mixed = (uint8_t)(result - (half ? 1 : 0));
+      uint8_t flags = (uint8_t)((cpu->f & Z80_FLAG_C) | Z80_FLAG_N | half | (result & Z80_FLAG_S) |
+                                (mixed & Z80_FLAG_X) | ((mixed & 0x02) << 4));
+      if (result == 0) {
+        flags |= Z80_FLAG_Z;
+      }
+      if (cpu->b | cpu->c) {
+        flags |= Z80_FLAG_PV;
+      }
+      z80_set_flags(cpu, flags);
+      if ((cpu->alu_operation & 0x10) && (cpu->b | cpu->c) && result != 0) {
+        z80_append_internal(cpu, 5);
+        cpu->finish = FINISH_BLOCK_CP_REPEAT;
+      }
+      break;
+    }
+    case DATA_BLOCK_IN:
+      cpu->data_latch = value;
+      cpu->b--;
+      z80_block_io_flags(cpu, value, (uint8_t)(cpu->c + ((cpu->alu_operation & 0x08) ? -1 : 1)));
+      break;
+    case DATA_BLOCK_OUT:
+      cpu->data_latch = value;
+      cpu->b--;
+      z80_move_pair(&cpu->h, &cpu->l, (cpu->alu_operation & 0x08) != 0);
+      cpu->wz = (uint16_t)((cpu->b << 8) | cpu->c); /* the port, with B decremented */
+      z80_block_io_flags(cpu, value, cpu->l);
       break;
     default:
       *z80_register8(cpu, code) = value;
@@ -557,6 +745,26 @@ static void z80_start_next_cycle(z80_t *cpu) {
         cpu->pc = (uint16_t)(cpu->pc + (int8_t)cpu->data_latch);
         cpu->wz = cpu->pc;
         break;
+      case FINISH_BLOCK_LD:
+        z80_move_pair(&cpu->d, &cpu->e, (cpu->alu_operation & 0x08) != 0);
+        if ((cpu->alu_operation & 0x10) && (cpu->b | cpu->c)) {
+          z80_block_repeat(cpu);
+        }
+        break;
+      case FINISH_BLOCK_IN:
+        z80_move_pair(&cpu->h, &cpu->l, (cpu->alu_operation & 0x08) != 0);
+        if ((cpu->alu_operation & 0x10) && cpu->b) {
+          z80_block_repeat(cpu);
+          z80_block_io_repeat_flags(cpu);
+        }
+        break;
+      case FINISH_BLOCK_CP_REPEAT:
+        z80_block_repeat(cpu);
+        break;
+      case FINISH_BLOCK_OUT_REPEAT:
+        z80_block_repeat(cpu);
+        z80_block_io_repeat_flags(cpu);
+        break;
       default:
         break;
     }
@@ -584,6 +792,12 @@ static void z80_start_next_cycle(z80_t *cpu) {
     case ADDRESS_WZ_THEN_A_HIGH:
       cpu->operand_address = cpu->wz;
       cpu->wz = (uint16_t)((cpu->a << 8) | ((cpu->wz + 1) & 0xFF));
+      break;
+    case ADDRESS_WZ_DECREMENT:
+      cpu->operand_address = cpu->wz--;
+      break;
+    case ADDRESS_DE:
+      cpu->operand_address = (uint16_t)((cpu->d << 8) | cpu->e);
       break;
     case ADDRESS_SP_INCREMENT:
       cpu->operand_address = cpu->sp++;
@@ -662,6 +876,132 @@ static void z80_decode_cb(z80_t *cpu) {
   }
 }
 
+/* The ED page. x=1 holds the documented instructions; x=2, z<=3, y>=4 the
+   block instructions; everything else is a NONI that runs as NOP. */
+static void z80_decode_ed(z80_t *cpu) {
+  const uint8_t x = cpu->opcode >> 6;
+  const uint8_t y = (cpu->opcode >> 3) & 7;
+  const uint8_t z = cpu->opcode & 7;
+  const uint8_t p = y >> 1;
+  const uint8_t q = y & 1;
+  static const uint8_t interrupt_mode_table[4] = {0, 0, 1, 2};
+
+  if (x == 1) {
+    switch (z) {
+      case 0: /* IN r[y],(C); y=6 sets flags only */
+        cpu->wz = (uint16_t)((cpu->b << 8) | cpu->c);
+        cpu->alu_operation = y;
+        z80_append_cycle(cpu, CYCLE_IO_READ, ADDRESS_WZ_INCREMENT, DATA_IN);
+        break;
+      case 1: /* OUT (C),r[y]; y=6 outputs zero on NMOS parts */
+        cpu->wz = (uint16_t)((cpu->b << 8) | cpu->c);
+        z80_append_cycle(cpu, CYCLE_IO_WRITE, ADDRESS_WZ_INCREMENT, y == 6 ? DATA_NONE : y);
+        break;
+      case 2: /* SBC HL,rp[p] (q=0) / ADC HL,rp[p] (q=1) */
+        z80_adc16(cpu, z80_register_pair(cpu, p), q == 0);
+        z80_append_internal(cpu, 7);
+        break;
+      case 3: /* LD (nn),rp[p] / LD rp[p],(nn) */
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W);
+        if (q == 0) {
+          z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ_INCREMENT, register_pair_low[p]);
+          z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ, register_pair_high[p]);
+        } else {
+          z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ_INCREMENT, register_pair_low[p]);
+          z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ, register_pair_high[p]);
+        }
+        break;
+      case 4: { /* NEG, at every y */
+        const uint8_t value = cpu->a;
+        cpu->a = 0;
+        z80_alu(cpu, ALU_SUB, value);
+        break;
+      }
+      case 5: /* RETN, RETI at y=1: both copy IFF2 into IFF1 and return */
+        cpu->iff1 = cpu->iff2;
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_Z);
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_W);
+        cpu->finish = FINISH_PC_FROM_WZ;
+        break;
+      case 6: /* IM im[y] */
+        cpu->im = interrupt_mode_table[y & 3];
+        break;
+      default: /* z == 7 */
+        switch (y) {
+          case 0: /* LD I,A */
+            cpu->i = cpu->a;
+            z80_append_internal(cpu, 1);
+            break;
+          case 1: /* LD R,A: the one way bit 7 of R changes */
+            cpu->r = cpu->a;
+            z80_append_internal(cpu, 1);
+            break;
+          case 2: /* LD A,I */
+          case 3: /* LD A,R: both read IFF2 into P/V — the interrupt-race bug
+                     spot — and mark the P tracker */
+            cpu->a = y == 2 ? cpu->i : cpu->r;
+            z80_set_flags(cpu,
+                          (uint8_t)((cpu->f & Z80_FLAG_C) | z80_flags_from_result(cpu->a, cpu->a) |
+                                    (cpu->iff2 ? Z80_FLAG_PV : 0)));
+            cpu->p = 1;
+            z80_append_internal(cpu, 1);
+            break;
+          case 4: /* RRD */
+          case 5: /* RLD */
+            cpu->alu_operation = y;
+            cpu->wz = (uint16_t)(((cpu->h << 8) | cpu->l) + 1);
+            z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_ROTATE_DIGIT, 4);
+            z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
+            break;
+          default: /* y=6,7: NONI */
+            break;
+        }
+        break;
+    }
+  } else if (x == 2 && z <= 3 && y >= 4) { /* the block instructions */
+    const bool decrement = (y & 1) != 0;
+    const bool repeat = y >= 6;
+    cpu->alu_operation = cpu->opcode;
+    switch (z) {
+      case 0: /* LDI/LDD/LDIR/LDDR */
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_BLOCK_LD);
+        z80_append_cycle_stretched(cpu, CYCLE_MEM_WRITE, ADDRESS_DE, DATA_LATCH, 2);
+        if (repeat && (uint16_t)(((cpu->b << 8) | cpu->c) - 1) != 0) {
+          z80_append_internal(cpu, 5);
+        }
+        cpu->finish = FINISH_BLOCK_LD;
+        break;
+      case 1: /* CPI/CPD/CPIR/CPDR: the repeat decision needs the byte, so the
+                 operand handler appends the extra cycle itself */
+        z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_BLOCK_CP, 5);
+        break;
+      case 2: /* INI/IND/INIR/INDR: port BC with the initial B */
+        cpu->wz = (uint16_t)((cpu->b << 8) | cpu->c);
+        z80_append_internal(cpu, 1);
+        z80_append_cycle(cpu, CYCLE_IO_READ,
+                         decrement ? ADDRESS_WZ_DECREMENT : ADDRESS_WZ_INCREMENT, DATA_BLOCK_IN);
+        z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
+        if (repeat && (uint8_t)(cpu->b - 1) != 0) {
+          z80_append_internal(cpu, 5);
+        }
+        cpu->finish = FINISH_BLOCK_IN;
+        break;
+      default: /* OUTI/OUTD/OTIR/OTDR: port BC with B already decremented */
+        z80_append_internal(cpu, 1);
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_BLOCK_OUT);
+        z80_append_cycle(cpu, CYCLE_IO_WRITE,
+                         decrement ? ADDRESS_WZ_DECREMENT : ADDRESS_WZ_INCREMENT, DATA_LATCH);
+        if (repeat && (uint8_t)(cpu->b - 1) != 0) {
+          z80_append_internal(cpu, 5);
+          cpu->finish = FINISH_BLOCK_OUT_REPEAT;
+        }
+        break;
+    }
+  }
+  /* every other ED opcode is a NONI: it decodes to an empty program */
+}
+
 static void z80_decode(z80_t *cpu) {
   const uint8_t x = cpu->opcode >> 6;
   const uint8_t y = (cpu->opcode >> 3) & 7;
@@ -681,6 +1021,11 @@ static void z80_decode(z80_t *cpu) {
   if (cpu->prefix == 0xCB) {
     cpu->prefix = 0;
     z80_decode_cb(cpu);
+    return;
+  }
+  if (cpu->prefix == 0xED) {
+    cpu->prefix = 0;
+    z80_decode_ed(cpu);
     return;
   }
 
@@ -914,6 +1259,8 @@ static void z80_decode(z80_t *cpu) {
     z80_append_internal(cpu, 1);
     z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_high[p]);
     z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_low[p]);
+  } else if (x == 3 && z == 5 && p == 2) { /* the ED prefix */
+    cpu->prefix = 0xED;
   } else if (x == 3 && z == 5 && p == 0) { /* CALL nn */
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
     z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W, 1);
