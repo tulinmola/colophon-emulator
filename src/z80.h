@@ -98,6 +98,7 @@ typedef struct {
   /* cycle-stepping state: which T-state of the current instruction is next */
   uint8_t step;
   uint8_t opcode;
+  uint8_t prefix; /* 0xCB while the prefixed opcode's own M1 fetch runs, else 0 */
   /* the instruction's machine cycles after M1, filled at decode */
   z80_micro_op program[4];
   uint8_t program_length;

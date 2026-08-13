@@ -90,6 +90,8 @@ enum {
   DATA_F,       /* the flag register moved wholesale (PUSH/POP AF), not via the ALU */
   DATA_PC_LOW,  /* CALL and RST push the resume address */
   DATA_PC_HIGH,
+  DATA_CB,  /* the arriving byte runs the latched CB operation into the latch */
+  DATA_BIT, /* the arriving byte is bit-tested; X/Y leak from W (see z80_bit) */
   DATA_NONE,
 };
 
@@ -287,6 +289,66 @@ static void z80_carry_flag(z80_t *cpu, bool invert, uint8_t previous_q) {
   z80_set_flags(cpu, flags);
 }
 
+/* The CB rotate/shift table: RLC RRC RL RR SLA SRA SLL SRL, indexed by y.
+   Unlike the accumulator forms these set the full flag set. SLL is the
+   undocumented shift that fills bit 0 with one. */
+static uint8_t z80_rotate_shift(z80_t *cpu, uint8_t which, uint8_t value) {
+  const uint8_t carry_in = cpu->f & Z80_FLAG_C;
+  uint8_t carry_out;
+  uint8_t result;
+  switch (which) {
+    case 0: /* RLC */
+      carry_out = value >> 7;
+      result = (uint8_t)((value << 1) | carry_out);
+      break;
+    case 1: /* RRC */
+      carry_out = value & 1;
+      result = (uint8_t)((value >> 1) | (carry_out << 7));
+      break;
+    case 2: /* RL */
+      carry_out = value >> 7;
+      result = (uint8_t)((value << 1) | carry_in);
+      break;
+    case 3: /* RR */
+      carry_out = value & 1;
+      result = (uint8_t)((value >> 1) | (carry_in << 7));
+      break;
+    case 4: /* SLA */
+      carry_out = value >> 7;
+      result = (uint8_t)(value << 1);
+      break;
+    case 5: /* SRA */
+      carry_out = value & 1;
+      result = (uint8_t)((value >> 1) | (value & 0x80));
+      break;
+    case 6: /* SLL */
+      carry_out = value >> 7;
+      result = (uint8_t)((value << 1) | 1);
+      break;
+    default: /* SRL */
+      carry_out = value & 1;
+      result = (uint8_t)(value >> 1);
+      break;
+  }
+  z80_set_flags(
+      cpu, (uint8_t)(z80_flags_from_result(result, result) | z80_flag_parity(result) | carry_out));
+  return result;
+}
+
+/* BIT: Z and P/V both report the tested bit clear, S only lights for bit 7,
+   H is set, C survives. X/Y leak from xy_source: the tested value for the
+   register forms, W for BIT n,(HL) — the leak that revealed WZ's existence. */
+static void z80_bit(z80_t *cpu, uint8_t bit, uint8_t value, uint8_t xy_source) {
+  const uint8_t masked = (uint8_t)(value & (1 << bit));
+  uint8_t flags = (uint8_t)((cpu->f & Z80_FLAG_C) | Z80_FLAG_H);
+  flags |= xy_source & (Z80_FLAG_X | Z80_FLAG_Y);
+  if (masked == 0) {
+    flags |= Z80_FLAG_Z | Z80_FLAG_PV;
+  }
+  flags |= masked & Z80_FLAG_S;
+  z80_set_flags(cpu, flags);
+}
+
 /* INC and DEC preserve carry; overflow marks the signed boundary crossings. */
 static uint8_t z80_increment(z80_t *cpu, uint8_t value) {
   const uint8_t result = (uint8_t)(value + 1);
@@ -415,6 +477,21 @@ static void z80_set_operand(z80_t *cpu, uint8_t code, uint8_t value) {
       break;
     case DATA_F:
       cpu->f = value; /* wholesale load, not a computation: Q stays clear */
+      break;
+    case DATA_CB: {
+      const uint8_t x = cpu->alu_operation >> 6;
+      const uint8_t y = (cpu->alu_operation >> 3) & 7;
+      if (x == 0) {
+        cpu->data_latch = z80_rotate_shift(cpu, y, value);
+      } else if (x == 2) { /* RES */
+        cpu->data_latch = (uint8_t)(value & ~(1 << y));
+      } else { /* SET */
+        cpu->data_latch = (uint8_t)(value | (1 << y));
+      }
+      break;
+    }
+    case DATA_BIT:
+      z80_bit(cpu, (cpu->alu_operation >> 3) & 7, value, (uint8_t)(cpu->wz >> 8));
       break;
     default:
       *z80_register8(cpu, code) = value;
@@ -551,6 +628,40 @@ static const uint8_t register_pair_high[4] = {REGISTER_B, REGISTER_D, REGISTER_H
 static const uint8_t register_pair2_low[4] = {REGISTER_C, REGISTER_E, REGISTER_L, DATA_F};
 static const uint8_t register_pair2_high[4] = {REGISTER_B, REGISTER_D, REGISTER_H, REGISTER_A};
 
+/* The CB page: rotates/shifts (x=0), BIT (x=1), RES (x=2), SET (x=3), all on
+   r[z]. The (HL) forms read with one stretch T-state and, except BIT, write
+   back; BIT only looks. */
+static void z80_decode_cb(z80_t *cpu) {
+  const uint8_t x = cpu->opcode >> 6;
+  const uint8_t y = (cpu->opcode >> 3) & 7;
+  const uint8_t z = cpu->opcode & 7;
+  if (z == 6) {
+    cpu->alu_operation = cpu->opcode;
+    if (x == 1) { /* BIT y,(HL) */
+      z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_BIT, 1);
+    } else {
+      z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_CB, 1);
+      z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
+    }
+    return;
+  }
+  uint8_t *reg = z80_register8(cpu, z);
+  switch (x) {
+    case 0:
+      *reg = z80_rotate_shift(cpu, y, *reg);
+      break;
+    case 1:
+      z80_bit(cpu, y, *reg, *reg);
+      break;
+    case 2:
+      *reg = (uint8_t)(*reg & ~(1 << y));
+      break;
+    default:
+      *reg = (uint8_t)(*reg | (1 << y));
+      break;
+  }
+}
+
 static void z80_decode(z80_t *cpu) {
   const uint8_t x = cpu->opcode >> 6;
   const uint8_t y = (cpu->opcode >> 3) & 7;
@@ -566,6 +677,12 @@ static void z80_decode(z80_t *cpu) {
   cpu->ei = false;
   cpu->p = 0;
   cpu->finish = FINISH_NONE;
+
+  if (cpu->prefix == 0xCB) {
+    cpu->prefix = 0;
+    z80_decode_cb(cpu);
+    return;
+  }
 
   if (x == 0) {
     switch (z) {
@@ -778,6 +895,8 @@ static void z80_decode(z80_t *cpu) {
     exchanged = cpu->e;
     cpu->e = cpu->l;
     cpu->l = exchanged;
+  } else if (x == 3 && z == 3 && y == 1) { /* the CB prefix: one more M1 fetches the opcode */
+    cpu->prefix = 0xCB;
   } else if (x == 3 && z == 3 && y == 2) { /* OUT (n),A: port A:n, W preloaded with A */
     cpu->wz = (uint16_t)((cpu->a << 8) | (cpu->wz & 0xFF));
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
