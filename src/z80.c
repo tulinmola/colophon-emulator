@@ -1438,8 +1438,6 @@ static void z80_decode(z80_t *cpu) {
     z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_LOW);
     cpu->finish = FINISH_PC_FROM_WZ;
   }
-  /* everything unimplemented decodes to an empty program and runs as NOP, so
-     a machine can keep ticking */
 }
 
 bool z80_instruction_complete(const z80_t *cpu) {
