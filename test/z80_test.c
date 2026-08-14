@@ -423,6 +423,199 @@ static void test_state_struct_is_the_whole_machine(void) {
   }
 }
 
+/* Runs one instruction with the given input pins held, and then whatever
+   interrupt sequence follows it, answering the acknowledge with `vector`.
+   Returns the T-states for both together, so an acceptance costs the total
+   minus the instruction's own length. */
+static int run_with_interrupt(z80_t *cpu, uint64_t inputs, uint8_t vector) {
+  uint64_t pins = 0;
+  for (int ticks = 1; ticks <= TICK_BUDGET; ticks++) {
+    pins = z80_tick(cpu, pins | inputs);
+    if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
+      pins = z80_set_data(pins, vector);
+    } else {
+      pins = service_bus(pins);
+    }
+    if (z80_instruction_complete(cpu)) {
+      return ticks;
+    }
+  }
+  return INSTRUCTION_HUNG;
+}
+
+static void start_at(z80_t *cpu, const uint8_t *program, size_t length) {
+  z80_init(cpu);
+  cpu->pc = 0x1000;
+  cpu->sp = 0x8000;
+  memset(ram, 0, sizeof ram);
+  load(cpu->pc, program, length);
+}
+
+static uint16_t pushed_word(const z80_t *cpu) {
+  return (uint16_t)(ram[cpu->sp] | (ram[(uint16_t)(cpu->sp + 1)] << 8));
+}
+
+/* 11 T-states, and the acknowledge is an ordinary opcode fetch whose byte is
+   discarded — not the IORQ cycle a maskable interrupt uses. IFF2 survives so
+   RETN can put it back. */
+static void test_nmi_acceptance(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x00}; /* NOP */
+  start_at(&cpu, program, sizeof program);
+  cpu.iff1 = cpu.iff2 = true;
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_NMI, 0xFF), 4 + 11);
+  TEST_EQUAL(cpu.pc, 0x0066);
+  TEST_CHECK(!cpu.iff1);
+  TEST_CHECK(cpu.iff2);
+  TEST_EQUAL(cpu.sp, 0x7FFE);
+  TEST_EQUAL(pushed_word(&cpu), 0x1001);
+  TEST_EQUAL(cpu.r, 2); /* the instruction's fetch and the acknowledge's */
+}
+
+/* Edge-triggered: a level that stays asserted arms nothing more. */
+static void test_nmi_triggers_once_per_edge(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x00, 0x00};
+  start_at(&cpu, program, sizeof program);
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_NMI, 0xFF), 4 + 11);
+  TEST_EQUAL(cpu.pc, 0x0066);
+
+  cpu.pc = 0x1001;
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_NMI, 0xFF), 4); /* still high: no edge */
+  TEST_EQUAL(cpu.pc, 0x1002);
+}
+
+static void test_maskable_interrupt_obeys_iff1(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x00};
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = false;
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4);
+  TEST_EQUAL(cpu.pc, 0x1001);
+}
+
+static void test_interrupt_mode_1(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x00};
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = true;
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4 + 13);
+  TEST_EQUAL(cpu.pc, 0x0038);
+  TEST_CHECK(!cpu.iff1);
+  TEST_CHECK(!cpu.iff2); /* unlike NMI, a maskable interrupt clears both */
+  TEST_EQUAL(pushed_word(&cpu), 0x1001);
+}
+
+/* Mode 2 reads its destination from I:vector. The vector's low bit is not
+   forced even, whatever Zilog's manual says, so an odd one is used whole and
+   the second read crosses into the next page. */
+static void test_interrupt_mode_2_uses_the_whole_vector(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x00};
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 2;
+  cpu.i = 0x80;
+  cpu.iff1 = cpu.iff2 = true;
+  ram[0x80FF] = 0x34;
+  ram[0x8100] = 0x12;
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4 + 19);
+  TEST_EQUAL(cpu.pc, 0x1234);
+  TEST_EQUAL(pushed_word(&cpu), 0x1001);
+}
+
+/* EI leaves interrupts blocked for exactly one instruction, so that a routine
+   can end with EI followed by RET without being re-entered on its own stack. */
+static void test_ei_blocks_for_one_instruction(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0xFB, 0x00, 0x00}; /* EI; NOP; NOP */
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4);
+  TEST_EQUAL(cpu.pc, 0x1001);
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4 + 13);
+  TEST_EQUAL(cpu.pc, 0x0038);
+  TEST_EQUAL(pushed_word(&cpu), 0x1002);
+}
+
+/* A prefix and the opcode it modifies are one instruction; taking an interrupt
+   between them would lose the prefix and change what the opcode means. */
+static void test_prefix_blocks_acceptance(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0xDD, 0x00}; /* DD NOP */
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = true;
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4 + 4 + 13);
+  TEST_EQUAL(pushed_word(&cpu), 0x1002); /* past both bytes, not between them */
+}
+
+static void test_interrupt_wakes_a_halted_cpu(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x76}; /* HALT */
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = true;
+
+  TEST_EQUAL(run_instruction(&cpu), 4);
+  TEST_CHECK(cpu.halted);
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4 + 13);
+  TEST_CHECK(!cpu.halted);
+  TEST_EQUAL(cpu.pc, 0x0038);
+  TEST_EQUAL(pushed_word(&cpu), 0x1001); /* the instruction after HALT */
+}
+
+/* RETN restores IFF1 during the next opcode fetch, too late for an interrupt
+   at the end of RETN itself. Only an earlier NMI can leave the flip-flops
+   disagreeing, which is the only time this is observable. */
+static void test_retn_blocks_for_one_instruction(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0xED, 0x45, 0x00}; /* RETN; NOP */
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = false; /* as an accepted NMI leaves them */
+  cpu.iff2 = true;
+  cpu.sp = 0x7FFE;
+  ram[0x7FFE] = 0x20;
+  ram[0x7FFF] = 0x10; /* return to 0x1020 */
+  ram[0x1020] = 0x00; /* a NOP waiting there */
+
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 14);
+  TEST_EQUAL(cpu.pc, 0x1020);
+  TEST_CHECK(cpu.iff1);
+  TEST_EQUAL(run_with_interrupt(&cpu, Z80_INT, 0xFF), 4 + 13);
+  TEST_EQUAL(cpu.pc, 0x0038);
+}
+
+/* On NMOS parts IFF2 is cleared before LD A,I copies it, so an interrupt
+   landing on that instruction leaves P/V claiming interrupts were disabled.
+   Zilog acknowledged it in 1989 and fixed it on CMOS; the CPC is NMOS. */
+static void test_ld_a_i_interrupted_clears_parity(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0xED, 0x57}; /* LD A,I */
+
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = true;
+  run_instruction(&cpu);
+  TEST_CHECK((cpu.f & Z80_FLAG_PV) != 0); /* undisturbed, it reports IFF2 */
+
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = true;
+  run_with_interrupt(&cpu, Z80_INT, 0xFF);
+  TEST_CHECK((cpu.f & Z80_FLAG_PV) == 0);
+}
+
 /* The subtlety: between the two fetches the CPU is at a fetch boundary, which
    is not the same as being between instructions. */
 static void test_prefix_is_not_a_complete_instruction(void) {
@@ -470,5 +663,15 @@ int main(void) {
   TEST_RUN(test_wait_changes_timing_only);
   TEST_RUN(test_halt_keeps_fetching_without_advancing);
   TEST_RUN(test_state_struct_is_the_whole_machine);
+  TEST_RUN(test_nmi_acceptance);
+  TEST_RUN(test_nmi_triggers_once_per_edge);
+  TEST_RUN(test_maskable_interrupt_obeys_iff1);
+  TEST_RUN(test_interrupt_mode_1);
+  TEST_RUN(test_interrupt_mode_2_uses_the_whole_vector);
+  TEST_RUN(test_ei_blocks_for_one_instruction);
+  TEST_RUN(test_prefix_blocks_acceptance);
+  TEST_RUN(test_interrupt_wakes_a_halted_cpu);
+  TEST_RUN(test_retn_blocks_for_one_instruction);
+  TEST_RUN(test_ld_a_i_interrupted_clears_parity);
   return TEST_REPORT("z80");
 }

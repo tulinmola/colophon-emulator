@@ -70,11 +70,10 @@ static inline uint64_t z80_set_data(uint64_t pins, uint8_t data) {
 #define Z80_FLAG_Z (1 << 6) /* zero */
 #define Z80_FLAG_S (1 << 7) /* sign */
 
-/* The longest micro-program any instruction needs. Four is exact today: the
- * 16-bit loads through (nn), the DD CB forms and the block I/O instructions
- * all fill it. Raise it when a family needs more — interrupt acceptance
- * will. */
-#define Z80_MAX_MACHINE_CYCLES 4
+/* The longest micro-program any sequence needs. Five is exact: interrupt mode
+ * 2 spends one internal cycle, two pushing the return address and two reading
+ * the vector's destination. */
+#define Z80_MAX_MACHINE_CYCLES 5
 
 /* One machine cycle of an instruction's micro-program: what kind of cycle,
  * where its address comes from, which operand it moves, and how many internal
@@ -101,8 +100,16 @@ typedef struct {
   bool iff1, iff2;
   bool halted; /* HALT executed: fetches idle as NOPs, PC held, HALT pin asserted */
   bool ei;     /* EI just executed: interrupt acceptance blocked for one instruction */
-  uint8_t p;   /* last instruction was LD A,I / LD A,R (IFF2-read bug tracking) */
-  uint8_t q;   /* copy of F if the last instruction modified flags, else 0 */
+  /* RETN and RETI restore IFF1 during the next opcode fetch, which blocks
+     acceptance for one instruction the way EI does. Kept apart from `ei`
+     because the test corpus defines that field as EI's alone. */
+  bool interrupt_shadow;
+  bool nmi_pending;  /* latched: NMI triggers on the edge, not the level */
+  bool nmi_previous; /* the pin last tick, for spotting that edge */
+  bool int_line;     /* INT sampled every tick; only its state at the last one counts */
+  uint8_t accepting; /* the interrupt sequence under way, see z80.c */
+  uint8_t p;         /* last instruction was LD A,I / LD A,R (IFF2-read bug tracking) */
+  uint8_t q;         /* copy of F if the last instruction modified flags, else 0 */
 
   /* cycle-stepping state: which T-state of the current instruction is next */
   uint8_t step;

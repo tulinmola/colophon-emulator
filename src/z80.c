@@ -34,7 +34,24 @@ enum {
   IO_WRITE_T2,
   IO_WRITE_T3,
   IO_WRITE_T4,
+  /* The maskable interrupt acknowledge cycle: M1 with IORQ instead of MREQ,
+     and two wait states the CPU inserts itself so a daisy chain has time to
+     settle. External WAIT extends it further, as on any other cycle. */
+  INT_ACK_T1,
+  INT_ACK_T2,
+  INT_ACK_WAIT,
+  INT_ACK_T3,
+  INT_ACK_T4,
   STRETCH_T, /* internal T-states: bus released, address held, counted down */
+};
+
+/* z80_t.accepting: which interrupt sequence is running instead of an
+   instruction. NMI's acknowledge is an ordinary opcode fetch whose byte is
+   discarded and whose PC does not move; INT's is the cycle above. */
+enum {
+  ACCEPT_NONE = 0,
+  ACCEPT_NMI,
+  ACCEPT_INT,
 };
 
 /* z80_micro_op.cycle: what kind of machine cycle. Any cycle can carry stretch
@@ -119,6 +136,7 @@ enum {
   FINISH_BLOCK_CP_REPEAT,  /* CPIR/CPDR taking another round */
   FINISH_BLOCK_OUT_REPEAT, /* OTIR/OTDR taking another round */
   FINISH_DDCB_COPY,        /* DD CB with z!=6 also lands the result in r[z] */
+  FINISH_PC_FROM_VECTOR,   /* interrupt mode 2: the address read from the table */
 };
 
 /* z80_t.alu_operation: the alu table per the decoding doc, indexed by y, plus
@@ -763,9 +781,45 @@ static void z80_append_internal(z80_t *cpu, uint8_t ticks) {
   z80_append_cycle_stretched(cpu, CYCLE_INTERNAL, ADDRESS_NONE, DATA_NONE, ticks);
 }
 
+/* Ends the instruction, and decides whether an interrupt is taken instead of
+   the next one. Interrupts are never accepted at the end of a prefix fetch —
+   the prefix and the opcode it modifies are one instruction — so a run of DD
+   or FD bytes locks out INT and NMI alike for its whole length.
+   Sources: "The Undocumented Z80 Documented" (Sean Young) ch. 5, and the
+   netlist traces in https://floooh.github.io/2021/12/06/z80-instruction-timing.html */
 static void z80_instruction_done(z80_t *cpu) {
   cpu->program_length = 0;
   cpu->program_index = 0;
+  cpu->accepting = ACCEPT_NONE;
+  if (cpu->prefix != 0) {
+    cpu->step = M1_T1;
+    return;
+  }
+  if (cpu->nmi_pending) {
+    cpu->nmi_pending = false;
+    cpu->iff1 = false; /* IFF2 keeps the old value; RETN restores from it */
+    cpu->halted = false;
+    cpu->q = 0;
+    cpu->accepting = ACCEPT_NMI;
+    cpu->step = M1_T1;
+    return;
+  }
+  if (cpu->int_line && cpu->iff1 && !cpu->ei && !cpu->interrupt_shadow) {
+    cpu->iff1 = cpu->iff2 = false;
+    cpu->halted = false;
+    /* On NMOS parts IFF2 is cleared before LD A,I / LD A,R copy it, so an
+       interrupt landing on either instruction leaves P/V reporting interrupts
+       disabled when they were enabled. Zilog acknowledged this in the 1989
+       Data Book's Q&A and fixed it on CMOS; the CPC's Z80 is NMOS. It cannot
+       be done inside the instruction, which is why `p` records that one ran. */
+    if (cpu->p) {
+      cpu->f &= (uint8_t)~Z80_FLAG_PV;
+    }
+    cpu->q = 0;
+    cpu->accepting = ACCEPT_INT;
+    cpu->step = INT_ACK_T1;
+    return;
+  }
   cpu->step = M1_T1;
 }
 
@@ -829,6 +883,10 @@ static void z80_start_next_cycle(z80_t *cpu) {
         break;
       case FINISH_DDCB_COPY:
         *z80_register8(cpu, cpu->alu_operation & 7) = cpu->data_latch;
+        break;
+      case FINISH_PC_FROM_VECTOR:
+        cpu->pc = (uint16_t)((cpu->wz & 0xFF00) | cpu->data_latch);
+        cpu->wz = cpu->pc;
         break;
       default:
         break;
@@ -998,6 +1056,10 @@ static void z80_decode_ed(z80_t *cpu) {
         break;
       }
       case 5: /* RETN, RETI at y=1: both copy IFF2 into IFF1 and return */
+        /* IFF1 is restored during the next opcode fetch, too late for an
+           interrupt at the end of this one — but only an earlier NMI can have
+           left the two disagreeing. */
+        cpu->interrupt_shadow = cpu->iff1 != cpu->iff2;
         cpu->iff1 = cpu->iff2;
         z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_Z);
         z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_W);
@@ -1094,6 +1156,7 @@ static void z80_decode(z80_t *cpu) {
   const uint8_t previous_q = cpu->q;
   cpu->q = 0;
   cpu->ei = false;
+  cpu->interrupt_shadow = false;
   cpu->p = 0;
   cpu->finish = FINISH_NONE;
 
@@ -1379,9 +1442,21 @@ static void z80_decode(z80_t *cpu) {
      a machine can keep ticking */
 }
 
-bool z80_instruction_complete(const z80_t *cpu) { return cpu->step == M1_T1 && cpu->prefix == 0; }
+bool z80_instruction_complete(const z80_t *cpu) {
+  return cpu->step == M1_T1 && cpu->prefix == 0 && cpu->accepting == ACCEPT_NONE;
+}
 
 uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
+  /* NMI is edge-triggered and latched: a pulse anywhere within an instruction
+     is remembered until it can be taken. INT is a level, and only its state
+     at the end of an instruction counts — release it early and it is missed. */
+  const bool nmi_now = (pins & Z80_NMI) != 0;
+  if (nmi_now && !cpu->nmi_previous) {
+    cpu->nmi_pending = true;
+  }
+  cpu->nmi_previous = nmi_now;
+  cpu->int_line = (pins & Z80_INT) != 0;
+
   switch (cpu->step) {
     case M1_T1:
       pins = z80_set_address(pins & ~Z80_OUT_PINS, cpu->pc) | Z80_M1;
@@ -1393,8 +1468,10 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case M1_T2:
       pins |= Z80_MREQ | Z80_RD;
-      if (!cpu->halted) {
-        cpu->pc++; /* a halted CPU keeps fetching but stands still */
+      /* a halted CPU keeps fetching but stands still, and so does the NMI
+         acknowledge, which reads a byte only to throw it away */
+      if (!cpu->halted && cpu->accepting != ACCEPT_NMI) {
+        cpu->pc++;
       }
       cpu->step = M1_T3;
       break;
@@ -1407,7 +1484,7 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
       if (pins & Z80_WAIT) {
         return pins;
       }
-      cpu->opcode = cpu->halted ? 0x00 : z80_data(pins);
+      cpu->opcode = (cpu->halted || cpu->accepting == ACCEPT_NMI) ? 0x00 : z80_data(pins);
       pins = z80_set_address(pins & ~Z80_OUT_PINS, (uint16_t)((cpu->i << 8) | cpu->r)) | Z80_RFSH;
       /* R is a 7-bit counter; bit 7 changes only via LD R,A. */
       cpu->r = (cpu->r & 0x80) | ((cpu->r + 1) & 0x7F);
@@ -1416,7 +1493,66 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case M1_T4:
       pins = (pins & ~Z80_OUT_PINS) | Z80_RFSH;
-      z80_decode(cpu);
+      if (cpu->accepting == ACCEPT_NMI) {
+        cpu->wz = 0x0066;
+        cpu->finish = FINISH_PC_FROM_WZ;
+        z80_append_internal(cpu, 1);
+        z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_HIGH);
+        z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_LOW);
+      } else {
+        z80_decode(cpu);
+      }
+      z80_start_next_cycle(cpu);
+      break;
+
+    case INT_ACK_T1:
+      pins = z80_set_address(pins & ~Z80_OUT_PINS, cpu->pc) | Z80_M1;
+      cpu->step = INT_ACK_T2;
+      break;
+
+    case INT_ACK_T2:
+      pins |= Z80_IORQ;
+      cpu->stretch_remaining = 2;
+      cpu->step = INT_ACK_WAIT;
+      break;
+
+    case INT_ACK_WAIT:
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
+      if (--cpu->stretch_remaining == 0) {
+        cpu->step = INT_ACK_T3;
+      }
+      break;
+
+    case INT_ACK_T3:
+      cpu->data_latch = z80_data(pins); /* the vector, if a device supplied one */
+      pins = z80_set_address(pins & ~Z80_OUT_PINS, (uint16_t)((cpu->i << 8) | cpu->r)) | Z80_RFSH;
+      cpu->r = (cpu->r & 0x80) | ((cpu->r + 1) & 0x7F);
+      cpu->step = INT_ACK_T4;
+      break;
+
+    case INT_ACK_T4:
+      pins = (pins & ~Z80_OUT_PINS) | Z80_RFSH;
+      z80_append_internal(cpu, 1);
+      z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_HIGH);
+      z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, DATA_PC_LOW);
+      if (cpu->im == 2) {
+        /* The vector indexes a table at I:vector. Zilog's manual insists the
+           low bit is forced even; Sean Young and J.G. Harston each showed on
+           real hardware that it is not, so the byte is used whole and the
+           second read may cross into the next page. */
+        cpu->wz = (uint16_t)((cpu->i << 8) | cpu->data_latch);
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ_INCREMENT, DATA_LATCH);
+        z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ, DATA_W);
+        cpu->finish = FINISH_PC_FROM_VECTOR;
+      } else {
+        /* Mode 0 executes whatever the device puts on the bus; with no device
+           driving it that is 0xFF, an RST 38h, which is mode 1's behaviour.
+           Only that case is implemented — the CPC never uses mode 0. */
+        cpu->wz = 0x0038;
+        cpu->finish = FINISH_PC_FROM_WZ;
+      }
       z80_start_next_cycle(cpu);
       break;
 
