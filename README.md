@@ -32,7 +32,8 @@ The tests come in tiers, separated by what they answer and what they cost.
 ```sh
 make test              # fast, hermetic, no network — runs on every change
 make test-single-step  # the complete SingleStepTests corpus
-make test-all          # both
+make test-exerciser    # the Z80 instruction set exerciser
+make test-all          # all three
 ```
 
 `make test` covers only what no external suite can see: the reset contract, the invariants of our own machinery, that every opcode on every prefix page finishes without outgrowing its micro-program. It deliberately restates nothing the corpus already proves.
@@ -41,7 +42,9 @@ make test-all          # both
 
 Today every instruction the Z80 knows passes it, per cycle.
 
-Three more suites are still to come, each proving something the others cannot. **ZEXALL** works through exhaustive operand combinations and self-checks with CRCs: a second, unrelated proof of the same CPU. **Shaker**, Longshot's CRTC acid tests, compares against recordings made on real machines, one set per CRTC type. And a battery of demos, which break on anything less than exact — the only tests written by people trying to make the hardware do something beautiful rather than something correct.
+`make test-exerciser` runs [Frank Cringle's Z80 instruction set exerciser](https://github.com/agn453/ZEXALL) from 1994, in both its forms: ZEXDOC checks the documented flags, ZEXALL all eight bits including the undocumented two. It sweeps each instruction across long runs of operands and flags and checks the result against a CRC recorded from real hardware. Its method is independent of the corpus, but the deeper difference is that it is a *program*: millions of instructions in sequence, each inheriting whatever the last one left behind, where the corpus tests each instruction alone from a clean state. That is the failure the corpus cannot see, and the one that decides whether real software runs. It is slow — hours of 4 MHz machine time, minutes of ours — so it runs by the group: `EXERCISER_GROUPS=0` for all sixty-seven.
+
+Two suites are still to come, each proving something the others cannot. **Shaker**, Longshot's CRTC acid tests, compares against recordings made on real machines, one set per CRTC type. And a battery of demos, which break on anything less than exact — the only tests written by people trying to make the hardware do something beautiful rather than something correct.
 
 ## Sources
 
