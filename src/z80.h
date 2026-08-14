@@ -34,20 +34,19 @@
  * bits 24..   control pins
  * Pin names are the datasheet's. Bit set = pin asserted: on silicon most of
  * these are active-low (/MREQ), but the mask models assertion, not voltage. */
-#define Z80_M1 (1ULL << 24)    /* opcode fetch cycle in progress */
-#define Z80_MREQ (1ULL << 25)  /* memory request */
-#define Z80_IORQ (1ULL << 26)  /* I/O request */
-#define Z80_RD (1ULL << 27)    /* read */
-#define Z80_WR (1ULL << 28)    /* write */
-#define Z80_RFSH (1ULL << 29)  /* refresh address on bus */
-#define Z80_HALT (1ULL << 30)  /* CPU halted */
-#define Z80_WAIT (1ULL << 31)  /* input: stretch the current machine cycle */
-#define Z80_INT (1ULL << 32)   /* input: maskable interrupt request */
-#define Z80_NMI (1ULL << 33)   /* input: non-maskable interrupt request */
-#define Z80_RESET (1ULL << 34) /* input: reset */
+#define Z80_M1 (1ULL << 24)   /* opcode fetch cycle in progress */
+#define Z80_MREQ (1ULL << 25) /* memory request */
+#define Z80_IORQ (1ULL << 26) /* I/O request */
+#define Z80_RD (1ULL << 27)   /* read */
+#define Z80_WR (1ULL << 28)   /* write */
+#define Z80_RFSH (1ULL << 29) /* refresh address on bus */
+#define Z80_HALT (1ULL << 30) /* CPU halted */
+#define Z80_WAIT (1ULL << 31) /* input: stretch the current machine cycle */
+#define Z80_INT (1ULL << 32)  /* input: maskable interrupt request */
+#define Z80_NMI (1ULL << 33)  /* input: non-maskable interrupt request */
 
 /* Pins driven by the CPU, cleared and re-driven every tick. Input pins
- * (WAIT/INT/NMI/RESET) and the data bus are owned by the machine wiring. */
+ * (WAIT/INT/NMI) and the data bus are owned by the machine wiring. */
 #define Z80_OUT_PINS (Z80_M1 | Z80_MREQ | Z80_IORQ | Z80_RD | Z80_WR | Z80_RFSH | Z80_HALT)
 
 static inline uint16_t z80_address(uint64_t pins) { return (uint16_t)(pins & 0xFFFF); }
