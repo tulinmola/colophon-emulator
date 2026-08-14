@@ -1,25 +1,40 @@
 #!/bin/sh
-# Downloads the SingleStepTests Z80 test data listed in test/manifest.txt into
-# test/data/v1/ (git-ignored). https://github.com/SingleStepTests/z80 (MIT).
-# The manifest is the passing set: one test file per implemented opcode.
+# Downloads the SingleStepTests Z80 corpus into test/data/SingleStepTests/z80/,
+# the path mirroring the upstream coordinates so the folder names its source:
+# https://github.com/SingleStepTests/z80 (MIT).
+#
+# Pinned to the commit validated on 2026-08-14 — the complete corpus, 1604
+# files. Bump the pin deliberately, never implicitly.
+#
+# Upstream names prefixed files with spaces ("dd cb __ 46.json"); locally they
+# are space-free ("ddcb46.json") because make and shell loops split on spaces.
 set -e
 
-base_url="https://raw.githubusercontent.com/SingleStepTests/z80/main/v1"
-test_directory="$(dirname "$0")/../test"
-destination="$test_directory/data/v1"
-mkdir -p "$destination"
+commit="ebe1875d48f374bcfd4b505d8eb8ee751568b5f7"
+archive_url="https://codeload.github.com/SingleStepTests/z80/zip/$commit"
+test_directory="$(cd "$(dirname "$0")/../test" && pwd)"
+destination="$test_directory/data/SingleStepTests/z80/v1"
 
-# Upstream names prefixed files with spaces ("cb 00.json", "dd cb __ 00.json");
-# locally they are space-free ("cb00.json", "ddcb00.json") so the manifest,
-# make and this loop stay simple.
-for file in $(cat "$test_directory/manifest.txt"); do
-    if [ ! -f "$destination/$file" ]; then
-        case "$file" in
-            ????.json) remote="$(printf %s "$file" | cut -c1-2)%20$(printf %s "$file" | cut -c3-)" ;;
-            ??cb??.json) remote="$(printf %s "$file" | cut -c1-2)%20cb%20__%20$(printf %s "$file" | cut -c5-)" ;;
-            *) remote="$file" ;;
-        esac
-        echo "fetching $file"
-        curl -fsSL "$base_url/$remote" -o "$destination/$file"
-    fi
+if [ -d "$destination" ]; then
+    exit 0
+fi
+
+working_directory="$(mktemp -d)"
+trap 'rm -rf "$working_directory"' EXIT
+
+echo "fetching SingleStepTests/z80 @ $commit"
+curl -fsSL "$archive_url" -o "$working_directory/z80.zip"
+unzip -q "$working_directory/z80.zip" -d "$working_directory"
+
+mkdir -p "$destination"
+for file in "$working_directory/z80-$commit/v1/"*.json; do
+    renamed="$(basename "$file" | tr -d ' _')"
+    mv "$file" "$destination/$renamed"
 done
+
+count="$(ls "$destination" | wc -l | tr -d ' ')"
+if [ "$count" -ne 1604 ]; then
+    echo "expected 1604 corpus files, found $count" >&2
+    exit 1
+fi
+echo "placed $count files"
