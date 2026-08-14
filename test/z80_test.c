@@ -1,252 +1,474 @@
 /*
- * z80_test — runs the SingleStepTests Z80 suite against our core.
+ * z80_test — tests for what the SingleStepTests corpus cannot see.
  *
- * Test data: https://github.com/SingleStepTests/z80 (MIT), fetched by
- * tools/fetch-tests.sh into test/data/v1/. Each file holds 1000 tests for one
- * opcode: initial/final CPU+RAM state plus the expected bus state after every
- * T-state ("sampled between cycles"). Their flag string is four positions,
- * "rwmi" for READ/WRITE/MREQ/IORQ, '-' when inactive.
- *
- * Bus convention learned from their traces: a read's data value appears on the
- * sample FOLLOWING the read pulse (memory answers, then the value sits on the
- * bus during the next T-state); a write's value appears on the write pulse
- * itself; every other sample has a disconnected ("null") data bus. The harness
- * mirrors that: it records the value it fed after servicing a read, the CPU's
- * data pins on a write pulse, and null otherwise.
+ * The corpus proves instruction semantics per T-state from an independent
+ * source, which is why none of it is restated here. These tests cover the
+ * rest: the reset contract, the invariants of our own micro-program
+ * machinery, and the pin behaviour no corpus test asserts.
  */
-#include <stdio.h>
 #include <string.h>
 
-#include "json.h"
+#include "test.h"
 #include "z80.h"
 
 static uint8_t ram[0x10000];
 
-static int get_int(const json_value *object, const char *key) {
-  const json_value *value = json_get(object, key);
-  return value ? (int)value->number : 0;
-}
+/* The longest real instruction is 23 T-states (EX (SP),IX and the DD CB
+   forms); past this budget an instruction is hung, not slow. */
+#define TICK_BUDGET 64
 
-static void load_state(z80_t *cpu, const json_value *state) {
-  z80_init(cpu);
-  cpu->pc = (uint16_t)get_int(state, "pc");
-  cpu->sp = (uint16_t)get_int(state, "sp");
-  cpu->a = (uint8_t)get_int(state, "a");
-  cpu->f = (uint8_t)get_int(state, "f");
-  cpu->b = (uint8_t)get_int(state, "b");
-  cpu->c = (uint8_t)get_int(state, "c");
-  cpu->d = (uint8_t)get_int(state, "d");
-  cpu->e = (uint8_t)get_int(state, "e");
-  cpu->h = (uint8_t)get_int(state, "h");
-  cpu->l = (uint8_t)get_int(state, "l");
-  cpu->i = (uint8_t)get_int(state, "i");
-  cpu->r = (uint8_t)get_int(state, "r");
-  cpu->wz = (uint16_t)get_int(state, "wz");
-  cpu->ixh = (uint8_t)(get_int(state, "ix") >> 8);
-  cpu->ixl = (uint8_t)(get_int(state, "ix") & 0xFF);
-  cpu->iyh = (uint8_t)(get_int(state, "iy") >> 8);
-  cpu->iyl = (uint8_t)(get_int(state, "iy") & 0xFF);
-  cpu->af_ = (uint16_t)get_int(state, "af_");
-  cpu->bc_ = (uint16_t)get_int(state, "bc_");
-  cpu->de_ = (uint16_t)get_int(state, "de_");
-  cpu->hl_ = (uint16_t)get_int(state, "hl_");
-  cpu->im = (uint8_t)get_int(state, "im");
-  cpu->iff1 = get_int(state, "iff1") != 0;
-  cpu->iff2 = get_int(state, "iff2") != 0;
-  cpu->ei = get_int(state, "ei") != 0;
-  cpu->p = (uint8_t)get_int(state, "p");
-  cpu->q = (uint8_t)get_int(state, "q");
-  memset(ram, 0, sizeof ram);
-  const json_value *entries = json_get(state, "ram");
-  for (size_t k = 0; entries && k < entries->length; k++) {
-    const json_value *pair = &entries->items[k];
-    ram[(uint16_t)pair->items[0].number] = (uint8_t)pair->items[1].number;
+#define INSTRUCTION_HUNG 0
+#define INSTRUCTION_OVERFLOWED (-1)
+
+static void load(uint16_t address, const uint8_t *bytes, size_t length) {
+  for (size_t index = 0; index < length; index++) {
+    ram[(uint16_t)(address + index)] = bytes[index];
   }
 }
 
-#define CHECK(field, expr)                                                                         \
-  do {                                                                                             \
-    int want = get_int(final, field);                                                              \
-    int got = (int)(expr);                                                                         \
-    if (want != got) {                                                                             \
-      if (verbose) {                                                                               \
-        printf("    %s: got %d, want %d\n", field, got, want);                                     \
-      }                                                                                            \
-      mismatch_count++;                                                                            \
-    }                                                                                              \
-  } while (0)
-
-static int check_final(const z80_t *cpu, const json_value *final, int verbose) {
-  int mismatch_count = 0;
-  CHECK("pc", cpu->pc);
-  CHECK("sp", cpu->sp);
-  CHECK("a", cpu->a);
-  CHECK("f", cpu->f);
-  CHECK("b", cpu->b);
-  CHECK("c", cpu->c);
-  CHECK("d", cpu->d);
-  CHECK("e", cpu->e);
-  CHECK("h", cpu->h);
-  CHECK("l", cpu->l);
-  CHECK("i", cpu->i);
-  CHECK("r", cpu->r);
-  CHECK("wz", cpu->wz);
-  CHECK("ix", (cpu->ixh << 8) | cpu->ixl);
-  CHECK("iy", (cpu->iyh << 8) | cpu->iyl);
-  CHECK("af_", cpu->af_);
-  CHECK("bc_", cpu->bc_);
-  CHECK("de_", cpu->de_);
-  CHECK("hl_", cpu->hl_);
-  CHECK("im", cpu->im);
-  CHECK("iff1", cpu->iff1);
-  CHECK("iff2", cpu->iff2);
-  CHECK("ei", cpu->ei);
-  CHECK("p", cpu->p);
-  CHECK("q", cpu->q);
-  const json_value *entries = json_get(final, "ram");
-  for (size_t k = 0; entries && k < entries->length; k++) {
-    const json_value *pair = &entries->items[k];
-    uint16_t address = (uint16_t)pair->items[0].number;
-    uint8_t want = (uint8_t)pair->items[1].number;
-    if (ram[address] != want) {
-      if (verbose) {
-        printf("    ram[%04X]: got %02X, want %02X\n", address, ram[address], want);
-      }
-      mismatch_count++;
-    }
+static uint64_t service_bus(uint64_t pins) {
+  if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
+    return z80_set_data(pins, ram[z80_address(pins)]);
   }
-  return mismatch_count;
+  if ((pins & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR)) {
+    ram[z80_address(pins)] = z80_data(pins);
+    return pins;
+  }
+  if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
+    return z80_set_data(pins, 0);
+  }
+  return pins;
 }
 
-static int run_test(const json_value *test, int verbose) {
-  const json_value *name = json_get(test, "name");
-  const json_value *cycles = json_get(test, "cycles");
-  const json_value *ports = json_get(test, "ports");
-  size_t port_index = 0;
-  z80_t cpu;
-  load_state(&cpu, json_get(test, "initial"));
-
-  int mismatch_count = 0;
+/* Returns the T-states taken, or one of the outcomes above. wait_pattern is
+   a repeating eight-tick mask of the ticks to hold WAIT on. */
+static int run_instruction_waiting(z80_t *cpu, unsigned wait_pattern) {
   uint64_t pins = 0;
-  int data_was_fed = 0;
-  uint8_t fed_data = 0;
-  for (size_t k = 0; k < cycles->length; k++) {
-    pins = z80_tick(&cpu, pins);
-
-    uint16_t address = z80_address(pins);
-    int data = -1; /* null: nobody drives the data bus */
-    if (data_was_fed) {
-      data = fed_data;
-    } else if (pins & Z80_WR) {
-      data = z80_data(pins);
+  for (int ticks = 1; ticks <= TICK_BUDGET; ticks++) {
+    if ((wait_pattern >> (ticks % 8)) & 1) {
+      pins |= Z80_WAIT;
+    } else {
+      pins &= ~Z80_WAIT;
     }
-    char flags[5] = "----";
-    if (pins & Z80_RD)
-      flags[0] = 'r';
-    if (pins & Z80_WR)
-      flags[1] = 'w';
-    if (pins & Z80_MREQ)
-      flags[2] = 'm';
-    if (pins & Z80_IORQ)
-      flags[3] = 'i';
-
-    const json_value *want = &cycles->items[k];
-    const json_value *want_address = &want->items[0];
-    const json_value *want_data = &want->items[1];
-    const char *want_flags = want->items[2].string;
-    int bad = 0;
-    if (want_address->type != JSON_NULL && (uint16_t)want_address->number != address)
-      bad = 1;
-    int want_data_value = want_data->type == JSON_NULL ? -1 : (int)want_data->number;
-    if (want_data_value != data)
-      bad = 1;
-    if (strcmp(want_flags, flags) != 0)
-      bad = 1;
-    if (bad) {
-      if (verbose) {
-        printf("    cycle %zu: got [%04X, %d, %s], want [%04X, %d, %s]\n", k + 1, address, data,
-               flags, want_address->type == JSON_NULL ? 0 : (int)want_address->number,
-               want_data_value, want_flags);
-      }
-      mismatch_count++;
+    pins = z80_tick(cpu, pins);
+    if (cpu->program_length > Z80_MAX_MACHINE_CYCLES) {
+      return INSTRUCTION_OVERFLOWED;
     }
-
-    /* service the bus for the next tick */
-    data_was_fed = 0;
-    if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
-      fed_data = ram[address];
-      pins = z80_set_data(pins, fed_data);
-      data_was_fed = 1;
-    } else if ((pins & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR)) {
-      ram[address] = z80_data(pins);
-    } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
-      /* each I/O pulse consumes the test's next ports entry, which states the
-         expected address, the value, and the direction */
-      fed_data = 0;
-      if (ports && port_index < ports->length) {
-        const json_value *entry = &ports->items[port_index++];
-        if ((uint16_t)entry->items[0].number != address || entry->items[2].string[0] != 'r') {
-          mismatch_count++;
-        }
-        fed_data = (uint8_t)entry->items[1].number;
-      } else {
-        mismatch_count++;
-      }
-      pins = z80_set_data(pins, fed_data);
-      data_was_fed = 1;
-    } else if ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
-      if (ports && port_index < ports->length) {
-        const json_value *entry = &ports->items[port_index++];
-        if ((uint16_t)entry->items[0].number != address || entry->items[2].string[0] != 'w' ||
-            (uint8_t)entry->items[1].number != z80_data(pins)) {
-          mismatch_count++;
-        }
-      } else {
-        mismatch_count++;
-      }
+    pins = service_bus(pins);
+    if (z80_instruction_complete(cpu)) {
+      return ticks;
     }
   }
-  mismatch_count += check_final(&cpu, json_get(test, "final"), verbose);
-
-  if (mismatch_count && verbose) {
-    printf("  FAIL %s (%d mismatches)\n", name && name->string ? name->string : "?",
-           mismatch_count);
-  }
-  return mismatch_count ? 1 : 0;
+  return INSTRUCTION_HUNG;
 }
 
-int main(int argc, char **argv) {
-  if (argc < 2) {
-    fprintf(stderr, "usage: %s <test.json>...\n", argv[0]);
-    return 2;
-  }
-  int failed_files = 0;
-  long total_tests = 0, total_passed = 0;
-  for (int i = 1; i < argc; i++) {
-    char error[256];
-    json_value *root = json_parse_file(argv[i], error, sizeof error);
-    if (!root) {
-      fprintf(stderr, "%s: %s\n", argv[i], error);
-      return 2;
+static int run_instruction(z80_t *cpu) { return run_instruction_waiting(cpu, 0); }
+
+static int run_instruction_holding_wait(z80_t *cpu, int first_ticks) {
+  uint64_t pins = 0;
+  for (int ticks = 1; ticks <= TICK_BUDGET; ticks++) {
+    if (ticks <= first_ticks) {
+      pins |= Z80_WAIT;
+    } else {
+      pins &= ~Z80_WAIT;
     }
-    int pass = 0, fail = 0;
-    for (size_t k = 0; k < root->length; k++) {
-      if (run_test(&root->items[k], fail < 3)) {
-        fail++;
-      } else {
-        pass++;
+    pins = z80_tick(cpu, pins);
+    pins = service_bus(pins);
+    if (z80_instruction_complete(cpu)) {
+      return ticks;
+    }
+  }
+  return INSTRUCTION_HUNG;
+}
+
+static void test_reset_state(void) {
+  z80_t cpu;
+  z80_init(&cpu);
+  TEST_EQUAL(cpu.a, 0xFF);
+  TEST_EQUAL(cpu.f, 0xFF);
+  TEST_EQUAL(cpu.sp, 0xFFFF);
+  TEST_EQUAL(cpu.pc, 0);
+  TEST_EQUAL(cpu.i, 0);
+  TEST_EQUAL(cpu.r, 0);
+  TEST_EQUAL(cpu.im, 0);
+  TEST_CHECK(!cpu.iff1);
+  TEST_CHECK(!cpu.iff2);
+  TEST_CHECK(!cpu.halted);
+  TEST_CHECK(z80_instruction_complete(&cpu));
+}
+
+/* An instruction needing more cycles than Z80_MAX_MACHINE_CYCLES overwrites
+   the state beside the micro-program, so this sweep guards that bound as much
+   as it guards against hangs. */
+static void run_page(const char *page, const uint8_t *lead, size_t lead_length) {
+  for (unsigned opcode = 0; opcode <= 0xFF; opcode++) {
+    z80_t cpu;
+    z80_init(&cpu);
+    cpu.pc = 0x1000;
+    cpu.sp = 0x8000;
+    memset(ram, 0, sizeof ram);
+
+    uint8_t bytes[4];
+    size_t length = 0;
+    for (size_t index = 0; index < lead_length; index++) {
+      bytes[length++] = lead[index];
+    }
+    bytes[length++] = (uint8_t)opcode;
+    load(cpu.pc, bytes, length);
+
+    const int ticks = run_instruction(&cpu);
+    if (ticks == INSTRUCTION_OVERFLOWED) {
+      TEST_FAIL("opcode %s%02X needs more than %d machine cycles", page, opcode,
+                Z80_MAX_MACHINE_CYCLES);
+      return;
+    }
+    if (ticks == INSTRUCTION_HUNG) {
+      TEST_FAIL("opcode %s%02X did not finish within %d T-states", page, opcode, TICK_BUDGET);
+      return;
+    }
+  }
+}
+
+static void test_unprefixed_page_completes(void) { run_page("", NULL, 0); }
+
+static void test_cb_page_completes(void) {
+  const uint8_t lead[] = {0xCB};
+  run_page("CB ", lead, sizeof lead);
+}
+
+static void test_ed_page_completes(void) {
+  const uint8_t lead[] = {0xED};
+  run_page("ED ", lead, sizeof lead);
+}
+
+static void test_dd_page_completes(void) {
+  const uint8_t lead[] = {0xDD};
+  run_page("DD ", lead, sizeof lead);
+}
+
+static void test_fd_page_completes(void) {
+  const uint8_t lead[] = {0xFD};
+  run_page("FD ", lead, sizeof lead);
+}
+
+static void test_ddcb_page_completes(void) {
+  const uint8_t lead[] = {0xDD, 0xCB, 0x02}; /* prefixes, then the displacement */
+  run_page("DD CB ", lead, sizeof lead);
+}
+
+static void test_fdcb_page_completes(void) {
+  const uint8_t lead[] = {0xFD, 0xCB, 0x02};
+  run_page("FD CB ", lead, sizeof lead);
+}
+
+/* Stalls a cycle where it actually sits on the bus, and on the tick after,
+   where WAIT is sampled. Same duration means the cycle ignored the pin. */
+static void check_cycle_honours_wait(const char *what, const uint8_t *program, size_t length,
+                                     uint64_t asserted, uint64_t forbidden) {
+  z80_t cpu;
+  uint32_t cycle_ticks = 0;
+  int plain_ticks = 0;
+
+  z80_init(&cpu);
+  cpu.pc = 0x1000;
+  memset(ram, 0, sizeof ram);
+  load(cpu.pc, program, length);
+  uint64_t pins = 0;
+  for (int ticks = 1; ticks < 30; ticks++) {
+    pins = z80_tick(&cpu, pins);
+    if ((pins & asserted) == asserted && (pins & forbidden) == 0) {
+      cycle_ticks |= (1u << ticks) | (1u << (ticks + 1));
+    }
+    pins = service_bus(pins);
+    if (z80_instruction_complete(&cpu)) {
+      plain_ticks = ticks;
+      break;
+    }
+  }
+  if (cycle_ticks == 0) {
+    TEST_FAIL("no %s cycle happens in this instruction", what);
+    return;
+  }
+
+  z80_init(&cpu);
+  cpu.pc = 0x1000;
+  memset(ram, 0, sizeof ram);
+  load(cpu.pc, program, length);
+  pins = 0;
+  for (int ticks = 1; ticks <= TICK_BUDGET; ticks++) {
+    if (ticks < 31 && ((cycle_ticks >> ticks) & 1)) {
+      pins |= Z80_WAIT;
+    } else {
+      pins &= ~Z80_WAIT;
+    }
+    pins = z80_tick(&cpu, pins);
+    pins = service_bus(pins);
+    if (z80_instruction_complete(&cpu)) {
+      if (ticks <= plain_ticks) {
+        TEST_FAIL("the %s cycle ignores WAIT: %d T-states either way", what, ticks);
       }
+      return;
     }
-    putchar(fail ? 'F' : '.');
-    fflush(stdout);
-    if (fail) {
-      printf("\n%s: %d/%d pass\n", argv[i], pass, pass + fail);
-      failed_files++;
-    }
-    total_tests += pass + fail;
-    total_passed += pass;
-    json_free(root);
   }
-  printf("\n%d files, %ld/%ld tests pass\n", argc - 1, total_passed, total_tests);
-  return failed_files ? 1 : 0;
+  TEST_FAIL("the %s cycle never finished", what);
+}
+
+static void test_wait_stretches_every_kind_of_cycle(void) {
+  const uint8_t fetch[] = {0x00};          /* NOP */
+  const uint8_t memory_read[] = {0x7E};    /* LD A,(HL) */
+  const uint8_t memory_write[] = {0x77};   /* LD (HL),A */
+  const uint8_t port_read[] = {0xDB, 20};  /* IN A,(20) */
+  const uint8_t port_write[] = {0xD3, 20}; /* OUT (20),A */
+  check_cycle_honours_wait("opcode fetch", fetch, sizeof fetch, Z80_M1 | Z80_MREQ | Z80_RD, 0);
+  check_cycle_honours_wait("memory read", memory_read, sizeof memory_read, Z80_MREQ | Z80_RD,
+                           Z80_M1);
+  check_cycle_honours_wait("memory write", memory_write, sizeof memory_write, Z80_MREQ | Z80_WR, 0);
+  check_cycle_honours_wait("port read", port_read, sizeof port_read, Z80_IORQ | Z80_RD, 0);
+  check_cycle_honours_wait("port write", port_write, sizeof port_write, Z80_IORQ | Z80_WR, 0);
+}
+
+static void test_wait_adds_one_tstate_per_held_tick(void) {
+  int duration[10];
+  for (int held = 0; held < 10; held++) {
+    z80_t cpu;
+    z80_init(&cpu);
+    cpu.pc = 0x1000;
+    memset(ram, 0, sizeof ram);
+    const uint8_t program[] = {0x00}; /* NOP */
+    load(cpu.pc, program, sizeof program);
+    duration[held] = run_instruction_holding_wait(&cpu, held);
+  }
+  TEST_EQUAL(duration[0], 4);
+
+  int first_stretch = 0;
+  while (first_stretch < 10 && duration[first_stretch] == duration[0]) {
+    first_stretch++;
+  }
+  TEST_CHECK(first_stretch < 10);
+  for (int held = first_stretch; held < 10; held++) {
+    TEST_EQUAL(duration[held], duration[0] + (held - first_stretch) + 1);
+  }
+}
+
+static void test_wait_holds_the_bus_steady(void) {
+  z80_t cpu;
+  z80_init(&cpu);
+  cpu.pc = 0x1000;
+  memset(ram, 0, sizeof ram);
+  const uint8_t program[] = {0x00};
+  load(cpu.pc, program, sizeof program);
+
+  uint64_t pins = 0;
+  int stalls = 0;
+  for (int ticks = 1; ticks <= 8; ticks++) {
+    const uint8_t step_before = cpu.step;
+    const uint64_t bus_before = pins & ~Z80_WAIT;
+    pins = z80_tick(&cpu, pins | Z80_WAIT);
+    if (cpu.step == step_before) {
+      TEST_EQUAL(pins & ~Z80_WAIT, bus_before);
+      stalls++;
+    }
+    pins = service_bus(pins);
+  }
+  TEST_CHECK(stalls > 0);
+}
+
+/* Field by field rather than memcmp: the struct has padding, and padding
+   bytes are nobody's business. */
+static const char *first_difference(const z80_t *left, const z80_t *right) {
+#define COMPARE(field)                                                                             \
+  if (left->field != right->field) {                                                               \
+    return #field;                                                                                 \
+  }
+  COMPARE(a)
+  COMPARE(f)
+  COMPARE(b)
+  COMPARE(c)
+  COMPARE(d)
+  COMPARE(e)
+  COMPARE(h)
+  COMPARE(l)
+  COMPARE(af_)
+  COMPARE(bc_)
+  COMPARE(de_)
+  COMPARE(hl_)
+  COMPARE(ixh)
+  COMPARE(ixl)
+  COMPARE(iyh)
+  COMPARE(iyl)
+  COMPARE(sp)
+  COMPARE(pc)
+  COMPARE(wz)
+  COMPARE(i)
+  COMPARE(r)
+  COMPARE(im)
+  COMPARE(iff1)
+  COMPARE(iff2)
+  COMPARE(halted)
+  COMPARE(ei)
+  COMPARE(p)
+  COMPARE(q)
+#undef COMPARE
+  return NULL;
+}
+
+static void test_wait_changes_timing_only(void) {
+  static uint8_t ram_after_plain[0x10000];
+  for (unsigned opcode = 0; opcode <= 0xFF; opcode++) {
+    const uint8_t program[] = {(uint8_t)opcode, 0x37, 0x21, 0x8A};
+
+    z80_t plain;
+    z80_init(&plain);
+    plain.pc = 0x1000;
+    plain.sp = 0x8000;
+    memset(ram, 0, sizeof ram);
+    load(plain.pc, program, sizeof program);
+    const int plain_ticks = run_instruction(&plain);
+    memcpy(ram_after_plain, ram, sizeof ram);
+
+    z80_t waited;
+    z80_init(&waited);
+    waited.pc = 0x1000;
+    waited.sp = 0x8000;
+    memset(ram, 0, sizeof ram);
+    load(waited.pc, program, sizeof program);
+    const int waited_ticks = run_instruction_waiting(&waited, 0xAA);
+
+    if (waited_ticks <= plain_ticks) {
+      TEST_FAIL("opcode %02X took %d T-states waiting, %d without", opcode, waited_ticks,
+                plain_ticks);
+      return;
+    }
+    const char *difference = first_difference(&plain, &waited);
+    if (difference != NULL) {
+      TEST_FAIL("opcode %02X reaches a different %s when made to wait", opcode, difference);
+      return;
+    }
+    if (memcmp(ram_after_plain, ram, sizeof ram) != 0) {
+      TEST_FAIL("opcode %02X writes different memory when made to wait", opcode);
+      return;
+    }
+  }
+}
+
+/* A halted Z80 keeps fetching so that the refresh keeps running. */
+static void test_halt_keeps_fetching_without_advancing(void) {
+  z80_t cpu;
+  z80_init(&cpu);
+  cpu.pc = 0x1000;
+  memset(ram, 0, sizeof ram);
+  const uint8_t program[] = {0x76}; /* HALT */
+  load(cpu.pc, program, sizeof program);
+
+  TEST_EQUAL(run_instruction(&cpu), 4);
+  TEST_CHECK(cpu.halted);
+  TEST_EQUAL(cpu.pc, 0x1001);
+  const uint8_t refresh_when_halted = cpu.r;
+
+  TEST_CHECK((z80_tick(&cpu, 0) & Z80_HALT) != 0);
+  z80_init(&cpu);
+  cpu.pc = 0x1000;
+  cpu.halted = true;
+  cpu.r = refresh_when_halted;
+  for (int instruction = 1; instruction <= 3; instruction++) {
+    TEST_EQUAL(run_instruction(&cpu), 4);
+    TEST_EQUAL(cpu.pc, 0x1000);
+    TEST_EQUAL(cpu.r & 0x7F, (refresh_when_halted + instruction) & 0x7F);
+  }
+}
+
+static void test_state_struct_is_the_whole_machine(void) {
+  static uint8_t ram_at_snapshot[0x10000];
+  static uint64_t first_run[200];
+
+  z80_t cpu;
+  z80_init(&cpu);
+  cpu.pc = 0x1000;
+  memset(ram, 0, sizeof ram);
+  const uint8_t program[] = {
+      0x21, 0x00, 0x20, /* LD HL,0x2000 */
+      0x36, 0x5A,       /* LD (HL),0x5A */
+      0x7E,             /* LD A,(HL)    */
+      0x3C,             /* INC A        */
+      0x77,             /* LD (HL),A    */
+      0x23,             /* INC HL       */
+      0x18, 0xF8,       /* JR back to LD (HL),n */
+  };
+  load(cpu.pc, program, sizeof program);
+
+  uint64_t pins = 0;
+  for (int ticks = 0; ticks < 200; ticks++) {
+    pins = service_bus(z80_tick(&cpu, pins));
+  }
+
+  const z80_t cpu_at_snapshot = cpu;
+  const uint64_t pins_at_snapshot = pins;
+  memcpy(ram_at_snapshot, ram, sizeof ram);
+
+  for (int ticks = 0; ticks < 200; ticks++) {
+    pins = service_bus(z80_tick(&cpu, pins));
+    first_run[ticks] = pins;
+  }
+
+  cpu = cpu_at_snapshot;
+  pins = pins_at_snapshot;
+  memcpy(ram, ram_at_snapshot, sizeof ram);
+
+  for (int ticks = 0; ticks < 200; ticks++) {
+    pins = service_bus(z80_tick(&cpu, pins));
+    if (pins != first_run[ticks]) {
+      TEST_FAIL("tick %d differs after restoring the snapshot", ticks);
+      return;
+    }
+  }
+}
+
+/* The subtlety: between the two fetches the CPU is at a fetch boundary, which
+   is not the same as being between instructions. */
+static void test_prefix_is_not_a_complete_instruction(void) {
+  z80_t cpu;
+  z80_init(&cpu);
+  cpu.pc = 0x1000;
+  memset(ram, 0, sizeof ram);
+  const uint8_t program[] = {0xDD, 0x00};
+  load(cpu.pc, program, sizeof program);
+
+  uint64_t pins = 0;
+  for (int ticks = 0; ticks < 4; ticks++) {
+    pins = z80_tick(&cpu, pins);
+    if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
+      pins = z80_set_data(pins, ram[z80_address(pins)]);
+    }
+  }
+  TEST_CHECK(!z80_instruction_complete(&cpu));
+  TEST_EQUAL(cpu.prefix, 0xDD);
+
+  for (int ticks = 0; ticks < 4; ticks++) {
+    pins = z80_tick(&cpu, pins);
+    if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
+      pins = z80_set_data(pins, ram[z80_address(pins)]);
+    }
+  }
+  TEST_CHECK(z80_instruction_complete(&cpu));
+  TEST_EQUAL(cpu.pc, 0x1002);
+  TEST_EQUAL(cpu.r, 2); /* one refresh per fetch */
+}
+
+int main(void) {
+  TEST_RUN(test_reset_state);
+  TEST_RUN(test_unprefixed_page_completes);
+  TEST_RUN(test_cb_page_completes);
+  TEST_RUN(test_ed_page_completes);
+  TEST_RUN(test_dd_page_completes);
+  TEST_RUN(test_fd_page_completes);
+  TEST_RUN(test_ddcb_page_completes);
+  TEST_RUN(test_fdcb_page_completes);
+  TEST_RUN(test_prefix_is_not_a_complete_instruction);
+  TEST_RUN(test_wait_stretches_every_kind_of_cycle);
+  TEST_RUN(test_wait_adds_one_tstate_per_held_tick);
+  TEST_RUN(test_wait_holds_the_bus_steady);
+  TEST_RUN(test_wait_changes_timing_only);
+  TEST_RUN(test_halt_keeps_fetching_without_advancing);
+  TEST_RUN(test_state_struct_is_the_whole_machine);
+  return TEST_REPORT("z80");
 }

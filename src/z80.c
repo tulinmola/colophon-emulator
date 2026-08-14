@@ -1379,6 +1379,8 @@ static void z80_decode(z80_t *cpu) {
      a machine can keep ticking */
 }
 
+bool z80_instruction_complete(const z80_t *cpu) { return cpu->step == M1_T1 && cpu->prefix == 0; }
+
 uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
   switch (cpu->step) {
     case M1_T1:

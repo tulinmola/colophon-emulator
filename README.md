@@ -16,12 +16,32 @@ A C compiler and `make` are the whole toolchain. No configure step, no dependenc
 
 ```sh
 make        # build
-make test   # run the test suites (first run downloads test data, needs curl)
+make test   # the fast tests
 ```
 
-There is nothing to play yet. What exists today is the first chip: a cycle-stepped Z80 being built opcode by opcode, where each opcode counts as done only when its thousand-test [SingleStepTests](https://github.com/SingleStepTests/z80) file passes, per cycle. The machine around it — Gate Array, CRTC, the Amstrad CPC itself — comes next, the same way: documentation first, tests as proof.
+There is nothing to play yet. What exists today is the first chip: a cycle-stepped Z80, complete — every instruction the machine knows, undocumented ones included. The rest of the machine, Gate Array and CRTC and the CPC around them, comes next and comes the same way: documentation first, tests as proof.
 
 For development there are also `make format` (clang-format, config in `.clang-format`), `make format-check`, and `make lint` (clang-tidy, config in `.clang-tidy`).
+
+## Evidence
+
+An emulator that looks right and an emulator that is right are different things, and the difference surfaces years later, in the one game nobody tried. So every claim here has a check behind it, and wherever possible the check comes from outside — written by someone else, who did not know what we believe.
+
+The tests come in tiers, separated by what they answer and what they cost.
+
+```sh
+make test              # fast, hermetic, no network — runs on every change
+make test-single-step  # the complete SingleStepTests corpus
+make test-all          # both
+```
+
+`make test` covers only what no external suite can see: the reset contract, the invariants of our own machinery, that every opcode on every prefix page finishes without outgrowing its micro-program. It deliberately restates nothing the corpus already proves.
+
+`make test-single-step` runs [SingleStepTests](https://github.com/SingleStepTests/z80): 1,604 files, one per opcode across every prefix page, a thousand randomised cases each — 1,604,000 in all. Every case fixes the CPU and memory before and after, and the state of the bus after each individual clock cycle. That last part is what earns its **1.3 GB**, because it tests timing rather than only results. It matters just as much that we did not write it: a test written from our own understanding agrees with our own mistakes, and this one disagrees. It has already caught a real error — we had concluded an undocumented DD CB behaviour did not exist, and 168 files said otherwise. The corpus is pinned to a commit, so "passes the complete suite" names something exact that cannot shift underneath us. The first run downloads it, which takes a few minutes and needs `curl` and `unzip`; after that it is local.
+
+Today every instruction the Z80 knows passes it, per cycle.
+
+Three more suites are still to come, each proving something the others cannot. **ZEXALL** works through exhaustive operand combinations and self-checks with CRCs: a second, unrelated proof of the same CPU. **Shaker**, Longshot's CRTC acid tests, compares against recordings made on real machines, one set per CRTC type. And a battery of demos, which break on anything less than exact — the only tests written by people trying to make the hardware do something beautiful rather than something correct.
 
 ## Sources
 

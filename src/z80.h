@@ -70,6 +70,12 @@ static inline uint64_t z80_set_data(uint64_t pins, uint8_t data) {
 #define Z80_FLAG_Z (1 << 6) /* zero */
 #define Z80_FLAG_S (1 << 7) /* sign */
 
+/* The longest micro-program any instruction needs. Four is exact today: the
+ * 16-bit loads through (nn), the DD CB forms and the block I/O instructions
+ * all fill it. Raise it when a family needs more — interrupt acceptance
+ * will. */
+#define Z80_MAX_MACHINE_CYCLES 4
+
 /* One machine cycle of an instruction's micro-program: what kind of cycle,
  * where its address comes from, which operand it moves, and how many internal
  * T-states stretch it at the end (see z80.c). */
@@ -104,7 +110,7 @@ typedef struct {
   uint8_t prefix;     /* 0xCB/0xED/0xDD/0xFD while waiting for the prefixed opcode, else 0 */
   uint8_t index_mode; /* 0 none, 1 IX, 2 IY: the HL substitution for the current instruction */
   /* the instruction's machine cycles after M1, filled at decode */
-  z80_micro_op program[4];
+  z80_micro_op program[Z80_MAX_MACHINE_CYCLES];
   uint8_t program_length;
   uint8_t program_index;
   /* latched for the machine cycle in progress */
@@ -123,5 +129,10 @@ void z80_init(z80_t *cpu);
 
 /* Advance one T-state. Takes the current bus pins, returns the new ones. */
 uint64_t z80_tick(z80_t *cpu, uint64_t pins);
+
+/* True between instructions, when the next tick starts an opcode fetch. A
+ * pending prefix does not count: DD has not finished until the instruction it
+ * modifies has run. */
+bool z80_instruction_complete(const z80_t *cpu);
 
 #endif
