@@ -17,7 +17,7 @@ Colophon is an Amstrad CPC emulator built for game archaeology: it instruments g
 
 ## Build and test
 
-- `make` builds; `make test` builds and runs the test suites, fetching missing test data via `tools/fetch-tests.sh` into `test/data/` (git-ignored).
+- `make` builds. `make test` is the fast tier: hermetic, no network, run it on every change. `make test-single-step` runs the instruction corpus and `make test-exerciser` the acceptance suite; both fetch their material into `test/data/` (git-ignored) on first use. `make test-all` runs everything.
 - C99 with `-Wall -Wextra -Werror`. No external dependencies: we write what we need ourselves.
 - Never commit, never push. The human reviews; the human commits.
 

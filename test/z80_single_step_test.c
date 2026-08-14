@@ -2,10 +2,10 @@
  * z80_single_step_test — runs the SingleStepTests Z80 suite against our core.
  *
  * Test data: https://github.com/SingleStepTests/z80 (MIT), fetched by
- * tools/fetch-tests.sh into test/data/v1/. Each file holds 1000 tests for one
- * opcode: initial/final CPU+RAM state plus the expected bus state after every
- * T-state ("sampled between cycles"). Their flag string is four positions,
- * "rwmi" for READ/WRITE/MREQ/IORQ, '-' when inactive.
+ * tools/fetch-tests.sh into test/data/SingleStepTests/z80/v1/. Each file holds
+ * 1000 tests for one opcode: initial and final CPU and RAM state, plus the
+ * expected bus state after every T-state ("sampled between cycles"). Their flag string is four
+ * positions, "rwmi" for READ/WRITE/MREQ/IORQ, '-' when inactive.
  *
  * Bus convention learned from their traces: a read's data value appears on the
  * sample FOLLOWING the read pulse (memory answers, then the value sits on the
