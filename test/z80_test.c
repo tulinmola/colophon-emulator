@@ -42,8 +42,10 @@ static void load_state(z80_t *cpu, const json_value *state) {
   cpu->i = (uint8_t)get_int(state, "i");
   cpu->r = (uint8_t)get_int(state, "r");
   cpu->wz = (uint16_t)get_int(state, "wz");
-  cpu->ix = (uint16_t)get_int(state, "ix");
-  cpu->iy = (uint16_t)get_int(state, "iy");
+  cpu->ixh = (uint8_t)(get_int(state, "ix") >> 8);
+  cpu->ixl = (uint8_t)(get_int(state, "ix") & 0xFF);
+  cpu->iyh = (uint8_t)(get_int(state, "iy") >> 8);
+  cpu->iyl = (uint8_t)(get_int(state, "iy") & 0xFF);
   cpu->af_ = (uint16_t)get_int(state, "af_");
   cpu->bc_ = (uint16_t)get_int(state, "bc_");
   cpu->de_ = (uint16_t)get_int(state, "de_");
@@ -89,8 +91,8 @@ static int check_final(const z80_t *cpu, const json_value *final, int verbose) {
   CHECK("i", cpu->i);
   CHECK("r", cpu->r);
   CHECK("wz", cpu->wz);
-  CHECK("ix", cpu->ix);
-  CHECK("iy", cpu->iy);
+  CHECK("ix", (cpu->ixh << 8) | cpu->ixl);
+  CHECK("iy", (cpu->iyh << 8) | cpu->iyl);
   CHECK("af_", cpu->af_);
   CHECK("bc_", cpu->bc_);
   CHECK("de_", cpu->de_);

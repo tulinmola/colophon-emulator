@@ -94,6 +94,10 @@ enum {
   DATA_PC_HIGH,
   DATA_CB,           /* the arriving byte runs the latched CB operation into the latch */
   DATA_BIT,          /* the arriving byte is bit-tested; X/Y leak from W (see z80_bit) */
+  DATA_INDEX_LOW,    /* L, or IXL/IYL under the active prefix */
+  DATA_INDEX_HIGH,   /* H, or IXH/IYH under the active prefix */
+  DATA_DISPLACEMENT, /* (IX+d)/(IY+d): the byte folds into WZ as the effective address */
+  DATA_DDCB,         /* DD CB: the sub-opcode arrives as data and appends its own cycles */
   DATA_IN,           /* IN r,(C): flags from the value; register y, or none for y=6 */
   DATA_ROTATE_DIGIT, /* RRD/RLD: nibbles turn between A and the latch */
   DATA_BLOCK_LD,     /* LDI/LDD family: transfer bookkeeping on arrival */
@@ -114,6 +118,7 @@ enum {
   FINISH_BLOCK_IN,         /* INI/IND family: HL moves; repeats rewind */
   FINISH_BLOCK_CP_REPEAT,  /* CPIR/CPDR taking another round */
   FINISH_BLOCK_OUT_REPEAT, /* OTIR/OTDR taking another round */
+  FINISH_DDCB_COPY,        /* DD CB with z!=6 also lands the result in r[z] */
 };
 
 /* z80_t.alu_operation: the alu table per the decoding doc, indexed by y, plus
@@ -131,9 +136,13 @@ enum {
   OPERATION_DECREMENT,
 };
 
-/* CPIR/CPDR decide whether to repeat only once the compared byte arrives, so
-   the operand handler extends the running program itself. */
+/* CPIR/CPDR decide whether to repeat only once the compared byte arrives, and
+   DD CB learns its operation from a byte read as data, so operand handlers
+   extend the running program themselves. */
 static void z80_append_internal(z80_t *cpu, uint8_t ticks);
+static void z80_append_cycle(z80_t *cpu, uint8_t cycle, uint8_t address, uint8_t data);
+static void z80_append_cycle_stretched(z80_t *cpu, uint8_t cycle, uint8_t address, uint8_t data,
+                                       uint8_t stretch);
 
 /* 8-bit register table per the decoding doc (see z80_decode): B C D E H L
    (HL) A. Index 6 is the (HL) memory operand, not a register; decode routes
@@ -155,6 +164,28 @@ static uint8_t *z80_register8(z80_t *cpu, uint8_t index) {
     default:
       return &cpu->a;
   }
+}
+
+/* Under DD/FD, references to H and L become the index register's halves —
+   except when the instruction addresses (IX+d), where decode uses the plain
+   table instead. */
+static uint8_t *z80_register8_indexed(z80_t *cpu, uint8_t index) {
+  if (index == 4) {
+    if (cpu->index_mode == 1) {
+      return &cpu->ixh;
+    }
+    if (cpu->index_mode == 2) {
+      return &cpu->iyh;
+    }
+  } else if (index == 5) {
+    if (cpu->index_mode == 1) {
+      return &cpu->ixl;
+    }
+    if (cpu->index_mode == 2) {
+      return &cpu->iyl;
+    }
+  }
+  return z80_register8(cpu, index);
 }
 
 static void z80_set_flags(z80_t *cpu, uint8_t flags) {
@@ -393,7 +424,8 @@ static uint8_t z80_decrement(z80_t *cpu, uint8_t value) {
   return result;
 }
 
-/* 16-bit register pair table per the decoding doc: BC DE HL SP, indexed by p. */
+/* 16-bit register pair table per the decoding doc: BC DE HL SP, indexed by
+   p. The HL slot is where the DD/FD prefixes substitute IX/IY. */
 static uint16_t z80_register_pair(z80_t *cpu, uint8_t index) {
   switch (index) {
     case 0:
@@ -401,6 +433,12 @@ static uint16_t z80_register_pair(z80_t *cpu, uint8_t index) {
     case 1:
       return (uint16_t)((cpu->d << 8) | cpu->e);
     case 2:
+      if (cpu->index_mode == 1) {
+        return (uint16_t)((cpu->ixh << 8) | cpu->ixl);
+      }
+      if (cpu->index_mode == 2) {
+        return (uint16_t)((cpu->iyh << 8) | cpu->iyl);
+      }
       return (uint16_t)((cpu->h << 8) | cpu->l);
     default:
       return cpu->sp;
@@ -418,8 +456,8 @@ static void z80_set_register_pair(z80_t *cpu, uint8_t index, uint16_t value) {
       cpu->e = (uint8_t)(value & 0xFF);
       break;
     case 2:
-      cpu->h = (uint8_t)(value >> 8);
-      cpu->l = (uint8_t)(value & 0xFF);
+      *z80_register8_indexed(cpu, 4) = (uint8_t)(value >> 8);
+      *z80_register8_indexed(cpu, 5) = (uint8_t)(value & 0xFF);
       break;
     default:
       cpu->sp = value;
@@ -430,7 +468,7 @@ static void z80_set_register_pair(z80_t *cpu, uint8_t index, uint16_t value) {
 /* ADD HL,ss touches only H, N, C and the X/Y copies — taken from the high
    byte of the result; S, Z and P/V survive. WZ = HL + 1, from the pre-add HL. */
 static void z80_add16(z80_t *cpu, uint16_t value) {
-  const uint16_t hl = (uint16_t)((cpu->h << 8) | cpu->l);
+  const uint16_t hl = z80_register_pair(cpu, 2); /* IX/IY under a prefix */
   cpu->wz = (uint16_t)(hl + 1);
   const unsigned result = hl + value;
   uint8_t flags = cpu->f & (Z80_FLAG_S | Z80_FLAG_Z | Z80_FLAG_PV);
@@ -439,8 +477,7 @@ static void z80_add16(z80_t *cpu, uint16_t value) {
     flags |= Z80_FLAG_C;
   }
   flags |= (result >> 8) & (Z80_FLAG_X | Z80_FLAG_Y);
-  cpu->h = (uint8_t)(result >> 8);
-  cpu->l = (uint8_t)(result & 0xFF);
+  z80_set_register_pair(cpu, 2, (uint16_t)result);
   z80_set_flags(cpu, flags);
 }
 
@@ -557,6 +594,10 @@ static uint8_t z80_get_operand(z80_t *cpu, uint8_t code) {
       return (uint8_t)(cpu->sp >> 8);
     case DATA_LATCH:
       return cpu->data_latch;
+    case DATA_INDEX_LOW:
+      return *z80_register8_indexed(cpu, 5);
+    case DATA_INDEX_HIGH:
+      return *z80_register8_indexed(cpu, 4);
     case DATA_F:
       return cpu->f;
     case DATA_PC_LOW:
@@ -586,6 +627,28 @@ static void z80_set_operand(z80_t *cpu, uint8_t code, uint8_t value) {
       break;
     case DATA_LATCH:
       cpu->data_latch = value;
+      break;
+    case DATA_INDEX_LOW:
+      *z80_register8_indexed(cpu, 5) = value;
+      break;
+    case DATA_INDEX_HIGH:
+      *z80_register8_indexed(cpu, 4) = value;
+      break;
+    case DATA_DISPLACEMENT:
+      cpu->wz = (uint16_t)(z80_register_pair(cpu, 2) + (int8_t)value);
+      break;
+    case DATA_DDCB:
+      cpu->alu_operation = value;
+      if (((value >> 6) & 3) == 1) { /* BIT y,(IX+d) */
+        z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_WZ, DATA_BIT, 1);
+      } else {
+        z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_WZ, DATA_CB, 1);
+        z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ, DATA_LATCH);
+        if ((value & 7) != 6) {
+          /* the undocumented copy: the memory result also lands in r[z] */
+          cpu->finish = FINISH_DDCB_COPY;
+        }
+      }
       break;
     case DATA_ALU:
       z80_alu(cpu, cpu->alu_operation, value);
@@ -735,8 +798,7 @@ static void z80_start_next_cycle(z80_t *cpu) {
   if (cpu->program_index == cpu->program_length) {
     switch (cpu->finish) {
       case FINISH_HL_FROM_WZ:
-        cpu->h = (uint8_t)(cpu->wz >> 8);
-        cpu->l = (uint8_t)(cpu->wz & 0xFF);
+        z80_set_register_pair(cpu, 2, cpu->wz); /* IX/IY under a prefix */
         break;
       case FINISH_PC_FROM_WZ:
         cpu->pc = cpu->wz;
@@ -764,6 +826,9 @@ static void z80_start_next_cycle(z80_t *cpu) {
       case FINISH_BLOCK_OUT_REPEAT:
         z80_block_repeat(cpu);
         z80_block_io_repeat_flags(cpu);
+        break;
+      case FINISH_DDCB_COPY:
+        *z80_register8(cpu, cpu->alu_operation & 7) = cpu->data_latch;
         break;
       default:
         break;
@@ -835,12 +900,26 @@ static void z80_start_next_cycle(z80_t *cpu) {
    http://www.z80.info/decoding.htm — the octal structure the silicon decodes:
    x = bits 7..6, y = bits 5..3, z = bits 2..0, y = 2p + q. The rp table (BC
    DE HL SP) is indexed by p. */
-static const uint8_t register_pair_low[4] = {REGISTER_C, REGISTER_E, REGISTER_L, DATA_SP_LOW};
-static const uint8_t register_pair_high[4] = {REGISTER_B, REGISTER_D, REGISTER_H, DATA_SP_HIGH};
+static const uint8_t register_pair_low[4] = {REGISTER_C, REGISTER_E, DATA_INDEX_LOW, DATA_SP_LOW};
+static const uint8_t register_pair_high[4] = {REGISTER_B, REGISTER_D, DATA_INDEX_HIGH,
+                                              DATA_SP_HIGH};
 
-/* the rp2 table (PUSH/POP): BC DE HL AF, indexed by p */
-static const uint8_t register_pair2_low[4] = {REGISTER_C, REGISTER_E, REGISTER_L, DATA_F};
-static const uint8_t register_pair2_high[4] = {REGISTER_B, REGISTER_D, REGISTER_H, REGISTER_A};
+/* the rp2 table (PUSH/POP): BC DE HL AF, indexed by p; the HL slot follows
+   the active index prefix */
+static const uint8_t register_pair2_low[4] = {REGISTER_C, REGISTER_E, DATA_INDEX_LOW, DATA_F};
+static const uint8_t register_pair2_high[4] = {REGISTER_B, REGISTER_D, DATA_INDEX_HIGH, REGISTER_A};
+
+/* (HL) becomes (IX+d)/(IY+d) under a prefix: the displacement is read and
+   folded into WZ, five T-states of address arithmetic follow, and the memory
+   cycles then go through WZ — which is why WZ ends as the effective address. */
+static uint8_t z80_indexed_address(z80_t *cpu) {
+  if (cpu->index_mode == 0) {
+    return ADDRESS_HL;
+  }
+  z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_DISPLACEMENT);
+  z80_append_internal(cpu, 5);
+  return ADDRESS_WZ;
+}
 
 /* The CB page: rotates/shifts (x=0), BIT (x=1), RES (x=2), SET (x=3), all on
    r[z]. The (HL) forms read with one stretch T-state and, except BIT, write
@@ -1025,9 +1104,18 @@ static void z80_decode(z80_t *cpu) {
   }
   if (cpu->prefix == 0xED) {
     cpu->prefix = 0;
+    cpu->index_mode = 0; /* DD ED discards the index prefix */
     z80_decode_ed(cpu);
     return;
   }
+  if (cpu->prefix == 0xDD) {
+    cpu->index_mode = 1;
+  } else if (cpu->prefix == 0xFD) {
+    cpu->index_mode = 2;
+  } else {
+    cpu->index_mode = 0;
+  }
+  cpu->prefix = 0;
 
   if (x == 0) {
     switch (z) {
@@ -1082,11 +1170,11 @@ static void z80_decode(z80_t *cpu) {
             z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
             z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W);
             if (q == 0) {
-              z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ_INCREMENT, REGISTER_L);
-              z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ, REGISTER_H);
+              z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ_INCREMENT, DATA_INDEX_LOW);
+              z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ, DATA_INDEX_HIGH);
             } else {
-              z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ_INCREMENT, REGISTER_L);
-              z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ, REGISTER_H);
+              z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ_INCREMENT, DATA_INDEX_LOW);
+              z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_WZ, DATA_INDEX_HIGH);
             }
             break;
           default: /* LD (nn),A / LD A,(nn) */
@@ -1104,19 +1192,27 @@ static void z80_decode(z80_t *cpu) {
       case 5:         /* DEC r[y] */
         if (y == 6) { /* INC/DEC (HL): read, modify into the latch, write back */
           cpu->alu_operation = z == 4 ? OPERATION_INCREMENT : OPERATION_DECREMENT;
-          z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_INC_DEC, 1);
-          z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
+          const uint8_t address = z80_indexed_address(cpu);
+          z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, address, DATA_INC_DEC, 1);
+          z80_append_cycle(cpu, CYCLE_MEM_WRITE, address, DATA_LATCH);
         } else {
-          uint8_t *reg = z80_register8(cpu, y);
+          uint8_t *reg = z80_register8_indexed(cpu, y);
           *reg = z == 4 ? z80_increment(cpu, *reg) : z80_decrement(cpu, *reg);
         }
         break;
       case 6:
-        if (y == 6) { /* LD (HL),n */
-          z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_LATCH);
-          z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
+        if (y == 6) { /* LD (HL),n; the indexed form reads d first, n stretched */
+          if (cpu->index_mode) {
+            z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_DISPLACEMENT);
+            z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_LATCH, 2);
+            z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_WZ, DATA_LATCH);
+          } else {
+            z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_LATCH);
+            z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
+          }
         } else { /* LD r,n */
-          z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, y);
+          const uint8_t target = y == 4 ? DATA_INDEX_HIGH : y == 5 ? DATA_INDEX_LOW : y;
+          z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, target);
         }
         break;
       case 7:
@@ -1150,19 +1246,19 @@ static void z80_decode(z80_t *cpu) {
   } else if (x == 1) {         /* the LD r,r' page */
     if (cpu->opcode == 0x76) { /* HALT */
       cpu->halted = true;
-    } else if (z == 6) { /* LD r,(HL) */
-      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_HL, y);
+    } else if (z == 6) { /* LD r,(HL): the register side stays unmapped */
+      z80_append_cycle(cpu, CYCLE_MEM_READ, z80_indexed_address(cpu), y);
     } else if (y == 6) { /* LD (HL),r */
-      z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, z);
+      z80_append_cycle(cpu, CYCLE_MEM_WRITE, z80_indexed_address(cpu), z);
     } else {
-      *z80_register8(cpu, y) = *z80_register8(cpu, z);
+      *z80_register8_indexed(cpu, y) = *z80_register8_indexed(cpu, z);
     }
   } else if (x == 2) { /* alu[y] with operand r[z] */
     if (z == 6) {
       cpu->alu_operation = y;
-      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_ALU);
+      z80_append_cycle(cpu, CYCLE_MEM_READ, z80_indexed_address(cpu), DATA_ALU);
     } else {
-      z80_alu(cpu, y, *z80_register8(cpu, z));
+      z80_alu(cpu, y, *z80_register8_indexed(cpu, z));
     }
   } else if (x == 3 && z == 6) { /* alu[y] with immediate operand */
     cpu->alu_operation = y;
@@ -1205,7 +1301,7 @@ static void z80_decode(z80_t *cpu) {
       z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP_INCREMENT, DATA_W);
       cpu->finish = FINISH_PC_FROM_WZ;
     } else if (p == 2) { /* JP (HL): no memory access despite the name; WZ untouched */
-      cpu->pc = (uint16_t)((cpu->h << 8) | cpu->l);
+      cpu->pc = z80_register_pair(cpu, 2);
     } else if (p == 1) { /* EXX */
       uint16_t exchanged = (uint16_t)((cpu->b << 8) | cpu->c);
       cpu->b = (uint8_t)(cpu->bc_ >> 8);
@@ -1220,7 +1316,7 @@ static void z80_decode(z80_t *cpu) {
       cpu->l = (uint8_t)(cpu->hl_ & 0xFF);
       cpu->hl_ = exchanged;
     } else if (p == 3) { /* LD SP,HL */
-      cpu->sp = (uint16_t)((cpu->h << 8) | cpu->l);
+      cpu->sp = z80_register_pair(cpu, 2);
       z80_append_internal(cpu, 2);
     }
   } else if (x == 3 && z == 3 && y == 0) { /* JP nn */
@@ -1230,8 +1326,8 @@ static void z80_decode(z80_t *cpu) {
   } else if (x == 3 && z == 3 && y == 4) { /* EX (SP),HL */
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_SP, DATA_Z);
     z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_SP_PLUS_1, DATA_W, 1);
-    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_PLUS_1, REGISTER_H);
-    z80_append_cycle_stretched(cpu, CYCLE_MEM_WRITE, ADDRESS_SP, REGISTER_L, 2);
+    z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_PLUS_1, DATA_INDEX_HIGH);
+    z80_append_cycle_stretched(cpu, CYCLE_MEM_WRITE, ADDRESS_SP, DATA_INDEX_LOW, 2);
     cpu->finish = FINISH_HL_FROM_WZ;
   } else if (x == 3 && z == 3 && y == 5) { /* EX DE,HL */
     uint8_t exchanged = cpu->d;
@@ -1240,8 +1336,15 @@ static void z80_decode(z80_t *cpu) {
     exchanged = cpu->e;
     cpu->e = cpu->l;
     cpu->l = exchanged;
-  } else if (x == 3 && z == 3 && y == 1) { /* the CB prefix: one more M1 fetches the opcode */
-    cpu->prefix = 0xCB;
+  } else if (x == 3 && z == 3 && y == 1) { /* the CB prefix */
+    if (cpu->index_mode) {
+      /* DD CB d xx: the displacement comes first and the sub-opcode arrives
+         as plain data — no M1, no refresh, R only counts the two prefixes */
+      z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_DISPLACEMENT);
+      z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_DDCB, 2);
+    } else { /* one more M1 fetches the opcode */
+      cpu->prefix = 0xCB;
+    }
   } else if (x == 3 && z == 3 && y == 2) { /* OUT (n),A: port A:n, W preloaded with A */
     cpu->wz = (uint16_t)((cpu->a << 8) | (cpu->wz & 0xFF));
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
@@ -1261,6 +1364,10 @@ static void z80_decode(z80_t *cpu) {
     z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_SP_DECREMENT, register_pair2_low[p]);
   } else if (x == 3 && z == 5 && p == 2) { /* the ED prefix */
     cpu->prefix = 0xED;
+  } else if (x == 3 && z == 5 && q == 1 && p == 1) { /* the DD prefix */
+    cpu->prefix = 0xDD;
+  } else if (x == 3 && z == 5 && q == 1 && p == 3) { /* the FD prefix */
+    cpu->prefix = 0xFD;
   } else if (x == 3 && z == 5 && p == 0) { /* CALL nn */
     z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_Z);
     z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_W, 1);

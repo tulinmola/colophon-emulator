@@ -85,7 +85,10 @@ typedef struct {
   uint8_t a, f, b, c, d, e, h, l;
   /* shadow set AF' BC' DE' HL': the underscore renders the prime mark */
   uint16_t af_, bc_, de_, hl_;
-  uint16_t ix, iy, sp, pc;
+  /* IX and IY as halves: the undocumented IXH/IXL/IYH/IYL act as registers
+     in their own right under the DD/FD prefixes */
+  uint8_t ixh, ixl, iyh, iyl;
+  uint16_t sp, pc;
   uint16_t wz; /* internal address latch ("MEMPTR") */
   uint8_t i, r;
   uint8_t im; /* interrupt mode 0..2 */
@@ -98,7 +101,8 @@ typedef struct {
   /* cycle-stepping state: which T-state of the current instruction is next */
   uint8_t step;
   uint8_t opcode;
-  uint8_t prefix; /* 0xCB while the prefixed opcode's own M1 fetch runs, else 0 */
+  uint8_t prefix;     /* 0xCB/0xED/0xDD/0xFD while waiting for the prefixed opcode, else 0 */
+  uint8_t index_mode; /* 0 none, 1 IX, 2 IY: the HL substitution for the current instruction */
   /* the instruction's machine cycles after M1, filled at decode */
   z80_micro_op program[4];
   uint8_t program_length;

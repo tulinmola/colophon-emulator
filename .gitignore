@@ -5,5 +5,8 @@ notes/
 # Build output.
 build/
 
+# Finder droppings.
+.DS_Store
+
 # Downloaded test data (see tools/fetch-tests.sh).
 test/data/
