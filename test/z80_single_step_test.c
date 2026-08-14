@@ -141,27 +141,34 @@ static int run_test(const json_value *test, int verbose) {
       data = z80_data(pins);
     }
     char flags[5] = "----";
-    if (pins & Z80_RD)
+    if (pins & Z80_RD) {
       flags[0] = 'r';
-    if (pins & Z80_WR)
+    }
+    if (pins & Z80_WR) {
       flags[1] = 'w';
-    if (pins & Z80_MREQ)
+    }
+    if (pins & Z80_MREQ) {
       flags[2] = 'm';
-    if (pins & Z80_IORQ)
+    }
+    if (pins & Z80_IORQ) {
       flags[3] = 'i';
+    }
 
     const json_value *want = &cycles->items[k];
     const json_value *want_address = &want->items[0];
     const json_value *want_data = &want->items[1];
     const char *want_flags = want->items[2].string;
     int bad = 0;
-    if (want_address->type != JSON_NULL && (uint16_t)want_address->number != address)
+    if (want_address->type != JSON_NULL && (uint16_t)want_address->number != address) {
       bad = 1;
+    }
     int want_data_value = want_data->type == JSON_NULL ? -1 : (int)want_data->number;
-    if (want_data_value != data)
+    if (want_data_value != data) {
       bad = 1;
-    if (strcmp(want_flags, flags) != 0)
+    }
+    if (strcmp(want_flags, flags) != 0) {
       bad = 1;
+    }
     if (bad) {
       if (verbose) {
         printf("    cycle %zu: got [%04X, %d, %s], want [%04X, %d, %s]\n", k + 1, address, data,

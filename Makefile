@@ -10,7 +10,7 @@ SRC_ALL = $(SRC_C) src/z80.h $(Z80_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/
 
 SINGLE_STEP_DATA = test/data/SingleStepTests/z80/v1
 EXERCISER_DATA = test/data/ZEXALL
-# Groups of the exerciser to run by default; empty runs all 67, which takes a while.
+# Groups of the exerciser to run by default; 0 runs all 67, which takes a while.
 EXERCISER_GROUPS ?= 12
 
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
