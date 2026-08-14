@@ -826,28 +826,6 @@ static void z80_instruction_done(z80_t *cpu) {
 /* Starts the micro-program's next machine cycle, or the next instruction when
    the program is exhausted. Address side effects (PC and WZ movement) happen
    here, at the cycle boundary. */
-/* the cc table per the decoding doc: NZ Z NC C PO PE P M — the flag chosen
-   by the index's high bits, the sense by its low bit */
-static bool z80_condition(const z80_t *cpu, uint8_t index) {
-  uint8_t flag;
-  switch (index >> 1) {
-    case 0:
-      flag = Z80_FLAG_Z;
-      break;
-    case 1:
-      flag = Z80_FLAG_C;
-      break;
-    case 2:
-      flag = Z80_FLAG_PV;
-      break;
-    default:
-      flag = Z80_FLAG_S;
-      break;
-  }
-  const bool set = (cpu->f & flag) != 0;
-  return (index & 1) ? set : !set;
-}
-
 static void z80_start_next_cycle(z80_t *cpu) {
   if (cpu->program_index == cpu->program_length) {
     switch (cpu->finish) {
@@ -966,6 +944,28 @@ static const uint8_t register_pair_high[4] = {REGISTER_B, REGISTER_D, DATA_INDEX
    the active index prefix */
 static const uint8_t register_pair2_low[4] = {REGISTER_C, REGISTER_E, DATA_INDEX_LOW, DATA_F};
 static const uint8_t register_pair2_high[4] = {REGISTER_B, REGISTER_D, DATA_INDEX_HIGH, REGISTER_A};
+
+/* the cc table per the decoding doc: NZ Z NC C PO PE P M — the flag chosen
+   by the index's high bits, the sense by its low bit */
+static bool z80_condition(const z80_t *cpu, uint8_t index) {
+  uint8_t flag;
+  switch (index >> 1) {
+    case 0:
+      flag = Z80_FLAG_Z;
+      break;
+    case 1:
+      flag = Z80_FLAG_C;
+      break;
+    case 2:
+      flag = Z80_FLAG_PV;
+      break;
+    default:
+      flag = Z80_FLAG_S;
+      break;
+  }
+  const bool set = (cpu->f & flag) != 0;
+  return (index & 1) ? set : !set;
+}
 
 /* (HL) becomes (IX+d)/(IY+d) under a prefix: the displacement is read and
    folded into WZ, five T-states of address arithmetic follow, and the memory
