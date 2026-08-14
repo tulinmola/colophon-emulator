@@ -130,7 +130,7 @@ static int run_test(const json_value *test, int verbose) {
   uint64_t pins = 0;
   int data_was_fed = 0;
   uint8_t fed_data = 0;
-  for (size_t k = 0; k < cycles->length; k++) {
+  for (size_t cycle = 0; cycle < cycles->length; cycle++) {
     pins = z80_tick(&cpu, pins);
 
     uint16_t address = z80_address(pins);
@@ -154,7 +154,7 @@ static int run_test(const json_value *test, int verbose) {
       flags[3] = 'i';
     }
 
-    const json_value *want = &cycles->items[k];
+    const json_value *want = &cycles->items[cycle];
     const json_value *want_address = &want->items[0];
     const json_value *want_data = &want->items[1];
     const char *want_flags = want->items[2].string;
@@ -171,7 +171,7 @@ static int run_test(const json_value *test, int verbose) {
     }
     if (bad) {
       if (verbose) {
-        printf("    cycle %zu: got [%04X, %d, %s], want [%04X, %d, %s]\n", k + 1, address, data,
+        printf("    cycle %zu: got [%04X, %d, %s], want [%04X, %d, %s]\n", cycle + 1, address, data,
                flags, want_address->type == JSON_NULL ? 0 : (int)want_address->number,
                want_data_value, want_flags);
       }
@@ -229,16 +229,16 @@ int main(int argc, char **argv) {
   }
   int failed_files = 0;
   long total_tests = 0, total_passed = 0;
-  for (int i = 1; i < argc; i++) {
+  for (int file_index = 1; file_index < argc; file_index++) {
     char error[256];
-    json_value *root = json_parse_file(argv[i], error, sizeof error);
+    json_value *root = json_parse_file(argv[file_index], error, sizeof error);
     if (!root) {
-      fprintf(stderr, "%s: %s\n", argv[i], error);
+      fprintf(stderr, "%s: %s\n", argv[file_index], error);
       return 2;
     }
     int pass = 0, fail = 0;
-    for (size_t k = 0; k < root->length; k++) {
-      if (run_test(&root->items[k], fail < 3)) {
+    for (size_t test_index = 0; test_index < root->length; test_index++) {
+      if (run_test(&root->items[test_index], fail < 3)) {
         fail++;
       } else {
         pass++;
@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
     putchar(fail ? 'F' : '.');
     fflush(stdout);
     if (fail) {
-      printf("\n%s: %d/%d pass\n", argv[i], pass, pass + fail);
+      printf("\n%s: %d/%d pass\n", argv[file_index], pass, pass + fail);
       failed_files++;
     }
     total_tests += pass + fail;

@@ -29,30 +29,32 @@ typedef struct {
   int ok;
 } parser_t;
 
-static void fail(parser_t *p, const char *message) {
-  if (p->ok) {
-    p->ok = 0;
-    if (p->error && p->error_size) {
-      snprintf(p->error, p->error_size, "%s at offset %ld", message, (long)(p->cursor - p->begin));
+static void fail(parser_t *parser, const char *message) {
+  if (parser->ok) {
+    parser->ok = 0;
+    if (parser->error && parser->error_size) {
+      snprintf(parser->error, parser->error_size, "%s at offset %ld", message,
+               (long)(parser->cursor - parser->begin));
     }
   }
 }
 
-static void skip_whitespace(parser_t *p) {
-  while (p->cursor < p->end) {
-    char c = *p->cursor;
+static void skip_whitespace(parser_t *parser) {
+  while (parser->cursor < parser->end) {
+    char c = *parser->cursor;
     if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-      p->cursor++;
+      parser->cursor++;
     } else {
       break;
     }
   }
 }
 
-static int match(parser_t *p, const char *literal) {
-  size_t n = strlen(literal);
-  if ((size_t)(p->end - p->cursor) >= n && memcmp(p->cursor, literal, n) == 0) {
-    p->cursor += n;
+static int match(parser_t *parser, const char *literal) {
+  size_t length = strlen(literal);
+  if ((size_t)(parser->end - parser->cursor) >= length &&
+      memcmp(parser->cursor, literal, length) == 0) {
+    parser->cursor += length;
     return 1;
   }
   return 0;
@@ -71,43 +73,43 @@ static int hex_digit(char c) {
   return -1;
 }
 
-/* Assumes *p->cursor == '"'. Returns a malloc'd decoded string, or NULL on error. */
-static char *parse_string_raw(parser_t *p) {
-  p->cursor++;
+/* Assumes *parser->cursor == '"'. Returns a malloc'd decoded string, or NULL on error. */
+static char *parse_string_raw(parser_t *parser) {
+  parser->cursor++;
   /* find the closing quote first and size the buffer by the raw span; a
      rest-of-the-file-sized allocation per string dominates the whole run */
-  const char *scan = p->cursor;
-  while (scan < p->end && *scan != '"') {
-    if (*scan == '\\' && scan + 1 < p->end) {
+  const char *scan = parser->cursor;
+  while (scan < parser->end && *scan != '"') {
+    if (*scan == '\\' && scan + 1 < parser->end) {
       scan++;
     }
     scan++;
   }
-  char *buffer = alloc_or_exit((size_t)(scan - p->cursor) + 1);
+  char *buffer = alloc_or_exit((size_t)(scan - parser->cursor) + 1);
   size_t length = 0;
   /* in bounds: the loop below emits at most one byte per input byte consumed
      (escapes consume two or six per byte emitted), so length never exceeds the
      raw span the buffer was sized by; the analyzer cannot follow the invariant
      across the two loops */
   /* NOLINTBEGIN(clang-analyzer-security.ArrayBound) */
-  while (p->cursor < p->end) {
-    char c = *p->cursor;
+  while (parser->cursor < parser->end) {
+    char c = *parser->cursor;
     if (c == '"') {
-      p->cursor++;
+      parser->cursor++;
       buffer[length] = '\0';
       return buffer;
     }
     if ((unsigned char)c < 0x20) {
-      fail(p, "control character in string");
+      fail(parser, "control character in string");
       break;
     }
     if (c == '\\') {
-      p->cursor++;
-      if (p->cursor >= p->end) {
-        fail(p, "unterminated escape");
+      parser->cursor++;
+      if (parser->cursor >= parser->end) {
+        fail(parser, "unterminated escape");
         break;
       }
-      char e = *p->cursor++;
+      char e = *parser->cursor++;
       switch (e) {
         case '"':
           buffer[length++] = '"';
@@ -136,179 +138,179 @@ static char *parse_string_raw(parser_t *p) {
         case 'u': {
           int code = 0;
           for (int k = 0; k < 4; k++) {
-            int d = p->cursor < p->end ? hex_digit(*p->cursor) : -1;
+            int d = parser->cursor < parser->end ? hex_digit(*parser->cursor) : -1;
             if (d < 0) {
-              fail(p, "bad \\u escape");
+              fail(parser, "bad \\u escape");
               free(buffer);
               return NULL;
             }
             code = code * 16 + d;
-            p->cursor++;
+            parser->cursor++;
           }
           buffer[length++] = (char)(code < 0x80 ? code : '?');
           break;
         }
         default:
-          fail(p, "bad escape");
+          fail(parser, "bad escape");
           free(buffer);
           return NULL;
       }
     } else {
       buffer[length++] = c;
-      p->cursor++;
+      parser->cursor++;
     }
   }
   /* NOLINTEND(clang-analyzer-security.ArrayBound) */
-  if (p->ok) {
-    fail(p, "unterminated string");
+  if (parser->ok) {
+    fail(parser, "unterminated string");
   }
   free(buffer);
   return NULL;
 }
 
-static int parse_value(parser_t *p, json_value *out);
+static int parse_value(parser_t *parser, json_value *out);
 
-static int parse_array(parser_t *p, json_value *out) {
-  p->cursor++; /* '[' */
+static int parse_array(parser_t *parser, json_value *out) {
+  parser->cursor++; /* '[' */
   out->type = JSON_ARRAY;
-  skip_whitespace(p);
-  if (p->cursor < p->end && *p->cursor == ']') {
-    p->cursor++;
+  skip_whitespace(parser);
+  if (parser->cursor < parser->end && *parser->cursor == ']') {
+    parser->cursor++;
     return 1;
   }
-  size_t cap = 0;
+  size_t capacity = 0;
   for (;;) {
-    if (out->length == cap) {
-      cap = cap ? cap * 2 : 8;
-      out->items = realloc_or_exit(out->items, cap * sizeof *out->items);
+    if (out->length == capacity) {
+      capacity = capacity ? capacity * 2 : 8;
+      out->items = realloc_or_exit(out->items, capacity * sizeof *out->items);
     }
-    if (!parse_value(p, &out->items[out->length])) {
+    if (!parse_value(parser, &out->items[out->length])) {
       return 0;
     }
     out->length++;
-    skip_whitespace(p);
-    if (p->cursor >= p->end) {
-      fail(p, "unterminated array");
+    skip_whitespace(parser);
+    if (parser->cursor >= parser->end) {
+      fail(parser, "unterminated array");
       return 0;
     }
-    if (*p->cursor == ',') {
-      p->cursor++;
-    } else if (*p->cursor == ']') {
-      p->cursor++;
+    if (*parser->cursor == ',') {
+      parser->cursor++;
+    } else if (*parser->cursor == ']') {
+      parser->cursor++;
       return 1;
     } else {
-      fail(p, "expected ',' or ']'");
+      fail(parser, "expected ',' or ']'");
       return 0;
     }
   }
 }
 
-static int parse_object(parser_t *p, json_value *out) {
-  p->cursor++; /* '{' */
+static int parse_object(parser_t *parser, json_value *out) {
+  parser->cursor++; /* '{' */
   out->type = JSON_OBJECT;
-  skip_whitespace(p);
-  if (p->cursor < p->end && *p->cursor == '}') {
-    p->cursor++;
+  skip_whitespace(parser);
+  if (parser->cursor < parser->end && *parser->cursor == '}') {
+    parser->cursor++;
     return 1;
   }
-  size_t cap = 0;
+  size_t capacity = 0;
   for (;;) {
-    skip_whitespace(p);
-    if (p->cursor >= p->end || *p->cursor != '"') {
-      fail(p, "expected object key");
+    skip_whitespace(parser);
+    if (parser->cursor >= parser->end || *parser->cursor != '"') {
+      fail(parser, "expected object key");
       return 0;
     }
-    char *key = parse_string_raw(p);
+    char *key = parse_string_raw(parser);
     if (!key) {
       return 0;
     }
-    skip_whitespace(p);
-    if (p->cursor >= p->end || *p->cursor != ':') {
+    skip_whitespace(parser);
+    if (parser->cursor >= parser->end || *parser->cursor != ':') {
       free(key);
-      fail(p, "expected ':'");
+      fail(parser, "expected ':'");
       return 0;
     }
-    p->cursor++;
-    if (out->length == cap) {
-      cap = cap ? cap * 2 : 8;
-      out->items = realloc_or_exit(out->items, cap * sizeof *out->items);
-      out->keys = (char **)realloc_or_exit((void *)out->keys, cap * sizeof *out->keys);
+    parser->cursor++;
+    if (out->length == capacity) {
+      capacity = capacity ? capacity * 2 : 8;
+      out->items = realloc_or_exit(out->items, capacity * sizeof *out->items);
+      out->keys = (char **)realloc_or_exit((void *)out->keys, capacity * sizeof *out->keys);
     }
     out->keys[out->length] = key;
-    if (!parse_value(p, &out->items[out->length])) {
+    if (!parse_value(parser, &out->items[out->length])) {
       /* the key is owned by out once stored; count it so free works */
       out->length++;
       return 0;
     }
     out->length++;
-    skip_whitespace(p);
-    if (p->cursor >= p->end) {
-      fail(p, "unterminated object");
+    skip_whitespace(parser);
+    if (parser->cursor >= parser->end) {
+      fail(parser, "unterminated object");
       return 0;
     }
-    if (*p->cursor == ',') {
-      p->cursor++;
-    } else if (*p->cursor == '}') {
-      p->cursor++;
+    if (*parser->cursor == ',') {
+      parser->cursor++;
+    } else if (*parser->cursor == '}') {
+      parser->cursor++;
       return 1;
     } else {
-      fail(p, "expected ',' or '}'");
+      fail(parser, "expected ',' or '}'");
       return 0;
     }
   }
 }
 
-static int parse_value(parser_t *p, json_value *out) {
-  skip_whitespace(p);
+static int parse_value(parser_t *parser, json_value *out) {
+  skip_whitespace(parser);
   memset(out, 0, sizeof *out);
-  if (p->cursor >= p->end) {
-    fail(p, "unexpected end of input");
+  if (parser->cursor >= parser->end) {
+    fail(parser, "unexpected end of input");
     return 0;
   }
-  char c = *p->cursor;
+  char c = *parser->cursor;
   if (c == 'n') {
-    if (!match(p, "null")) {
-      fail(p, "bad literal");
+    if (!match(parser, "null")) {
+      fail(parser, "bad literal");
       return 0;
     }
     out->type = JSON_NULL;
     return 1;
   }
   if (c == 't' || c == 'f') {
-    if (match(p, "true")) {
+    if (match(parser, "true")) {
       out->type = JSON_BOOL;
       out->number = 1;
       return 1;
     }
-    if (match(p, "false")) {
+    if (match(parser, "false")) {
       out->type = JSON_BOOL;
       out->number = 0;
       return 1;
     }
-    fail(p, "bad literal");
+    fail(parser, "bad literal");
     return 0;
   }
   if (c == '"') {
     out->type = JSON_STRING;
-    out->string = parse_string_raw(p);
+    out->string = parse_string_raw(parser);
     return out->string != NULL;
   }
   if (c == '[') {
-    return parse_array(p, out);
+    return parse_array(parser, out);
   }
   if (c == '{') {
-    return parse_object(p, out);
+    return parse_object(parser, out);
   }
   /* the input buffer is NUL-terminated by json_parse_file, so strtod cannot overrun */
   char *number_end;
-  double d = strtod(p->cursor, &number_end);
-  if (number_end == p->cursor) {
-    fail(p, "unexpected character");
+  double d = strtod(parser->cursor, &number_end);
+  if (number_end == parser->cursor) {
+    fail(parser, "unexpected character");
     return 0;
   }
   out->type = JSON_NUMBER;
   out->number = d;
-  p->cursor = number_end;
+  parser->cursor = number_end;
   return 1;
 }
 
@@ -356,29 +358,29 @@ const json_value *json_get(const json_value *object, const char *key) {
 }
 
 json_value *json_parse_file(const char *path, char *error, size_t error_size) {
-  FILE *f = fopen(path, "rb");
-  if (!f) {
+  FILE *file = fopen(path, "rb");
+  if (!file) {
     if (error && error_size) {
       snprintf(error, error_size, "cannot open %s", path);
     }
     return NULL;
   }
   long size = -1;
-  if (fseek(f, 0, SEEK_END) == 0) {
-    size = ftell(f);
+  if (fseek(file, 0, SEEK_END) == 0) {
+    size = ftell(file);
   }
   /* the largest real test file is ~2 MB; anything huge is a wrong path, not data */
-  if (size < 0 || size > 256L * 1024 * 1024 || fseek(f, 0, SEEK_SET) != 0) {
-    fclose(f);
+  if (size < 0 || size > 256L * 1024 * 1024 || fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
     if (error && error_size) {
       snprintf(error, error_size, "cannot size %s", path);
     }
     return NULL;
   }
   char *buffer = alloc_or_exit((size_t)size + 1);
-  size_t got = fread(buffer, 1, (size_t)size, f);
-  fclose(f);
-  if (got != (size_t)size) {
+  size_t bytes_read = fread(buffer, 1, (size_t)size, file);
+  fclose(file);
+  if (bytes_read != (size_t)size) {
     free(buffer);
     if (error && error_size) {
       snprintf(error, error_size, "cannot read %s", path);
@@ -388,13 +390,13 @@ json_value *json_parse_file(const char *path, char *error, size_t error_size) {
   /* in bounds: buffer holds size+1 bytes; the analyzer distrusts any ftell-derived
      index regardless of guards */
   buffer[size] = '\0'; /* NOLINT(clang-analyzer-security.ArrayBound) */
-  parser_t p = {buffer, buffer, buffer + got, error, error_size, 1};
+  parser_t parser = {buffer, buffer, buffer + bytes_read, error, error_size, 1};
   json_value *root = alloc_or_exit(sizeof *root);
-  int ok = parse_value(&p, root);
+  int ok = parse_value(&parser, root);
   if (ok) {
-    skip_whitespace(&p);
-    if (p.cursor != p.end) {
-      fail(&p, "trailing data");
+    skip_whitespace(&parser);
+    if (parser.cursor != parser.end) {
+      fail(&parser, "trailing data");
       ok = 0;
     }
   }
