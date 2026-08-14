@@ -131,8 +131,10 @@ enum {
   FINISH_HL_FROM_WZ,       /* EX (SP),HL: the value read into WZ becomes HL */
   FINISH_PC_FROM_WZ,       /* jumps, calls, returns: the target travels through WZ */
   FINISH_JUMP_RELATIVE,    /* JR and DJNZ: PC moves by the signed displacement in the latch */
-  FINISH_BLOCK_LD,         /* LDI/LDD family: DE moves; repeats rewind */
-  FINISH_BLOCK_IN,         /* INI/IND family: HL moves; repeats rewind */
+  FINISH_BLOCK_LD,         /* LDI/LDD family: DE moves */
+  FINISH_BLOCK_LD_REPEAT,  /* and LDIR/LDDR rewinds for another round */
+  FINISH_BLOCK_IN,         /* INI/IND family: HL moves */
+  FINISH_BLOCK_IN_REPEAT,  /* and INIR/INDR rewinds for another round */
   FINISH_BLOCK_CP_REPEAT,  /* CPIR/CPDR taking another round */
   FINISH_BLOCK_OUT_REPEAT, /* OTIR/OTDR taking another round */
   FINISH_DDCB_COPY,        /* DD CB with z!=6 also lands the result in r[z] */
@@ -576,24 +578,26 @@ static void z80_block_io_flags(z80_t *cpu, uint8_t value, uint8_t adjuster) {
 static void z80_block_io_repeat_flags(z80_t *cpu) {
   const uint8_t b = cpu->b;
   uint8_t flags = cpu->f;
-  unsigned even = (flags & Z80_FLAG_PV) ? 1 : 0;
+  const bool parity_before = (flags & Z80_FLAG_PV) != 0;
   flags &= (uint8_t)~(Z80_FLAG_H | Z80_FLAG_PV);
+
+  /* The three bits counted shift by one when the byte carried, in the
+     direction N gives, and the half carry follows the nibble that rolled. */
+  uint8_t counted = (uint8_t)(b & 7);
   if (flags & Z80_FLAG_C) {
     if (flags & Z80_FLAG_N) {
+      counted = (uint8_t)((b - 1) & 7);
       if ((b & 0x0F) == 0x00) {
         flags |= Z80_FLAG_H;
       }
-      even ^= (z80_flag_parity((uint8_t)((b - 1) & 7)) ? 1u : 0u) ^ 1u;
     } else {
+      counted = (uint8_t)((b + 1) & 7);
       if ((b & 0x0F) == 0x0F) {
         flags |= Z80_FLAG_H;
       }
-      even ^= (z80_flag_parity((uint8_t)((b + 1) & 7)) ? 1u : 0u) ^ 1u;
     }
-  } else {
-    even ^= (z80_flag_parity((uint8_t)(b & 7)) ? 1u : 0u) ^ 1u;
   }
-  if (even) {
+  if (parity_before == (z80_flag_parity(counted) != 0)) {
     flags |= Z80_FLAG_PV;
   }
   z80_set_flags(cpu, flags);
@@ -848,14 +852,16 @@ static void z80_start_next_cycle(z80_t *cpu) {
         cpu->wz = cpu->pc;
         break;
       case FINISH_BLOCK_LD:
+      case FINISH_BLOCK_LD_REPEAT:
         z80_move_pair(&cpu->d, &cpu->e, (cpu->latched_operation & 0x08) != 0);
-        if ((cpu->latched_operation & 0x10) && (cpu->b | cpu->c)) {
+        if (cpu->finish == FINISH_BLOCK_LD_REPEAT) {
           z80_block_repeat(cpu);
         }
         break;
       case FINISH_BLOCK_IN:
+      case FINISH_BLOCK_IN_REPEAT:
         z80_move_pair(&cpu->h, &cpu->l, (cpu->latched_operation & 0x08) != 0);
-        if ((cpu->latched_operation & 0x10) && cpu->b) {
+        if (cpu->finish == FINISH_BLOCK_IN_REPEAT) {
           z80_block_repeat(cpu);
           z80_block_io_repeat_flags(cpu);
         }
@@ -1113,29 +1119,33 @@ static void z80_decode_ed(z80_t *cpu) {
     const bool repeat = y >= 6;
     cpu->latched_operation = cpu->opcode;
     switch (z) {
-      case 0: /* LDI/LDD/LDIR/LDDR */
+      case 0: { /* LDI/LDD/LDIR/LDDR */
+        const bool repeating = repeat && (uint16_t)(((cpu->b << 8) | cpu->c) - 1) != 0;
         z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_BLOCK_LD);
         z80_append_cycle_stretched(cpu, CYCLE_MEM_WRITE, ADDRESS_DE, DATA_LATCH, 2);
-        if (repeat && (uint16_t)(((cpu->b << 8) | cpu->c) - 1) != 0) {
+        if (repeating) {
           z80_append_internal(cpu, 5);
         }
-        cpu->finish = FINISH_BLOCK_LD;
+        cpu->finish = repeating ? FINISH_BLOCK_LD_REPEAT : FINISH_BLOCK_LD;
         break;
+      }
       case 1: /* CPI/CPD/CPIR/CPDR: the repeat decision needs the byte, so the
                  operand handler appends the extra cycle itself */
         z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_BLOCK_CP, 5);
         break;
-      case 2: /* INI/IND/INIR/INDR: port BC with the initial B */
+      case 2: { /* INI/IND/INIR/INDR: port BC with the initial B */
+        const bool repeating = repeat && (uint8_t)(cpu->b - 1) != 0;
         cpu->wz = (uint16_t)((cpu->b << 8) | cpu->c);
         z80_append_internal(cpu, 1);
         z80_append_cycle(cpu, CYCLE_IO_READ,
                          decrement ? ADDRESS_WZ_DECREMENT : ADDRESS_WZ_INCREMENT, DATA_BLOCK_IN);
         z80_append_cycle(cpu, CYCLE_MEM_WRITE, ADDRESS_HL, DATA_LATCH);
-        if (repeat && (uint8_t)(cpu->b - 1) != 0) {
+        if (repeating) {
           z80_append_internal(cpu, 5);
         }
-        cpu->finish = FINISH_BLOCK_IN;
+        cpu->finish = repeating ? FINISH_BLOCK_IN_REPEAT : FINISH_BLOCK_IN;
         break;
+      }
       default: /* OUTI/OUTD/OTIR/OTDR: port BC with B already decremented */
         z80_append_internal(cpu, 1);
         z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_HL, DATA_BLOCK_OUT);
