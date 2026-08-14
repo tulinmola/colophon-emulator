@@ -1303,7 +1303,7 @@ static void z80_decode(z80_t *cpu) {
             break;
         }
         break;
-      default: /* 0x00 NOP */
+      default: /* unreachable: z is the opcode's low three bits */
         break;
     }
   } else if (x == 1) {         /* the LD r,r' page */
