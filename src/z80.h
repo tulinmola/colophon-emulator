@@ -114,17 +114,17 @@ typedef struct {
   uint8_t step;
   uint8_t opcode;
   uint8_t prefix;     /* 0xCB/0xED/0xDD/0xFD while waiting for the prefixed opcode, else 0 */
-  uint8_t index_mode; /* 0 none, 1 IX, 2 IY: the HL substitution for the current instruction */
+  uint8_t index_mode; /* which register replaces HL under a prefix, see z80.c */
   /* the instruction's machine cycles after M1, filled at decode */
   z80_micro_op program[Z80_MAX_MACHINE_CYCLES];
   uint8_t program_length;
   uint8_t program_index;
   /* latched for the machine cycle in progress */
   uint16_t operand_address;
-  uint8_t operand_data;      /* operand code, see z80.c */
+  uint8_t operand_code;      /* operand code, see z80.c */
   uint8_t stretch_remaining; /* internal T-states left in the current cycle */
   uint8_t data_latch;        /* internal temporary for operands in flight that must not touch WZ */
-  uint8_t alu_operation;     /* operation latched at decode for cycles that compute, see z80.c */
+  uint8_t latched_operation; /* operation latched at decode for cycles that compute, see z80.c */
   uint8_t finish;            /* work applied when the program ends, see z80.c */
 } z80_t;
 
