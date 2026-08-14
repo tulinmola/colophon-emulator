@@ -11,30 +11,46 @@
 set -e
 
 commit="ebe1875d48f374bcfd4b505d8eb8ee751568b5f7"
+expected_files=1604
 archive_url="https://codeload.github.com/SingleStepTests/z80/zip/$commit"
 test_directory="$(cd "$(dirname "$0")/../test" && pwd)"
 destination="$test_directory/data/SingleStepTests/z80/v1"
+staged="$destination.incomplete"
+
+count_files() {
+    ls "$1" | wc -l | tr -d ' '
+}
 
 if [ -d "$destination" ]; then
-    exit 0
+    present="$(count_files "$destination")"
+    if [ "$present" -eq "$expected_files" ]; then
+        exit 0
+    fi
+    echo "corpus holds $present of $expected_files files; fetching it again" >&2
+    rm -rf "$destination"
 fi
 
 working_directory="$(mktemp -d)"
-trap 'rm -rf "$working_directory"' EXIT
+trap 'rm -rf "$working_directory" "$staged"' EXIT
 
 echo "fetching SingleStepTests/z80 @ $commit"
 curl -fsSL "$archive_url" -o "$working_directory/z80.zip"
 unzip -q "$working_directory/z80.zip" -d "$working_directory"
 
-mkdir -p "$destination"
+# Staged beside the destination so the last step is a rename, which cannot
+# half-happen.
+rm -rf "$staged"
+mkdir -p "$staged"
 for file in "$working_directory/z80-$commit/v1/"*.json; do
     renamed="$(basename "$file" | tr -d ' _')"
-    mv "$file" "$destination/$renamed"
+    mv "$file" "$staged/$renamed"
 done
 
-count="$(ls "$destination" | wc -l | tr -d ' ')"
-if [ "$count" -ne 1604 ]; then
-    echo "expected 1604 corpus files, found $count" >&2
+count="$(count_files "$staged")"
+if [ "$count" -ne "$expected_files" ]; then
+    echo "expected $expected_files corpus files, found $count" >&2
     exit 1
 fi
+
+mv "$staged" "$destination"
 echo "placed $count files"
