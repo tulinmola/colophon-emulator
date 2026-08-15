@@ -397,7 +397,7 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
       status = 1;
     }
   }
-  if (options.screenshot_path != NULL) {
+  if (status == 0 && options.screenshot_path != NULL) {
     uint32_t width = 0;
     uint32_t height = 0;
     uint8_t *pixels = render(framebuffer, &options, &width, &height);
@@ -408,7 +408,7 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
              options.screenshot_path);
     }
     free(pixels);
-  } else {
+  } else if (status == 0) {
     printf("%s: %ld frames\n", options.machine->name, options.frames);
   }
 
