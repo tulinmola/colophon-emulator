@@ -43,6 +43,17 @@ static void count_hsync_end(gate_array_t *gate_array) {
   }
 }
 
+/* The other thing an HSYNC end can be: the second one after a VSYNC began,
+   where the frame's own check takes the place of R52's count (Compendium
+   ch. 27.3.2). Counts those two down and is true on the second alone. */
+static bool vsync_check_due(gate_array_t *gate_array) {
+  if (gate_array->hsyncs_until_vsync_check == 0) {
+    return false;
+  }
+  gate_array->hsyncs_until_vsync_check--;
+  return gate_array->hsyncs_until_vsync_check == 0;
+}
+
 void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
   bool hsync_started = hsync && !gate_array->hsync_previous;
   bool hsync_ended = gate_array->hsync_previous && !hsync;
@@ -94,19 +105,13 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
        likewise rises here, where on hardware it is one more microsecond
        along (Compendium ch. 27.6.1). */
     gate_array->mode = gate_array->mode_pending;
-    if (gate_array->hsyncs_until_vsync_check > 0) {
-      gate_array->hsyncs_until_vsync_check--;
-      if (gate_array->hsyncs_until_vsync_check == 0) {
-        /* Two HSYNCs after the VSYNC began: an interrupt only if bit 5 of
-           R52 is set — the last one comfortably far away — and R52 returns
-           to 0 unconditionally (Compendium ch. 27.3.2). */
-        if (gate_array->r52 & 0x20) {
-          gate_array->interrupt_request = true;
-        }
-        gate_array->r52 = 0;
-      } else {
-        count_hsync_end(gate_array);
+    if (vsync_check_due(gate_array)) {
+      /* An interrupt only if bit 5 of R52 is set — the last one comfortably
+         far away — and R52 returns to 0 either way. */
+      if (gate_array->r52 & 0x20) {
+        gate_array->interrupt_request = true;
       }
+      gate_array->r52 = 0;
     } else {
       count_hsync_end(gate_array);
     }
@@ -153,13 +158,11 @@ static uint8_t decode_pens(uint8_t mode, uint8_t byte, uint8_t pens[8]) {
 
 void gate_array_video(gate_array_t *gate_array, bool display, uint8_t byte0, uint8_t byte1,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
-  if (gate_array->black_hsync || gate_array->black_vsync) {
+  bool blanked = gate_array->black_hsync || gate_array->black_vsync;
+  if (blanked || !gate_array->latched_display) {
+    uint8_t colour = blanked ? GATE_ARRAY_BLACK : gate_array->inks[16];
     for (uint8_t index = 0; index < GATE_ARRAY_SAMPLES_PER_CHARACTER; index++) {
-      samples[index] = GATE_ARRAY_BLACK;
-    }
-  } else if (!gate_array->latched_display) {
-    for (uint8_t index = 0; index < GATE_ARRAY_SAMPLES_PER_CHARACTER; index++) {
-      samples[index] = gate_array->inks[16];
+      samples[index] = colour;
     }
   } else {
     uint8_t written = 0;
