@@ -17,7 +17,20 @@ A C compiler and `make` are the whole toolchain. No configure step, no dependenc
 ```sh
 make        # build
 make test   # the fast tests
+make roms   # fetch the firmware, once
 ```
+
+Then run a machine and look at it:
+
+```sh
+build/emulator boot --screenshot ready.png
+build/emulator boot --machine cpc464 --screenshot ready.png
+build/emulator boot --full-raster --screenshot raster.png
+```
+
+`boot` starts a machine from reset, runs it for a fixed number of frames and writes what the monitor shows. Three machines answer to `--machine` — `cpc6128`, `cpc664`, `cpc464` — and a name is only listed once the machine behind it boots to its prompt. `--full-raster` gives the whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. Nothing consults a clock, so the same command writes the same bytes every time.
+
+The firmware images are Amstrad's. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here. The images the PNG writer produces are uncompressed — the format allows it, and it saves us a compressor to get wrong.
 
 There is nothing to play yet, but there is something to see. The Z80 came first — cycle-stepped, complete, every instruction the machine knows, undocumented ones included — and the CPC has been built around it a chip at a time: the memory map with its RAM banking and ROM paging, a 6845 CRTC counting out the frame at one character per microsecond, a Gate Array raising the 300Hz heartbeat and turning bytes into colour, and a monitor that takes the one composite sync wire and separates it the way a tube does. Given the firmware, the machine now boots it, and the Ready prompt arrives on the screen in the right colours, in the right place.
 
@@ -66,5 +79,7 @@ No scribe worked alone. Every claim in this codebase cites its source at the lin
 - ["Interrupts on the CPC/CPC+ and KC Compact"](https://cpctech.cpcwiki.de/docs/ints.html) (Kevin Thacker) — the interrupt counter's behaviour from the programmer's side; RMR bit 4 clearing the pending request along with the counter.
 - ["Amstrad CPC Ram Paging"](https://cpctech.cpcwiki.de/docs/rampage.html), ["I/O port allocation"](https://cpctech.cpcwiki.de/docs/iopord.html) (Mark Rison & Kevin Thacker) and ["Expansion ROM Selection"](https://cpctech.cpcwiki.de/docs/exprom.html), from Kevin Thacker's cpctech — the 6128 PAL's partial decode of its register, the address-bit I/O decoding that lets one access reach several devices at once, and the upper ROM latch with its fallback to BASIC. The machine's I/O decode follows them.
 - [json.org](https://www.json.org) — the grammar behind the test harness's hand-rolled JSON reader.
+- [The PNG Specification](https://www.w3.org/TR/png-3/), with [RFC 1950](https://www.rfc-editor.org/rfc/rfc1950) and [RFC 1951](https://www.rfc-editor.org/rfc/rfc1951) — chunks, CRC-32, the zlib wrapper and its Adler-32, and deflate's stored block, which is the only one we emit. Enough to write a screenshot without a dependency.
+- Amstrad's permission to distribute the firmware ROMs, given by [Cliff Lawson in 1999](https://groups.google.com/g/comp.sys.amstrad.8bit/c/HtpBU2Bzv_U/m/HhNDSU3MksAJ) on comp.sys.amstrad.8bit: keep the copyright messages intact, acknowledge Amstrad's copyright, charge nobody for them. Never rescinded, and the ground every emulator in the field stands on. `tools/fetch-roms.sh` relies on it.
 
 A source earns a line here the day code starts using it, not before.

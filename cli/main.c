@@ -1,0 +1,256 @@
+/*
+ * main.c — the emulator's command line.
+ *
+ * The core allocates nothing and does no I/O; this side does both, so that
+ * a WASM host can hand the same core its own buffers and never inherit a
+ * FILE pointer. Everything here is deterministic: a run is a machine, a ROM
+ * and a number of frames, and the same three produce the same bytes.
+ */
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cpc.h"
+#include "png.h"
+
+/* One machine per name the --machine option accepts. A name earns its place
+   here the day the machine behind it boots to its prompt, not before. */
+typedef struct {
+  const char *name;
+  const char *rom_file;
+  uint32_t ram_size;
+  const char *description;
+} machine_t;
+
+static const machine_t machines[] = {
+    {"cpc6128", "cpc6128.rom", 0x20000, "Amstrad CPC 6128, 128K, BASIC 1.1"},
+    {"cpc664", "cpc664.rom", 0x10000, "Amstrad CPC 664, 64K, BASIC 1.0"},
+    {"cpc464", "cpc464.rom", 0x10000, "Amstrad CPC 464, 64K, BASIC 1.0"},
+};
+static const size_t machine_count = sizeof machines / sizeof machines[0];
+
+/* The window the monitor's raster is cropped to: the picture with a border
+   around it, and the frame flyback left out. The display sits at samples
+   272-911 of 1024 and lines 70-269 of 312, so this is 64 samples of border
+   either side and a little over 30 lines above and below. */
+#define CROP_LEFT 208
+#define CROP_TOP 34
+#define CROP_WIDTH 768
+#define CROP_HEIGHT 272
+
+/* The 6128's boot screen stops changing at frame 39, measured by counting
+   the text's pixels frame by frame; the other two settle sooner. Twice that
+   costs a fraction of a second and leaves room for a machine that dawdles. */
+#define DEFAULT_FRAMES 78
+
+typedef struct {
+  const machine_t *machine;
+  const char *rom_directory;
+  const char *screenshot_path;
+  long frames;
+  bool full_raster;
+  bool double_lines;
+} options_t;
+
+static void print_usage(FILE *out) {
+  fprintf(out, "usage: emulator boot [options]\n\n");
+  fprintf(out, "  Runs a machine's firmware from reset and writes what the\n");
+  fprintf(out, "  monitor shows.\n\n");
+  fprintf(out, "  --machine NAME      which machine to build (default cpc6128)\n");
+  for (size_t index = 0; index < machine_count; index++) {
+    fprintf(out, "                        %-10s %s\n", machines[index].name,
+            machines[index].description);
+  }
+  fprintf(out, "  --roms DIRECTORY    where the ROM images are (default roms)\n");
+  fprintf(out, "  --frames N          frames to run before looking (default %d)\n", DEFAULT_FRAMES);
+  fprintf(out, "  --screenshot PATH   write the screen here as a PNG\n");
+  fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
+  fprintf(out, "  --no-double         one image line per raster line, squashed\n");
+}
+
+static const machine_t *machine_named(const char *name) {
+  for (size_t index = 0; index < machine_count; index++) {
+    if (strcmp(machines[index].name, name) == 0) {
+      return &machines[index];
+    }
+  }
+  return NULL;
+}
+
+/* Returns false having reported the problem. */
+static bool parse_options(int argc, char **argv, options_t *options) {
+  for (int index = 2; index < argc; index++) {
+    const char *argument = argv[index];
+    const char *value = (index + 1 < argc) ? argv[index + 1] : NULL;
+    if (strcmp(argument, "--full-raster") == 0) {
+      options->full_raster = true;
+      continue;
+    }
+    if (strcmp(argument, "--no-double") == 0) {
+      options->double_lines = false;
+      continue;
+    }
+    if (value == NULL) {
+      fprintf(stderr, "%s needs a value\n", argument);
+      return false;
+    }
+    index++;
+    if (strcmp(argument, "--machine") == 0) {
+      options->machine = machine_named(value);
+      if (options->machine == NULL) {
+        fprintf(stderr, "no machine is called %s\n", value);
+        return false;
+      }
+    } else if (strcmp(argument, "--roms") == 0) {
+      options->rom_directory = value;
+    } else if (strcmp(argument, "--screenshot") == 0) {
+      options->screenshot_path = value;
+    } else if (strcmp(argument, "--frames") == 0) {
+      char *end = NULL;
+      options->frames = strtol(value, &end, 10);
+      if (*end != '\0' || options->frames < 1) {
+        fprintf(stderr, "--frames wants a positive number, not %s\n", value);
+        return false;
+      }
+    } else {
+      fprintf(stderr, "no such option: %s\n", argument);
+      return false;
+    }
+  }
+  return true;
+}
+
+static bool load_rom(const char *directory, const char *file, uint8_t *rom, size_t size) {
+  char path[1024];
+  int length = snprintf(path, sizeof path, "%s/%s", directory, file);
+  if (length < 0 || (size_t)length >= sizeof path) {
+    fprintf(stderr, "the path to %s is too long\n", file);
+    return false;
+  }
+  FILE *handle = fopen(path, "rb");
+  if (handle == NULL) {
+    fprintf(stderr, "cannot open %s\n", path);
+    fprintf(stderr, "run 'make roms' to fetch the firmware images\n");
+    return false;
+  }
+  size_t read = fread(rom, 1, size, handle);
+  fclose(handle);
+  if (read != size) {
+    fprintf(stderr, "%s holds %zu bytes, expected %zu\n", path, read, size);
+    return false;
+  }
+  return true;
+}
+
+/* Crop the raster and turn hardware colour codes into pixels. */
+static uint8_t *render(const uint8_t *framebuffer, const options_t *options, uint32_t *width_out,
+                       uint32_t *height_out) {
+  uint32_t left = options->full_raster ? 0 : CROP_LEFT;
+  uint32_t top = options->full_raster ? 0 : CROP_TOP;
+  uint32_t width = options->full_raster ? CPC_FRAMEBUFFER_WIDTH : CROP_WIDTH;
+  uint32_t lines = options->full_raster ? CPC_FRAMEBUFFER_HEIGHT : CROP_HEIGHT;
+  uint32_t repeat = options->double_lines ? 2 : 1;
+  uint32_t height = lines * repeat;
+
+  uint8_t *pixels = malloc((size_t)width * height * 3);
+  if (pixels == NULL) {
+    fprintf(stderr, "cannot hold a %ux%u image\n", width, height);
+    return NULL;
+  }
+  uint8_t *out = pixels;
+  for (uint32_t line = 0; line < lines; line++) {
+    const uint8_t *row = framebuffer + (size_t)(top + line) * CPC_FRAMEBUFFER_WIDTH + left;
+    for (uint32_t again = 0; again < repeat; again++) {
+      for (uint32_t column = 0; column < width; column++) {
+        uint32_t rgb = gate_array_rgb(row[column]);
+        *out++ = (uint8_t)(rgb >> 16);
+        *out++ = (uint8_t)(rgb >> 8);
+        *out++ = (uint8_t)rgb;
+      }
+    }
+  }
+  *width_out = width;
+  *height_out = height;
+  return pixels;
+}
+
+static int boot(int argc, char **argv) {
+  options_t options = {
+      .machine = &machines[0],
+      .rom_directory = "roms",
+      .screenshot_path = NULL,
+      .frames = DEFAULT_FRAMES,
+      .full_raster = false,
+      .double_lines = true,
+  };
+  if (!parse_options(argc, argv, &options)) {
+    return 1;
+  }
+
+  static uint8_t rom[0x8000];
+  if (!load_rom(options.rom_directory, options.machine->rom_file, rom, sizeof rom)) {
+    return 1;
+  }
+
+  uint8_t *ram = calloc(options.machine->ram_size, 1);
+  uint8_t *framebuffer = calloc((size_t)CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT, 1);
+  cpc_t *cpc = calloc(1, sizeof *cpc);
+  if (ram == NULL || framebuffer == NULL || cpc == NULL) {
+    fprintf(stderr, "cannot hold the machine\n");
+    free(cpc);
+    free(framebuffer);
+    free(ram);
+    return 1;
+  }
+
+  /* The operating system fills the lower 16K, BASIC the upper as ROM 0. */
+  cpc_init(cpc, ram, options.machine->ram_size, rom);
+  cpc_set_upper_rom(cpc, 0, rom + 0x4000);
+  cpc_connect_monitor(cpc, framebuffer);
+
+  /* A frame is 19968 characters of four T-states each. */
+  long ticks = options.frames * 19968L * 4L;
+  for (long tick = 0; tick < ticks; tick++) {
+    cpc_tick(cpc);
+  }
+
+  int status = 0;
+  if (options.screenshot_path != NULL) {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint8_t *pixels = render(framebuffer, &options, &width, &height);
+    if (pixels == NULL || !png_write(options.screenshot_path, pixels, width, height)) {
+      status = 1;
+    } else {
+      printf("%s: %ld frames, %ux%u to %s\n", options.machine->name, options.frames, width, height,
+             options.screenshot_path);
+    }
+    free(pixels);
+  } else {
+    printf("%s: %ld frames\n", options.machine->name, options.frames);
+  }
+
+  free(cpc);
+  free(framebuffer);
+  free(ram);
+  return status;
+}
+
+int main(int argc, char **argv) {
+  if (argc < 2) {
+    print_usage(stderr);
+    return 1;
+  }
+  if (strcmp(argv[1], "boot") == 0) {
+    return boot(argc, argv);
+  }
+  if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "help") == 0) {
+    print_usage(stdout);
+    return 0;
+  }
+  fprintf(stderr, "no such command: %s\n", argv[1]);
+  print_usage(stderr);
+  return 1;
+}

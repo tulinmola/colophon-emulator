@@ -10,3 +10,7 @@ build/
 
 # Downloaded test data (see tools/fetch-tests.sh).
 test/data/
+
+# Amstrad's firmware images (see tools/fetch-roms.sh). Distributable with
+# emulators by Amstrad's permission, but fetched rather than committed.
+roms/

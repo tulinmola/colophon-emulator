@@ -12,9 +12,13 @@ CRTC_TEST_C = test/crtc_test.c
 GATE_ARRAY_TEST_C = test/gate_array_test.c
 MONITOR_TEST_C = test/monitor_test.c
 CPC_TEST_C = test/cpc_test.c
+PNG_TEST_C = test/png_test.c
 SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
 EXERCISER_C = test/z80_exerciser_test.c
-SRC_ALL = $(SRC_C) src/z80.h $(CRTC_C) src/crtc.h $(GATE_ARRAY_C) src/gate_array.h $(MONITOR_C) src/monitor.h $(MACHINE_C) src/cpc.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(CPC_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/test.h
+CORE_C = $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(MACHINE_C)
+PNG_C = cli/png.c
+CLI_C = cli/main.c
+SRC_ALL = $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/cpc.h $(PNG_C) $(CLI_C) cli/png.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(CPC_TEST_C) $(PNG_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/test.h
 
 SINGLE_STEP_DATA = test/data/SingleStepTests/z80/v1
 EXERCISER_DATA = test/data/ZEXALL
@@ -24,7 +28,13 @@ EXERCISER_GROUPS ?= 12
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/cpc_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/cpc_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test
+
+# The command line. The core allocates nothing and does no I/O; everything
+# that does lives in cli/.
+$(BUILD)/emulator: $(CORE_C) $(PNG_C) $(CLI_C) src/cpc.h cli/png.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Icli $(CORE_C) $(PNG_C) $(CLI_C) -o $@
 
 $(BUILD)/z80_test: $(SRC_C) src/z80.h $(Z80_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
@@ -42,9 +52,13 @@ $(BUILD)/monitor_test: $(MONITOR_C) src/monitor.h $(MONITOR_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(MONITOR_C) $(MONITOR_TEST_C) -o $@
 
-$(BUILD)/cpc_test: $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(MACHINE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/cpc.h $(CPC_TEST_C) test/test.h
+$(BUILD)/cpc_test: $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/cpc.h $(CPC_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(MACHINE_C) $(CPC_TEST_C) -o $@
+	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(CPC_TEST_C) -o $@
+
+$(BUILD)/png_test: $(PNG_C) cli/png.h $(PNG_TEST_C) test/test.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Icli -Itest $(PNG_C) $(PNG_TEST_C) -o $@
 
 $(BUILD)/z80_single_step_test: $(SRC_C) src/z80.h $(SINGLE_STEP_C) test/json.h
 	@mkdir -p $(BUILD)
@@ -55,12 +69,18 @@ $(BUILD)/z80_exerciser_test: $(SRC_C) src/z80.h $(EXERCISER_C)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SRC_C) $(EXERCISER_C) -o $@
 
 # The fast tier: hermetic, no network, runs on every change.
-test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/cpc_test
+test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/cpc_test $(BUILD)/png_test
 	@$(BUILD)/z80_test
 	@$(BUILD)/crtc_test
 	@$(BUILD)/gate_array_test
 	@$(BUILD)/monitor_test
 	@$(BUILD)/cpc_test
+	@$(BUILD)/png_test
+
+# The firmware images, fetched and pinned by hash. Needed to run a machine,
+# not to build one or to test the parts.
+roms:
+	@sh tools/fetch-roms.sh
 
 # The conformance tier: the complete SingleStepTests corpus, fetched on first
 # use. Run it before committing anything that touches the CPU.
@@ -84,9 +104,9 @@ format-check:
 	$(CLANG_FORMAT) --dry-run --Werror $(SRC_ALL)
 
 lint:
-	$(CLANG_TIDY) $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(MACHINE_C) $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(CPC_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) -- $(CFLAGS) -Isrc -Itest
+	$(CLANG_TIDY) $(CORE_C) $(PNG_C) $(CLI_C) $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(CPC_TEST_C) $(PNG_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) -- $(CFLAGS) -Isrc -Icli -Itest
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test-single-step test-exerciser test-all format format-check lint clean
+.PHONY: all roms test test-single-step test-exerciser test-all format format-check lint clean
