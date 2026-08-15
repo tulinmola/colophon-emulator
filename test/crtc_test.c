@@ -51,7 +51,6 @@ static void reset_state(void) {
   TEST_EQUAL(crtc.address_register, 0);
   TEST_CHECK(!crtc.hsync);
   TEST_CHECK(!crtc.vsync);
-  TEST_EQUAL(crtc.type, 0);
 }
 
 static void select_wears_five_bits(void) {

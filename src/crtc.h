@@ -57,7 +57,6 @@ typedef struct {
      documented type-0 widths (Compendium ch. 4.3); R16/R17 ignore writes. */
   uint8_t registers[18];
   uint8_t address_register; /* AR, 5 bits: the register number a select names */
-  uint8_t type;             /* Longshot's numbering 0-4; only type 0 exists here yet */
 
   /* Counters, named as the Compendium names them (ch. 3.1). */
   uint8_t c0;  /* horizontal character counter */
