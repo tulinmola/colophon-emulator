@@ -63,9 +63,26 @@ static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
   }
 }
 
+/* The board wires the CRTC bus from the address lines: RS is A8 and R/W is
+   A9, so &BC00-&BF00 are select, write, status and read — "The CRTC" (Grim),
+   I/O ports. The chip is strobed by any I/O request when A14 is low: a CPU
+   read of a write port still makes it latch the bus, which floats — &FF by
+   our convention. */
+static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
+  uint64_t pins = CRTC_CS | crtc_set_data(0, data);
+  if (address & 0x0100) {
+    pins |= CRTC_RS;
+  }
+  if (address & 0x0200) {
+    pins |= CRTC_RW;
+  }
+  return crtc_access(&cpc->crtc, pins);
+}
+
 void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom) {
   *cpc = (cpc_t){0};
   z80_init(&cpc->cpu);
+  crtc_init(&cpc->crtc);
   cpc->ram = ram;
   cpc->ram_size = ram_size;
   cpc->lower_rom = lower_rom;
@@ -84,6 +101,11 @@ void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom) {
 }
 
 uint64_t cpc_tick(cpc_t *cpc) {
+  if (cpc->clock_phase == 0) {
+    cpc->crtc_pins = crtc_tick(&cpc->crtc);
+  }
+  cpc->clock_phase = (uint8_t)((cpc->clock_phase + 1) & 3);
+
   uint64_t pins = z80_tick(&cpc->cpu, cpc->pins);
   if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
     uint16_t address = z80_address(pins);
@@ -92,13 +114,22 @@ uint64_t cpc_tick(cpc_t *cpc) {
     uint16_t address = z80_address(pins);
     cpc->write_page[address >> 14][address & 0x3FFF] = z80_data(pins);
   } else if ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
-    io_write(cpc, z80_address(pins), z80_data(pins));
+    uint16_t address = z80_address(pins);
+    io_write(cpc, address, z80_data(pins));
+    if (!(address & 0x4000)) {
+      crtc_bus(cpc, address, z80_data(pins));
+    }
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
-    /* No device answers reads yet: floating bus, &FF by convention. On
-       hardware the Gate Array would execute the floating byte as a command
-       ("The Gate Array"); &FF dispatches to the write-only PAL, so even
-       that is silence. */
-    pins = z80_set_data(pins, 0xFF);
+    /* The bus floats at &FF by convention; a device that drives it
+       overwrites. On hardware the Gate Array would execute the floating
+       byte as a command ("The Gate Array"); &FF dispatches to the
+       write-only PAL, so even that is silence. */
+    uint16_t address = z80_address(pins);
+    uint8_t data = 0xFF;
+    if (!(address & 0x4000)) {
+      data = crtc_data(crtc_bus(cpc, address, data));
+    }
+    pins = z80_set_data(pins, data);
   }
   cpc->pins = pins;
   return pins;

@@ -3,9 +3,9 @@
  *
  * This is the machine file: the one place that knows the chips are soldered
  * into a CPC. It owns the memory map and the I/O decode; the chips it wires
- * know nothing about it. At this stage the machine is a Z80 and its memory —
- * no video, no wait states, no interrupts. Each chip claims its registers as
- * its module arrives.
+ * know nothing about it. At this stage the machine is a Z80, its memory,
+ * and a CRTC counting out the frame — no pixels yet, no wait states, no
+ * interrupts. Each chip claims its registers as its module arrives.
  *
  * Sources:
  * - "The Gate Array" (Grim),
@@ -21,6 +21,10 @@
  * - "Expansion ROM Selection" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/exprom.html — the &DFxx ROM number
  *   latch; selecting an absent ROM resolves to ROM 0.
+ * - "The CRTC" (Grim),
+ *   https://www.grimware.org/doku.php/documentations/devices/crtc — the
+ *   board's wiring of the CRTC bus: A14 low selects the chip, RS is A8 and
+ *   R/W is A9, giving the four ports &BC00-&BF00.
  */
 #ifndef COLOPHON_CPC_H
 #define COLOPHON_CPC_H
@@ -28,11 +32,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "crtc.h"
 #include "z80.h"
 
 typedef struct {
   z80_t cpu;
   uint64_t pins; /* the bus between ticks */
+
+  crtc_t crtc;
+  uint64_t crtc_pins;  /* the CRTC's outputs as of its last character clock */
+  uint8_t clock_phase; /* of four: the CRTC receives one character clock per
+                          four CPU ticks (16MHz master: 4MHz Z80, 1MHz CRTC) */
 
   /* Host-provided storage; the core allocates nothing. 64K means no PAL is
      fitted and banking commands die on the empty socket; 128K is a 6128,

@@ -198,6 +198,8 @@ static void one_write_reaches_the_pal_and_the_rom_latch(void) {
   TEST_EQUAL(cpc.upper_rom_number, 0xC1);
   TEST_CHECK(cpc.lower_rom_enabled);
   TEST_CHECK(cpc.upper_rom_enabled);
+  /* A14 is low too, so the CRTC heard the same write as a select. */
+  TEST_EQUAL(cpc.crtc.address_register, 0xC1 & 0x1F);
 }
 
 static void the_gate_array_needs_address_bit_14(void) {
@@ -213,6 +215,72 @@ static void the_gate_array_needs_address_bit_14(void) {
   TEST_CHECK(cpc.lower_rom_enabled);
   TEST_CHECK(cpc.upper_rom_enabled);
   TEST_EQUAL(cpc_peek(&cpc, 0), 0x01); /* still the ROM's first byte */
+}
+
+static void the_crtc_learns_the_firmware_table(void) {
+  power_on(sizeof ram);
+  /* The values the 6128 firmware programs after boot, written 15 down to 0
+     the way the ROM writes them (Compendium ch. 4.1; observed in our own
+     boot trace). */
+  static const uint8_t table[16] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 48, 0x00, 0xC0, 0};
+  uint8_t program[161];
+  size_t length = 0;
+  for (int reg = 15; reg >= 0; reg--) {
+    program[length++] = 0x01; /* LD BC,&BC00+reg */
+    program[length++] = (uint8_t)reg;
+    program[length++] = 0xBC;
+    program[length++] = 0xED; /* OUT (C),C */
+    program[length++] = 0x49;
+    program[length++] = 0x01; /* LD BC,&BD00+value */
+    program[length++] = table[reg];
+    program[length++] = 0xBD;
+    program[length++] = 0xED; /* OUT (C),C */
+    program[length++] = 0x49;
+  }
+  program[length++] = 0x76; /* HALT */
+  rom_program(program, length);
+  TEST_CHECK(run_to_halt());
+  for (int reg = 0; reg < 14; reg++) {
+    TEST_EQUAL(cpc.crtc.registers[reg], table[reg]);
+  }
+  /* R14 is six bits wide: the firmware's &C0 falls off the ends. */
+  TEST_EQUAL(cpc.crtc.registers[14], 0);
+}
+
+static void the_cpu_reads_the_crtc_back(void) {
+  power_on(sizeof ram);
+  const uint8_t program[] = {
+      0x01, 0x0C, 0xBC, /* LD BC,&BC0C — select R12 */
+      0xED, 0x49,       /* OUT (C),C */
+      0x01, 0x30, 0xBD, /* LD BC,&BD30 — R12 = &30 */
+      0xED, 0x49,       /* OUT (C),C */
+      0x01, 0x00, 0xBF, /* LD BC,&BF00 — the read port */
+      0xED, 0x78,       /* IN A,(C) */
+      0x76,             /* HALT */
+  };
+  rom_program(program, sizeof program);
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(cpc.cpu.a, 0x30);
+}
+
+static void a_machine_tick_is_a_quarter_character(void) {
+  power_on(sizeof ram);
+  const uint8_t program[] = {
+      0x01, 0x00, 0xBC, /* LD BC,&BC00 — select R0 */
+      0xED, 0x49,       /* OUT (C),C */
+      0x01, 0x3F, 0xBD, /* LD BC,&BD3F — R0 = 63 */
+      0xED, 0x49,       /* OUT (C),C */
+      0x76,             /* HALT */
+  };
+  rom_program(program, sizeof program);
+  TEST_CHECK(run_to_halt());
+  uint8_t c0_at_halt = cpc.crtc.c0;
+  for (int tick = 0; tick < 4 * 64; tick++) {
+    cpc_tick(&cpc);
+  }
+  /* 256 CPU ticks are 64 characters: one whole scanline, C0 back where it
+     stood. */
+  TEST_EQUAL(cpc.crtc.c0, c0_at_halt);
 }
 
 static void poke_lands_beneath_the_rom(void) {
@@ -235,6 +303,9 @@ int main(void) {
   TEST_RUN(a_64k_machine_ignores_banking_commands);
   TEST_RUN(one_write_reaches_the_pal_and_the_rom_latch);
   TEST_RUN(the_gate_array_needs_address_bit_14);
+  TEST_RUN(the_crtc_learns_the_firmware_table);
+  TEST_RUN(the_cpu_reads_the_crtc_back);
+  TEST_RUN(a_machine_tick_is_a_quarter_character);
   TEST_RUN(poke_lands_beneath_the_rom);
   return TEST_REPORT("cpc");
 }
