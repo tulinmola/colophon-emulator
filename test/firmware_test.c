@@ -27,6 +27,7 @@
 #define DISPLAY_TOP 70
 #define FONT_IN_ROM 0x3800
 
+/* The boot screen stops changing at frame 42; this waits well past it. */
 #define FRAMES_TO_PROMPT 78
 #define FRAMES_PER_KEY 3
 
@@ -55,7 +56,7 @@ static bool load_rom(const char *file) {
 }
 
 static void run_frames(long frames) {
-  for (long tick = 0; tick < frames * 19968L * 4L; tick++) {
+  for (long tick = 0; tick < frames * CPC_TICKS_PER_STANDARD_FRAME; tick++) {
     cpc_tick(&cpc);
   }
 }

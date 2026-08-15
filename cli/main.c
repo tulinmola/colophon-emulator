@@ -265,7 +265,7 @@ static bool save_snapshot(const cpc_t *cpc, const char *path) {
 }
 
 static void run_frames(cpc_t *cpc, long frames) {
-  for (long tick = 0; tick < frames * 19968L * 4L; tick++) {
+  for (long tick = 0; tick < frames * CPC_TICKS_PER_STANDARD_FRAME; tick++) {
     cpc_tick(cpc);
   }
 }

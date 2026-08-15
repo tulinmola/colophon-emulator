@@ -56,6 +56,14 @@
    11-12µs (Compendium ch. 16.2.4); 12µs is 192 pixel clocks. */
 #define CPC_FRAME_SYNC_SAMPLES 192
 
+/* One frame of the screen the firmware programs: 312 lines of 64 characters
+   at four T-states each. Unlike the raster above, which the monitor fixes,
+   this is a convention and not an invariant — the CRTC's frame is whatever
+   its registers say, and a demo that reprograms them makes frames of any
+   length it likes. It is here because running "about a second" is a thing
+   callers want, not because the machine guarantees it. */
+#define CPC_TICKS_PER_STANDARD_FRAME (312L * 64L * 4L)
+
 typedef struct {
   z80_t cpu;
   uint64_t pins; /* the bus between ticks */

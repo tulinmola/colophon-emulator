@@ -408,7 +408,7 @@ static void draw_a_full_screen(void) {
   body[length++] = 0x18;                                     /* JR $ */
   body[length++] = 0xFE;
   rom_program(body, length);
-  run_ticks(3L * 19968 * 4); /* three frames of 19968 characters */
+  run_ticks(3 * CPC_TICKS_PER_STANDARD_FRAME);
 }
 
 static void the_display_lands_where_the_syncs_put_it(void) {
@@ -487,7 +487,7 @@ static void the_screen_is_read_from_the_base_ram_alone(void) {
   cpc.cpu.pc = 0;
   memset(ram + bank_start(7), 0x00, 0x4000);
   memset(framebuffer, 0xEE, sizeof framebuffer);
-  run_ticks(2L * 19968 * 4);
+  run_ticks(2 * CPC_TICKS_PER_STANDARD_FRAME);
   TEST_EQUAL(framebuffer[71 * CPC_FRAMEBUFFER_WIDTH + 272], 11);
 }
 
