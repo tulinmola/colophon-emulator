@@ -14,6 +14,18 @@ static const uint8_t register_widths[18] = {
 
 void crtc_init(crtc_t *crtc) { *crtc = (crtc_t){0}; }
 
+/* C4, the character row counter, moves only at the end of a row, and VSYNC
+   begins on the row where it reaches R7 (ch. 6.1.2). Every path that moves
+   the counter goes through here, so the trigger is tested once a row and
+   never on a scanline that left the counter alone. */
+static void enter_character_row(crtc_t *crtc, uint8_t row) {
+  crtc->c4 = row;
+  if (crtc->c4 == crtc->registers[7] && !crtc->vsync) {
+    crtc->vsync = true;
+    crtc->c3h = 0;
+  }
+}
+
 uint64_t crtc_tick(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
 
@@ -75,33 +87,19 @@ uint64_t crtc_tick(crtc_t *crtc) {
       crtc->in_vertical_adjustment = false;
       crtc->c5 = 0;
       crtc->c9 = 0;
-      crtc->c4 = 0;
-      if (r[7] == 0 && !crtc->vsync) {
-        crtc->vsync = true;
-        crtc->c3h = 0;
-      }
+      enter_character_row(crtc, 0);
     }
   } else if (crtc->c9 == r[9]) {
     crtc->c9 = 0;
     if (crtc->c4 == r[4]) {
       if (r[5] == 0) {
-        crtc->c4 = 0;
-        if (r[7] == 0 && !crtc->vsync) {
-          crtc->vsync = true;
-          crtc->c3h = 0;
-        }
+        enter_character_row(crtc, 0);
       } else {
         crtc->in_vertical_adjustment = true;
         crtc->c5 = 0;
       }
     } else {
-      crtc->c4++;
-      /* VSYNC begins when C4 reaches R7, from the next scanline (ch.
-         6.1.2). */
-      if (crtc->c4 == r[7] && !crtc->vsync) {
-        crtc->vsync = true;
-        crtc->c3h = 0;
-      }
+      enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
     }
   } else {
     crtc->c9++;
