@@ -64,6 +64,14 @@ static void the_matrix_is_where_the_table_says(void) {
   TEST_EQUAL(keyboard_key_for_character(']', &shifted), KEYBOARD_KEY(2, 3));
   TEST_EQUAL(keyboard_key_for_character('@', &shifted), KEYBOARD_KEY(3, 2));
   TEST_CHECK(!shifted);
+  /* Each of these pairs sits on one keycap, and the source table has them
+     crossed; the firmware's own translation settles it. */
+  TEST_EQUAL(keyboard_key_for_character('.', &shifted), KEYBOARD_KEY(3, 7));
+  TEST_EQUAL(keyboard_key_for_character('>', &shifted), KEYBOARD_KEY(3, 7));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(keyboard_key_for_character(',', &shifted), KEYBOARD_KEY(4, 7));
+  TEST_EQUAL(keyboard_key_for_character('<', &shifted), KEYBOARD_KEY(4, 7));
+  TEST_CHECK(shifted);
 }
 
 static void a_character_the_keyboard_lacks_is_refused(void) {

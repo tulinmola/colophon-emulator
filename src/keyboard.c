@@ -29,14 +29,9 @@ uint8_t keyboard_line(const keyboard_t *keyboard, uint8_t line) {
   return line < KEYBOARD_LINES ? keyboard->lines[line] : 0xFF;
 }
 
-/* The UK CPC keyboard, by matrix position: the character a key gives alone,
-   and the one it gives with shift. A key that repeats a character in both
-   columns has no shifted legend of its own.
-
-   Positions run line by line from the table in "Reading the keyboard and
-   Joysticks"; the keys with no character — cursors, function keys, Copy,
-   Caps Lock and the joystick lines — are absent, and a character not found
-   here is one this keyboard cannot type. */
+/* The UK layout, positions from the matrix table in "Reading the keyboard
+   and Joysticks". Keys that carry no character — cursors, function keys,
+   Copy, Caps Lock, the joystick lines — are absent. */
 typedef struct {
   keyboard_key key;
   char plain;
@@ -54,7 +49,10 @@ static const legend legends[] = {
     {KEYBOARD_KEY(3, 4), ';', '+'},
     {KEYBOARD_KEY(3, 5), ':', '*'},
     {KEYBOARD_KEY(3, 6), '/', '?'},
-    {KEYBOARD_KEY(3, 7), ',', '<'},
+    /* The source crosses these two keys, printing "> ," here and "< ." on
+       line 4 bit 7; the firmware's own translation puts the full stop
+       here and the comma there. */
+    {KEYBOARD_KEY(3, 7), '.', '>'},
     {KEYBOARD_KEY(4, 0), '0', '_'},
     {KEYBOARD_KEY(4, 1), '9', ')'},
     {KEYBOARD_KEY(4, 2), 'o', 'O'},
@@ -62,7 +60,7 @@ static const legend legends[] = {
     {KEYBOARD_KEY(4, 4), 'l', 'L'},
     {KEYBOARD_KEY(4, 5), 'k', 'K'},
     {KEYBOARD_KEY(4, 6), 'm', 'M'},
-    {KEYBOARD_KEY(4, 7), '.', '>'},
+    {KEYBOARD_KEY(4, 7), ',', '<'},
     {KEYBOARD_KEY(5, 0), '8', '('},
     {KEYBOARD_KEY(5, 1), '7', '\''},
     {KEYBOARD_KEY(5, 2), 'u', 'U'},

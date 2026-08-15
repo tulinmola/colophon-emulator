@@ -198,6 +198,21 @@ static void basic_does_arithmetic_it_is_typed(void) {
   expect_row_contains(11, "Ready");
 }
 
+/* Every character the keyboard claims to have, typed and read back off the
+   screen. The firmware's own key table is the judge, which is how the comma
+   and the full stop were caught sitting on each other's keys. */
+static void every_character_types_as_itself(void) {
+  static const char *punctuation = "abz019 ,.;:/?-=[]{}@#$%&*()_+<>";
+  if (!power_on("cpc6128.rom", 0x20000, true)) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  type_text(punctuation);
+  run_frames(4);
+  read_screen();
+  expect_row_contains(9, punctuation);
+}
+
 /* BASIC counts colours its own way and the firmware translates: what BASIC
    calls 26 reaches the Gate Array as hardware code 11, and what it calls 1
    arrives as 4. The two numberings sit side by side in Grimware's INKR
@@ -244,6 +259,7 @@ int main(int argc, char **argv) {
   TEST_RUN(the_664_boots_to_its_prompt);
   TEST_RUN(the_464_boots_to_its_prompt);
   TEST_RUN(basic_does_arithmetic_it_is_typed);
+  TEST_RUN(every_character_types_as_itself);
   TEST_RUN(a_typed_line_can_change_the_border);
   TEST_RUN(the_refresh_link_chooses_the_crtc_table);
   return TEST_REPORT("firmware");
