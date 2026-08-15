@@ -1,0 +1,83 @@
+/*
+ * cpc.h — the Amstrad CPC, wired.
+ *
+ * This is the machine file: the one place that knows the chips are soldered
+ * into a CPC. It owns the memory map and the I/O decode; the chips it wires
+ * know nothing about it. At this stage the machine is a Z80 and its memory —
+ * no video, no wait states, no interrupts. Each chip claims its registers as
+ * its module arrives.
+ *
+ * Sources:
+ * - "The Gate Array" (Grim),
+ *   https://www.grimware.org/doku.php/documentations/devices/gatearray — the
+ *   &7Fxx command dispatch (data bits 7-6 select the register), RMR's
+ *   ROM-enable bits, the eight MMR banking configurations.
+ * - "Amstrad CPC Ram Paging" (Kevin Thacker's cpctech),
+ *   https://cpctech.cpcwiki.de/docs/rampage.html — the 6128's PAL decodes
+ *   only MMR bits 2-0.
+ * - "I/O port allocation" (Mark Rison & Kevin Thacker),
+ *   https://cpctech.cpcwiki.de/docs/iopord.html — devices decode single
+ *   address bits, so one I/O access can reach several devices at once.
+ * - "Expansion ROM Selection" (Kevin Thacker's cpctech),
+ *   https://cpctech.cpcwiki.de/docs/exprom.html — the &DFxx ROM number
+ *   latch; selecting an absent ROM resolves to ROM 0.
+ */
+#ifndef COLOPHON_CPC_H
+#define COLOPHON_CPC_H
+
+#include <stdbool.h>
+#include <stdint.h>
+
+#include "z80.h"
+
+typedef struct {
+  z80_t cpu;
+  uint64_t pins; /* the bus between ticks */
+
+  /* Host-provided storage; the core allocates nothing. 64K means no PAL is
+     fitted and banking commands die on the empty socket; 128K is a 6128,
+     banks 0-3 the base 64K the video hardware will read, banks 4-7 the
+     extension. */
+  uint8_t *ram;
+  uint32_t ram_size;
+  const uint8_t *lower_rom;       /* 16K; reset fetches from it */
+  const uint8_t *upper_roms[256]; /* sparse; absent numbers resolve to ROM 0 */
+  uint8_t upper_rom_number;
+
+  /* MMR, the PAL's memory-mapping register. The 6128's PAL decodes only
+     bits 2-0, the configuration; bits 5-3 address 64K pages that only larger
+     expansions fit. */
+  uint8_t mmr;
+
+  /* RMR bits 3 and 2, parked here until the Gate Array module exists to own
+     the register. In RMR a cleared bit enables; these store the enabled
+     state directly. */
+  bool lower_rom_enabled;
+  bool upper_rom_enabled;
+
+  /* Derived from the registers above by remap(); cache, never the state. */
+  const uint8_t *read_page[4];
+  uint8_t *write_page[4];
+} cpc_t;
+
+/* Power-on. The lower ROM is readable at &0000 — it must be, or no first
+ * instruction could ever be fetched. Upper ROM enabled and configuration 0
+ * are conventions: the firmware writes both registers before anything could
+ * observe their reset state. */
+void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom);
+
+/* Fit a 16K ROM as upper ROM `number`; NULL empties the socket. */
+void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom);
+
+/* Advance one T-state: tick the CPU, answer its pins from the map. No wait
+ * states yet — timing is the raw Z80's until the Gate Array brings the 4T
+ * grid. Returns the bus for the host to watch. */
+uint64_t cpc_tick(cpc_t *cpc);
+
+/* The CPU's view without the CPU: reads and writes resolve through the same
+ * mapping the CPU's memory cycles use, so a peek under an enabled ROM sees
+ * the ROM and a poke lands in the RAM beneath it. */
+uint8_t cpc_peek(const cpc_t *cpc, uint16_t address);
+void cpc_poke(cpc_t *cpc, uint16_t address, uint8_t value);
+
+#endif
