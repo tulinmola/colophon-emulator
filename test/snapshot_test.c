@@ -194,6 +194,28 @@ static void machines_restored_from_one_snapshot_agree(void) {
   TEST_CHECK(restored.ram[0x9000] != counter_when_saved); /* it kept going */
 }
 
+/* A snapshot cannot install a register value the chip could not hold. The
+   restore goes in through the CRTC's own bus, so the writable-bit masks
+   apply exactly as they do to a write from the CPU — and the register the
+   snapshot had selected survives being set aside to do it. */
+static void the_crtc_keeps_only_the_bits_it_has(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x42] = 9;         /* the selected register */
+  bytes[0x43 + 4] = 0xFF;  /* R4 is seven bits wide */
+  bytes[0x43 + 8] = 0xFF;  /* R8's writable bits have a hole in them */
+  bytes[0x43 + 16] = 0xAA; /* R16 is a lightpen latch, read-only */
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.registers[4], 0x7F);
+  TEST_EQUAL(restored.crtc.registers[8], 0xF3);
+  TEST_EQUAL(restored.crtc.registers[16], 0x00);
+  TEST_EQUAL(restored.crtc.address_register, 9);
+}
+
 /* A snapshot restores the memory map, not just the registers behind it. */
 static void the_memory_map_comes_back_with_it(void) {
   load_a_running_program();
@@ -240,6 +262,7 @@ int main(void) {
   TEST_RUN(a_machine_survives_the_round_trip);
   TEST_RUN(a_half_done_instruction_cannot_be_saved);
   TEST_RUN(machines_restored_from_one_snapshot_agree);
+  TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
   return TEST_REPORT("snapshot");

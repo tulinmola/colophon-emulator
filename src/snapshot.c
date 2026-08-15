@@ -138,10 +138,14 @@ bool snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const char *
   cpc->mmr = (uint8_t)(0xC0 | (bytes[AT_RAM_CONFIGURATION] & 0x3F));
   cpc->upper_rom_number = bytes[AT_UPPER_ROM];
 
-  cpc->crtc.address_register = bytes[AT_SELECTED_CRTC_REGISTER] & 0x1F;
+  /* Through the chip's own bus, so its writable-bit masks apply and a
+     snapshot cannot install a value no 6845 could hold. Selecting each
+     register in turn clobbers the selection, so that goes back last. */
   for (int index = 0; index < 18; index++) {
-    cpc->crtc.registers[index] = bytes[AT_CRTC_REGISTERS + index];
+    crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, (uint8_t)index));
+    crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, bytes[AT_CRTC_REGISTERS + index]));
   }
+  crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
 
   /* The control word first, because setting it clears the output latches.
      The format stores inputs for A and B, outputs for C. */
