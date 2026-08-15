@@ -174,7 +174,7 @@ uint64_t cpc_tick(cpc_t *cpc) {
      the acknowledge below drops it. READY runs to the CPU's WAIT, which is
      what keeps the CPU off the RAM the video hardware is using. */
   uint64_t bus = cpc->pins;
-  if (cpc->gate_array.interrupt_request) {
+  if (gate_array_interrupt(&cpc->gate_array)) {
     bus |= Z80_INT;
   } else {
     bus &= ~Z80_INT;

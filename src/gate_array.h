@@ -117,9 +117,15 @@ void gate_array_init(gate_array_t *gate_array);
  * 11 pattern is the PAL's MMR, not ours, and is ignored. */
 void gate_array_write(gate_array_t *gate_array, uint8_t data);
 
-/* One character clock: watch the syncs, run the interrupt counter. Returns
- * the state of the INT line. */
-bool gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync);
+/* One character clock: watch the syncs, run the interrupt counter. */
+void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync);
+
+/* The INT line, held from the moment the counter raises it until the CPU
+ * acknowledges. Sampled every CPU cycle, where the character clock this
+ * chip is ticked on comes round only every fourth. */
+static inline bool gate_array_interrupt(const gate_array_t *gate_array) {
+  return gate_array->interrupt_request;
+}
 
 /* The CPU has acknowledged the interrupt: the request drops and bit 5 of
  * R52 dies, so the next interrupt comes no closer than 32 lines — or 20,

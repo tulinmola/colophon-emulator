@@ -43,7 +43,7 @@ static void count_hsync_end(gate_array_t *gate_array) {
   }
 }
 
-bool gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
+void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
   bool hsync_started = hsync && !gate_array->hsync_previous;
   bool hsync_ended = gate_array->hsync_previous && !hsync;
   bool vsync_started = vsync && !gate_array->vsync_previous;
@@ -111,7 +111,6 @@ bool gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
       count_hsync_end(gate_array);
     }
   }
-  return gate_array->interrupt_request;
 }
 
 void gate_array_advance_phase(gate_array_t *gate_array) {
