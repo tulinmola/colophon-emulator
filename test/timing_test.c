@@ -45,7 +45,7 @@ typedef struct {
 
 /* Both sources agree on every row here. Where an instruction's duration
    depends on which way it went, the condition is arranged to hold. */
-static const timing timings[] = {
+static const timing repeated[] = {
     {"NOP", {0x00}, 1, 1},
     {"LD BC,nnnn", {0x01, 0x34, 0x12}, 3, 3},
     {"INC BC", {0x03}, 1, 2},
@@ -126,6 +126,27 @@ static const timing timings[] = {
     {"RLC (IX+d)", {0xDD, 0xCB, 0x00, 0x06}, 4, 7},
     {"BIT 0,(IX+d)", {0xDD, 0xCB, 0x00, 0x46}, 4, 6},
     {"SET 0,(IX+d)", {0xDD, 0xCB, 0x00, 0xC6}, 4, 7},
+    /* Conditions that fail: none of these touches a flag, so every copy
+       falls through exactly as the first one did. */
+    {"JR NZ (not taken)", {0x20, 0x00}, 2, 2},
+    {"JP NZ (not taken)", {0xC2, 0x00, 0x00}, 3, 3},
+    {"RET NZ (not taken)", {0xC0}, 1, 2},
+    {"CALL NZ (not taken)", {0xC4, 0x00, 0x00}, 3, 3},
+};
+
+/* Instructions that jump to themselves, or repeat in place. The operands
+   are the address the copy is placed at, so each execution lands back on
+   its own first byte. */
+static const timing self_looping[] = {
+    {"JP nnnn", {0xC3, UNDER_TEST, 0x00}, 3, 3},
+    {"JP NZ (taken)", {0xC2, UNDER_TEST, 0x00}, 3, 3},
+    {"JP (HL)", {0xE9}, 1, 1},
+    {"JP (IX)", {0xDD, 0xE9}, 2, 2},
+    {"JR d", {0x18, 0xFE}, 2, 3},
+    {"JR NZ (taken)", {0x20, 0xFE}, 2, 3},
+    {"DJNZ (taken)", {0x10, 0xFE}, 2, 4},
+    {"LDIR (repeating)", {0xED, 0xB0}, 2, 6},
+    {"CPIR (repeating)", {0xED, 0xB1}, 2, 6},
 };
 
 static void power_on(void) {
@@ -134,61 +155,101 @@ static void power_on(void) {
   cpc_init(&cpc, ram, sizeof ram, lower_rom);
 }
 
-/* An instruction is measured by repeating it and timing the steady state,
-   never by running one alone. The Gate Array's alignment padding falls on
-   whichever cycle asks for the bus next, so a lone instruction hands part
-   of its cost to its successor: INC BC after a NOP takes six T-states, but
-   INC BC after INC BC takes eight, and eight is what the tables record.
-   The first copies are run to settle, the rest are timed. */
+/* Two ways to hold an instruction still long enough to time it, because
+   the Gate Array's alignment padding falls on whichever cycle asks for the
+   bus next: a lone instruction hands part of its cost to its successor, so
+   INC BC after a NOP takes six T-states where INC BC after INC BC takes
+   eight, and eight is what the tables record.
+
+   REPEATED lays copies end to end. It suits anything that leaves PC to run
+   on and does not change what the next copy will do.
+
+   SELF_LOOPING places one copy that jumps to itself, so each execution is
+   already a steady-state iteration. It is the only way to reach the taken
+   side of a branch, and the only way to reach a block instruction while it
+   is still repeating.
+
+   Either way the first copies are run to settle and the rest are timed.
+
+   Out of reach with both: DJNZ not taken, which needs B reset before every
+   execution; RET cc and CALL cc taken, which need a prepared stack and form
+   loops whose cost includes an instruction not yet measured here; and the
+   plain RET, CALL and RST for the same reason. Naming them is better than
+   letting their absence read as coverage. */
 #define SETTLING_COPIES 3
 #define TIMED_COPIES 8
 
-static int measure(const timing *entry, bool branch) {
+typedef enum {
+  REPEATED,
+  SELF_LOOPING,
+} measurement;
+
+/* Run one instruction to completion, returning the T-states it took. */
+static int one_instruction(void) {
+  for (int ticks = 1; ticks < 400; ticks++) {
+    cpc_tick(&cpc);
+    if (z80_instruction_complete(&cpc.cpu)) {
+      return ticks;
+    }
+  }
+  return 0;
+}
+
+static int measure(const timing *entry, measurement how) {
   power_on();
-  for (int copy = 0; copy < SETTLING_COPIES + TIMED_COPIES; copy++) {
+  int copies = how == REPEATED ? SETTLING_COPIES + TIMED_COPIES : 1;
+  for (int copy = 0; copy < copies; copy++) {
     memcpy(lower_rom + UNDER_TEST + (size_t)copy * entry->length, entry->opcodes, entry->length);
   }
   cpc.cpu.pc = UNDER_TEST;
   cpc.cpu.sp = 0x8000;
-  cpc.cpu.h = 0x90; /* (HL) points at RAM, clear of the program */
-  cpc.cpu.l = 0x00;
-  cpc.cpu.ixh = 0x90;
-  cpc.cpu.iyh = 0x90;
-  cpc.cpu.b = branch ? 2 : 1;    /* DJNZ falls through when B-1 is zero */
-  cpc.cpu.c = branch ? 2 : 1;    /* BC drives the block instructions */
-  cpc.cpu.f = branch ? 0 : 0x40; /* Z set makes NZ conditions fall through */
-  cpc.cpu.d = 0x91;
+  cpc.cpu.d = 0x91; /* (DE) is where the block instructions write */
   cpc.cpu.e = 0x00;
+  if (how == REPEATED) {
+    cpc.cpu.h = 0x90; /* (HL) points at RAM, clear of the program */
+    cpc.cpu.l = 0x00;
+    cpc.cpu.ixh = 0x90;
+    cpc.cpu.iyh = 0x90;
+    cpc.cpu.f = 0x40; /* Z set, so an NZ condition falls through */
+  } else {
+    /* Everything a self-looping instruction might jump through points at
+       the instruction itself, and the counters are set far enough from
+       their limits that none of them runs out mid-measurement. */
+    cpc.cpu.h = UNDER_TEST >> 8;
+    cpc.cpu.l = UNDER_TEST & 0xFF;
+    cpc.cpu.ixh = UNDER_TEST >> 8;
+    cpc.cpu.ixl = UNDER_TEST & 0xFF;
+    cpc.cpu.b = 0xFF;
+    cpc.cpu.c = 0x00;
+    cpc.cpu.a = 0xAA; /* matches nothing CPIR will read */
+    cpc.cpu.f = 0x00; /* Z clear, so an NZ condition is taken */
+  }
 
-  uint16_t timed_from = (uint16_t)(UNDER_TEST + SETTLING_COPIES * entry->length);
-  for (int guard = 0; guard < 4000; guard++) {
-    if (z80_instruction_complete(&cpc.cpu) && cpc.cpu.pc == timed_from) {
-      break;
+  for (int copy = 0; copy < SETTLING_COPIES; copy++) {
+    if (one_instruction() == 0) {
+      TEST_FAIL("%s never finished", entry->mnemonic);
+      return -1;
     }
-    cpc_tick(&cpc);
   }
 
   int ticks = 0;
   for (int copy = 0; copy < TIMED_COPIES; copy++) {
-    for (int guard = 0; guard < 400; guard++) {
-      cpc_tick(&cpc);
-      ticks++;
-      if (z80_instruction_complete(&cpc.cpu)) {
-        break;
-      }
-    }
+    ticks += one_instruction();
   }
   if (ticks % (4 * TIMED_COPIES) != 0) {
-    TEST_FAIL("%s took %d T-states over %d copies, not a whole number of microseconds each",
+    TEST_FAIL("%s took %d T-states over %d executions, not a whole number of microseconds each",
               entry->mnemonic, ticks, TIMED_COPIES);
     return -1;
   }
   return ticks / (4 * TIMED_COPIES);
 }
 
-static void check(const timing *entries, size_t count, bool branch) {
+static void check(const timing *entries, size_t count, measurement how) {
   for (size_t index = 0; index < count; index++) {
-    int measured = measure(&entries[index], branch);
+    int measured = measure(&entries[index], how);
+    if (measured < 0) {
+      continue;
+    }
     if (measured != entries[index].microseconds) {
       TEST_FAIL("%s took %dus, both tables say %d", entries[index].mnemonic, measured,
                 entries[index].microseconds);
@@ -197,10 +258,15 @@ static void check(const timing *entries, size_t count, bool branch) {
 }
 
 static void every_instruction_takes_whole_microseconds(void) {
-  check(timings, sizeof timings / sizeof timings[0], false);
+  check(repeated, sizeof repeated / sizeof repeated[0], REPEATED);
+}
+
+static void an_instruction_looping_on_itself_costs_the_same(void) {
+  check(self_looping, sizeof self_looping / sizeof self_looping[0], SELF_LOOPING);
 }
 
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
+  TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("timing");
 }
