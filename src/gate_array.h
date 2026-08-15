@@ -134,10 +134,14 @@ static inline bool gate_array_csync(const gate_array_t *gate_array) {
   return gate_array->sig_hsync != gate_array->sig_vsync;
 }
 
-/* Advance the CPU phase by one of its cycles, and say whether a character
- * clock falls here — the moment the CRTC is ticked and two bytes are
- * fetched. */
-bool gate_array_tick_cpu(gate_array_t *gate_array);
+/* Move on by one of the CPU's four cycles. */
+void gate_array_advance_phase(gate_array_t *gate_array);
+
+/* Whether a character clock falls on the cycle just reached — the moment
+ * the CRTC is read and two bytes are fetched. */
+static inline bool gate_array_character_clock(const gate_array_t *gate_array) {
+  return gate_array->cpu_phase == 0;
+}
 
 /* READY, held on three cycles in four so that a CPU access can only finish
  * on the fourth. This is what rounds every machine cycle up to a whole

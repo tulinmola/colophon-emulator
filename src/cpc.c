@@ -155,7 +155,8 @@ static uint16_t video_address(uint64_t crtc_pins) {
 }
 
 uint64_t cpc_tick(cpc_t *cpc) {
-  if (gate_array_tick_cpu(&cpc->gate_array)) {
+  gate_array_advance_phase(&cpc->gate_array);
+  if (gate_array_character_clock(&cpc->gate_array)) {
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
     gate_array_tick(&cpc->gate_array, (cpc->crtc_pins & CRTC_HSYNC) != 0,
                     (cpc->crtc_pins & CRTC_VSYNC) != 0);

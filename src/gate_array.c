@@ -114,9 +114,8 @@ bool gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
   return gate_array->interrupt_request;
 }
 
-bool gate_array_tick_cpu(gate_array_t *gate_array) {
+void gate_array_advance_phase(gate_array_t *gate_array) {
   gate_array->cpu_phase = (uint8_t)((gate_array->cpu_phase + 1) & 3);
-  return gate_array->cpu_phase == 0;
 }
 
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array) {
