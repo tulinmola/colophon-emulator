@@ -1532,6 +1532,17 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case M1_T2:
       pins |= Z80_MREQ | Z80_RD;
+      /* WAIT is sampled here, at the second T-state, and the request pins
+         stay asserted for as long as it holds. Every memory cycle below
+         samples at its own second T-state too; only an I/O cycle differs,
+         sampling at its third, and that one asymmetry is why IN r,(C) costs
+         a microsecond more than IN A,(n) on a CPC. Sources: Zilog UM0080
+         ch. 3 for the sample point, and the Compendium ch. 4.4.4, which
+         enumerates it per cycle type and works through what the Gate Array
+         makes of it. */
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
       /* a halted CPU keeps fetching but stands still, and so does the NMI
          acknowledge, which reads a byte only to throw it away */
       if (!cpu->halted && cpu->accepting != ACCEPT_NMI) {
@@ -1541,13 +1552,6 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
       break;
 
     case M1_T3:
-      /* WAIT holds the machine cycle for as long as it is asserted; this is how
-         a machine stretches cycles (the CPC Gate Array asserts it 3 of every 4
-         clocks). Provisional: exact sample timing to be validated when the Gate
-         Array is wired up. Same for the memory cycles below. */
-      if (pins & Z80_WAIT) {
-        return pins;
-      }
       cpu->opcode = (cpu->halted || cpu->accepting == ACCEPT_NMI) ? 0x00 : z80_data(pins);
       pins = z80_set_address(pins & ~Z80_OUT_PINS, (uint16_t)((cpu->i << 8) | cpu->r)) | Z80_RFSH;
       /* R is a 7-bit counter; bit 7 changes only via LD R,A. */
@@ -1627,13 +1631,13 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case MEM_READ_T2:
       pins |= Z80_MREQ | Z80_RD;
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
       cpu->step = MEM_READ_T3;
       break;
 
     case MEM_READ_T3:
-      if (pins & Z80_WAIT) {
-        return pins;
-      }
       z80_receive_operand(cpu, cpu->operand_code, z80_data(pins));
       pins &= ~Z80_OUT_PINS;
       if (cpu->stretch_remaining) {
@@ -1650,13 +1654,13 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case MEM_WRITE_T2:
       pins = z80_set_data(pins, z80_get_operand(cpu, cpu->operand_code)) | Z80_MREQ | Z80_WR;
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
       cpu->step = MEM_WRITE_T3;
       break;
 
     case MEM_WRITE_T3:
-      if (pins & Z80_WAIT) {
-        return pins;
-      }
       pins &= ~Z80_OUT_PINS;
       if (cpu->stretch_remaining) {
         cpu->step = STRETCH_T;
@@ -1676,13 +1680,13 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case IO_READ_T3:
       pins |= Z80_IORQ | Z80_RD;
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
       cpu->step = IO_READ_T4;
       break;
 
     case IO_READ_T4:
-      if (pins & Z80_WAIT) {
-        return pins;
-      }
       z80_receive_operand(cpu, cpu->operand_code, z80_data(pins));
       pins &= ~Z80_OUT_PINS;
       z80_start_next_cycle(cpu);
@@ -1699,13 +1703,13 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case IO_WRITE_T3:
       pins = z80_set_data(pins, z80_get_operand(cpu, cpu->operand_code)) | Z80_IORQ | Z80_WR;
+      if (pins & Z80_WAIT) {
+        return pins;
+      }
       cpu->step = IO_WRITE_T4;
       break;
 
     case IO_WRITE_T4:
-      if (pins & Z80_WAIT) {
-        return pins;
-      }
       pins &= ~Z80_OUT_PINS;
       z80_start_next_cycle(cpu);
       break;

@@ -40,9 +40,12 @@ static const size_t machine_count = sizeof machines / sizeof machines[0];
 #define CROP_WIDTH 768
 #define CROP_HEIGHT 272
 
-/* The 6128's boot screen stops changing at frame 39, measured by counting
+/* The 6128's boot screen stops changing at frame 42, measured by counting
    the text's pixels frame by frame; the other two settle sooner. Twice that
-   costs a fraction of a second and leaves room for a machine that dawdles. */
+   costs a fraction of a second and leaves room for a machine that dawdles.
+   Wait states moved this only from 39: the firmware's boot waits on the
+   300Hz ticker far more than it computes, so a CPU a quarter slower barely
+   shows. */
 #define DEFAULT_FRAMES 78
 
 /* The firmware scans the keyboard once a frame, off the 50Hz tick, so a key

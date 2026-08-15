@@ -10,10 +10,14 @@
  * carries the INT line to the CPU and hands over the fetched bytes; this
  * file does none of that.
  *
+ * It is also the machine's clock: from 16MHz it makes the CPU's 4MHz and
+ * the character clock's 1MHz, and it holds the CPU off the RAM for three
+ * cycles in four so the video fetch always wins. That hold is the READY
+ * signal, wired to the Z80's WAIT.
+ *
  * Implemented: the registers, the interrupt generator, the byte-to-pixel
- * serialiser and the composite sync. Not yet: the READY signal that
- * stretches the CPU's cycles, and the 40010's habit of starting mode 2 one
- * pixel early — they arrive with the timing rung and with Shaker.
+ * serialiser, the composite sync and READY. Not yet: the 40010's habit of
+ * starting mode 2 one pixel early, which waits for Shaker.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -96,6 +100,11 @@ typedef struct {
      fetched last time. */
   uint8_t latched_bytes[2];
   bool latched_display;
+
+  /* Where the machine stands in the four CPU cycles that make a character.
+     The real chip runs a sequencer over sixteen 16MHz ticks; counting the
+     CPU's four is the same thing seen from further away. */
+  uint8_t cpu_phase;
 } gate_array_t;
 
 /* Power-on. Both ROM enables come up enabled — the reset vector is fetched
@@ -123,6 +132,25 @@ void gate_array_interrupt_acknowledged(gate_array_t *gate_array);
  * is what lets a monitor hold both locks off one wire (ch. 16.2.2). */
 static inline bool gate_array_csync(const gate_array_t *gate_array) {
   return gate_array->sig_hsync != gate_array->sig_vsync;
+}
+
+/* Advance the CPU phase by one of its cycles, and say whether a character
+ * clock falls here — the moment the CRTC is ticked and two bytes are
+ * fetched. */
+bool gate_array_tick_cpu(gate_array_t *gate_array);
+
+/* READY, held on three cycles in four so that a CPU access can only finish
+ * on the fourth. This is what rounds every machine cycle up to a whole
+ * microsecond and costs the CPU a quarter of its nominal speed.
+ *
+ * The chip knows nothing about which cycle the CPU is in: it "continually
+ * generates 3 Tw followed by a no-Tw cycle" (Compendium ch. 4.4.4), and the
+ * CPU meets that pattern wherever its own sampling happens to fall. An
+ * instruction whose T-states do not divide by four leaves the next one to
+ * be stretched at its opcode fetch, which is how everything ends up
+ * "linearized" onto the microsecond. */
+static inline bool gate_array_ready(const gate_array_t *gate_array) {
+  return gate_array->cpu_phase != 0;
 }
 
 /* Serialise one character. The two bytes are those the machine has just

@@ -75,9 +75,6 @@ typedef struct {
      it programs the CRTC from. */
   bool fifty_hz;
   uint8_t manufacturer; /* 0-7; seven is Amstrad, see cpc_manufacturer */
-  uint8_t clock_phase;  /* of four: the CRTC and Gate Array receive one
-                           character clock per four CPU ticks (16MHz master:
-                           4MHz Z80, 1MHz character clock) */
 
   /* Host-provided storage; the core allocates nothing. 64K means no PAL is
      fitted and banking commands die on the empty socket; 128K is a 6128,

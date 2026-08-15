@@ -258,19 +258,26 @@ static void test_wait_holds_the_bus_steady(void) {
   const uint8_t program[] = {0x00};
   load(cpu.pc, program, sizeof program);
 
+  /* The request pins go out before WAIT is sampled and stay out for as long
+     as it holds, which is what the datasheet's timing diagram shows: the
+     bus is steady from one stalled tick to the next, not from before the
+     stall began. */
   uint64_t pins = 0;
+  uint64_t bus_while_stalled = 0;
   int stalls = 0;
   for (int ticks = 1; ticks <= 8; ticks++) {
     const uint8_t step_before = cpu.step;
-    const uint64_t bus_before = pins & ~Z80_WAIT;
     pins = z80_tick(&cpu, pins | Z80_WAIT);
     if (cpu.step == step_before) {
-      TEST_EQUAL(pins & ~Z80_WAIT, bus_before);
+      if (stalls > 0) {
+        TEST_EQUAL(pins & ~Z80_WAIT, bus_while_stalled);
+      }
+      bus_while_stalled = pins & ~Z80_WAIT;
       stalls++;
     }
     pins = service_bus(pins);
   }
-  TEST_CHECK(stalls > 0);
+  TEST_CHECK(stalls > 1);
 }
 
 /* Field by field rather than memcmp: the struct has padding, and padding
@@ -332,7 +339,9 @@ static void test_wait_changes_timing_only(void) {
     waited.sp = 0x8000;
     memset(ram, 0, sizeof ram);
     load(waited.pc, program, sizeof program);
-    const int waited_ticks = run_instruction_waiting(&waited, 0xAA);
+    /* WAIT held on even ticks, which is where the second T-state of the
+       opening fetch falls: every instruction stalls at least once. */
+    const int waited_ticks = run_instruction_waiting(&waited, 0x55);
 
     if (waited_ticks <= plain_ticks) {
       TEST_FAIL("opcode %02X took %d T-states waiting, %d without", opcode, waited_ticks,

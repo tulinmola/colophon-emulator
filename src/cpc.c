@@ -158,7 +158,7 @@ static uint16_t video_address(uint64_t crtc_pins) {
 }
 
 uint64_t cpc_tick(cpc_t *cpc) {
-  if (cpc->clock_phase == 0) {
+  if (gate_array_tick_cpu(&cpc->gate_array)) {
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
     gate_array_tick(&cpc->gate_array, (cpc->crtc_pins & CRTC_HSYNC) != 0,
                     (cpc->crtc_pins & CRTC_VSYNC) != 0);
@@ -171,15 +171,20 @@ uint64_t cpc_tick(cpc_t *cpc) {
     monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
                     gate_array_csync(&cpc->gate_array));
   }
-  cpc->clock_phase = (uint8_t)((cpc->clock_phase + 1) & 3);
 
   /* The Gate Array's INT line runs to the CPU; the machine holds it until
-     the acknowledge below drops it. */
+     the acknowledge below drops it. READY runs to the CPU's WAIT, which is
+     what keeps the CPU off the RAM the video hardware is using. */
   uint64_t bus = cpc->pins;
   if (cpc->gate_array.interrupt_request) {
     bus |= Z80_INT;
   } else {
     bus &= ~Z80_INT;
+  }
+  if (gate_array_ready(&cpc->gate_array)) {
+    bus |= Z80_WAIT;
+  } else {
+    bus &= ~Z80_WAIT;
   }
 
   uint64_t pins = z80_tick(&cpc->cpu, bus);
