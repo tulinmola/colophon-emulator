@@ -43,6 +43,38 @@ static uint64_t at(int scanline, int character) {
   return recorded[(size_t)scanline * SCANLINE + (size_t)character];
 }
 
+static void run_characters(int count) {
+  for (int character = 0; character < count; character++) {
+    crtc_tick(&crtc);
+  }
+}
+
+/* Whole scanlines from wherever C0 stands, which is a line start in every
+   test that has not moved R0. */
+static void run_scanlines(int count) { run_characters(count * SCANLINE); }
+
+/* Stop on the first character of the row named, however long the chip takes
+   to get there; 4000 scanlines is a dozen frames and a failed loop. */
+static bool run_to_row(uint8_t row) {
+  for (int scanline = 0; scanline < 4000; scanline++) {
+    if (crtc.c4 == row && crtc.c9 == 0 && crtc.c0 == 0) {
+      return true;
+    }
+    run_scanlines(1);
+  }
+  return false;
+}
+
+/* Scanlines from one frame start to the next. */
+static long frame_scanlines(void) {
+  long ticks = 0;
+  do {
+    crtc_tick(&crtc);
+    ticks++;
+  } while (crtc.c0 != 0 || crtc.c4 != 0 || crtc.c9 != 0);
+  return ticks / SCANLINE;
+}
+
 static void reset_state(void) {
   crtc_init(&crtc);
   TEST_EQUAL(crtc.c0, 0);
@@ -166,6 +198,137 @@ static void the_frame_locks_at_19968(void) {
   TEST_EQUAL(crtc_ma(recorded[FRAME_TICKS]), 0x3000);
 }
 
+static void c9_runs_to_its_own_top_when_r9_drops_below_it(void) {
+  /* A limit written under the counter watching it does not stop the row:
+     C9 counts to 31 and loops back before it can match again (ch.
+     10.3.1.1). Eight bits of counter would take it to 255 instead, and a
+     row 256 scanlines long is a frame that never ends. */
+  program_standard();
+  run_scanlines(3);
+  TEST_EQUAL(crtc.c9, 3);
+  run_characters(10); /* past C0=2, where the last line is decided */
+  write_register(9, 1);
+
+  uint8_t highest = 0;
+  int scanlines_until_the_row_ends = 0;
+  for (int scanline = 1; scanline <= 40 && crtc.c4 == 0; scanline++) {
+    run_scanlines(1);
+    if (crtc.c9 > highest) {
+      highest = crtc.c9;
+    }
+    scanlines_until_the_row_ends = scanline;
+  }
+  TEST_EQUAL(highest, 31);
+  TEST_EQUAL(crtc.c4, 1);
+  TEST_EQUAL(scanlines_until_the_row_ends, 31);
+}
+
+static void c4_runs_to_its_own_top_when_r4_drops_below_it(void) {
+  /* The same for the row counter, which spans seven bits: it climbs to 127
+     and loops rather than ending the frame where R4 now stands (ch. 12.1).
+     R5 is 0 here, which is what leaves the counter to the long way round. */
+  program_standard();
+  TEST_CHECK(run_to_row(10));
+  run_characters(10);
+  write_register(4, 3);
+
+  uint8_t highest = 0;
+  for (int scanline = 0; scanline < 8 * 130; scanline++) {
+    run_scanlines(1);
+    if (crtc.c4 > highest) {
+      highest = crtc.c4;
+    }
+    if (crtc.c4 == 0) {
+      break;
+    }
+  }
+  TEST_EQUAL(highest, 127);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
+static void the_vertical_adjustment_brings_c4_back_from_past_r4(void) {
+  /* The overflow above is written "excluding vertical adjustment": with R5
+     set, the line where C9 meets R9 begins the adjustment whatever C4 has
+     climbed to, and finishing it returns C4 to 0 (ch. 12.1, 12.2). This is
+     how a split screen resynchronises after moving R4 under its own row
+     counter, instead of waiting out 117 rows. */
+  program_standard();
+  write_register(5, 10);
+  TEST_CHECK(run_to_row(10));
+  run_characters(10);
+  write_register(4, 3);
+
+  int scanlines = 0;
+  while (crtc.c4 != 0 && scanlines < 200) {
+    run_scanlines(1);
+    scanlines++;
+  }
+  TEST_EQUAL(crtc.c4, 0);
+  /* The rest of row 10, then C9 climbing from 8 to R5. */
+  TEST_EQUAL(scanlines, 10);
+}
+
+static void the_last_line_holds_once_it_is_decided(void) {
+  /* C4 and C9 are held against their limits while C0 is 0 or 1, and the
+     chip stops asking after that: a register written later in the line can
+     no longer take the state back (ch. 10.3.1.2, 12.2). */
+  program_standard();
+  TEST_CHECK(run_to_row(38)); /* R4: the frame's last row */
+  run_scanlines(7);           /* its last scanline, where C9 meets R9 */
+  TEST_EQUAL(crtc.c9, 7);
+  run_characters(10);
+  write_register(4, 0); /* C4 is no longer R4, and it no longer matters */
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+static void a_late_write_can_still_end_the_frame(void) {
+  /* The other direction of the same rule: a write after C0=1 that brings
+     C4 and R4 together does set the state (ch. 10.3.1.2). */
+  program_standard();
+  TEST_CHECK(run_to_row(5));
+  run_scanlines(7);
+  run_characters(10);
+  write_register(4, 5);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
+static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
+  /* The firmware's other table, at &5D5 of the 6128 OS ROM: 32 rows of 8
+     scanlines and six adjustment lines (ch. 11.2.2). */
+  program_standard();
+  TEST_EQUAL(frame_scanlines(), 312);
+  write_register(4, 31);
+  write_register(5, 6);
+  write_register(7, 27);
+  TEST_EQUAL(frame_scanlines(), 262);
+  TEST_EQUAL(frame_scanlines(), 262);
+}
+
+static void one_vsync_per_equality_of_c4_and_r7(void) {
+  /* R7 given the value C4 already holds starts a VSYNC where the beam
+     stands. The same equality cannot start a second: C4 must move, or R7
+     must be written again (ch. 16.3, 16.4.1). */
+  program_standard();
+  write_register(9, 31); /* rows long enough to hold a whole VSYNC */
+  TEST_CHECK(run_to_row(1));
+  TEST_CHECK(!crtc.vsync);
+
+  write_register(7, 1);
+  crtc_tick(&crtc);
+  TEST_CHECK(crtc.vsync);
+  run_scanlines(8); /* R3's high nibble */
+  TEST_CHECK(!crtc.vsync);
+  run_scanlines(10); /* still row 1, and still no second VSYNC */
+  TEST_CHECK(!crtc.vsync);
+
+  write_register(7, 1);
+  crtc_tick(&crtc);
+  TEST_CHECK(crtc.vsync);
+}
+
 int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(select_wears_five_bits);
@@ -177,5 +340,12 @@ int main(void) {
   TEST_RUN(display_covers_40_by_200);
   TEST_RUN(the_video_pointer_walks_the_documented_rows);
   TEST_RUN(the_frame_locks_at_19968);
+  TEST_RUN(c9_runs_to_its_own_top_when_r9_drops_below_it);
+  TEST_RUN(c4_runs_to_its_own_top_when_r4_drops_below_it);
+  TEST_RUN(the_vertical_adjustment_brings_c4_back_from_past_r4);
+  TEST_RUN(the_last_line_holds_once_it_is_decided);
+  TEST_RUN(a_late_write_can_still_end_the_frame);
+  TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
+  TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   return TEST_REPORT("crtc");
 }

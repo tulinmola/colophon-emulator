@@ -8,11 +8,14 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Implemented: the ideal frame construction of Compendium ch. 6, worn by
- * type 0 (HD6845S/UM6845): its register widths, its readable set, its
- * VMA/VMA' reload rules. Not yet: interlace and skew (R8 is stored, unread),
- * cursor, lightpen, and the per-type divergences — each arrives when Shaker
- * can judge it.
+ * Implemented: the frame construction of Compendium ch. 6 as type 0
+ * (HD6845S/UM6845) performs it — its register widths, its readable set, its
+ * VMA/VMA' reload rules, the counter widths a program can overrun, the last
+ * line decided while C0 is 0 or 1, the vertical adjustment spent on C9, and
+ * the block that stops one VSYNC condition serving twice. Not yet: interlace
+ * and skew (R8 is stored, unread), cursor, lightpen, the first three
+ * microseconds of a line (ch. 13.2), and the per-type divergences — each
+ * arrives when Shaker can judge it.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -58,14 +61,25 @@ typedef struct {
   uint8_t registers[18];
   uint8_t address_register; /* AR, 5 bits: the register number a select names */
 
-  /* Counters, named as the Compendium names them (ch. 3.1). */
-  uint8_t c0;  /* horizontal character counter */
-  uint8_t c9;  /* scanline within the character row; drives RA */
-  uint8_t c4;  /* character row counter */
-  uint8_t c5;  /* vertical-adjustment scanline counter */
+  /* Counters, named as the Compendium names them (ch. 3.1). Each is
+     narrower than the byte holding it, and a program can leave one above
+     its limit; the widths are what bring it back (ch. 10.3.1.1, 12.1). */
+  uint8_t c0;  /* horizontal character counter, 8 bits */
+  uint8_t c9;  /* scanline within the character row, 5 bits; drives RA. Type
+                  0 has no C5 and spends C9 on the vertical adjustment too
+                  (ch. 11.2.2) */
+  uint8_t c4;  /* character row counter, 7 bits */
   uint8_t c3l; /* HSYNC width counter, 4 bits: R3 low nibble, 0 counts 16 */
   uint8_t c3h; /* VSYNC scanline counter, 4 bits: R3 high nibble, 0 counts 16 */
+
+  /* This line ends the frame. Decided while C0 is 0 or 1 and held for the
+     rest of the line, so a register written afterwards cannot take it back
+     (ch. 10.3.1.2). */
+  bool last_line;
   bool in_vertical_adjustment;
+  /* One C4/R7 equality raises one VSYNC: the comparison must change, by C4
+     moving or R7 being written, before it raises another (ch. 16.3). */
+  bool vsync_blocked;
 
   /* VMA and VMA', the two internal pointers (ch. 20): VMA runs, one
      character per tick; VMA' is the transient row latch that captures VMA
