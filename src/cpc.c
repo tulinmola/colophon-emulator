@@ -64,34 +64,6 @@ static void run_psg(cpc_t *cpc) {
   ppi_present(&cpc->ppi, PPI_PORT_A, bus);
 }
 
-static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
-  /* Devices decode single address bits, so one write can reach several at
-     once; each test below is independent — "I/O port allocation" (Rison &
-     Thacker). */
-  bool pal_fitted = cpc->ram_size >= 0x20000;
-  if ((address & 0x8000) == 0 && (data & 0xC0) == 0xC0 && pal_fitted) {
-    cpc->mmr = data;
-    cpc_remap(cpc);
-  }
-  if ((address & 0xC000) == 0x4000) {
-    gate_array_write(&cpc->gate_array, data);
-    if ((data & 0xC0) == 0x80) {
-      cpc_remap(cpc); /* RMR may have moved the ROM enables */
-    }
-  }
-  if ((address & 0x2000) == 0) {
-    cpc->upper_rom_number = data;
-    cpc_remap(cpc);
-  }
-  if ((address & 0x0800) == 0) {
-    /* The PPI, its two low address lines choosing the port. Writing any of
-       them can change what the PSG is being told, so the chip is run
-       afterwards. */
-    ppi_write(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03), data);
-    run_psg(cpc);
-  }
-}
-
 /* The board wires the CRTC bus from the address lines: RS is A8 and R/W is
    A9, so &BC00-&BF00 are select, write, status and read — "The CRTC" (Grim),
    I/O ports. The chip is strobed by any I/O request when A14 is low: a CPU
@@ -106,6 +78,55 @@ static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
     pins |= CRTC_RW;
   }
   return crtc_access(&cpc->crtc, pins);
+}
+
+/* Devices decode single address bits, so one access can reach several at
+   once; every test in the two functions below is independent, and their
+   order is the address lines' and carries no meaning — "I/O port
+   allocation" (Rison & Thacker). */
+static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
+  bool pal_fitted = cpc->ram_size >= 0x20000;
+  if ((address & 0x8000) == 0 && (data & 0xC0) == 0xC0 && pal_fitted) {
+    cpc->mmr = data;
+    cpc_remap(cpc);
+  }
+  if ((address & 0xC000) == 0x4000) {
+    gate_array_write(&cpc->gate_array, data);
+    if ((data & 0xC0) == 0x80) {
+      cpc_remap(cpc); /* RMR may have moved the ROM enables */
+    }
+  }
+  if ((address & 0x4000) == 0) {
+    crtc_bus(cpc, address, data);
+  }
+  if ((address & 0x2000) == 0) {
+    cpc->upper_rom_number = data;
+    cpc_remap(cpc);
+  }
+  if ((address & 0x0800) == 0) {
+    /* The PPI, its two low address lines choosing the port. Writing any of
+       them can change what the PSG is being told, so the chip is run
+       afterwards. */
+    ppi_write(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03), data);
+    run_psg(cpc);
+  }
+}
+
+/* The bus floats at &FF by convention, and the last device to drive it wins.
+   On hardware the Gate Array would execute the floating byte as a command
+   ("The Gate Array"); &FF dispatches to the write-only PAL, so even that is
+   silence. */
+static uint8_t io_read(cpc_t *cpc, uint16_t address) {
+  uint8_t data = 0xFF;
+  if ((address & 0x4000) == 0) {
+    data = crtc_data(crtc_bus(cpc, address, data));
+  }
+  if ((address & 0x0800) == 0) {
+    present_port_b(cpc);
+    run_psg(cpc);
+    data = ppi_read(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03));
+  }
+  return data;
 }
 
 void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom) {
@@ -199,27 +220,9 @@ uint64_t cpc_tick(cpc_t *cpc) {
     uint16_t address = z80_address(pins);
     cpc->write_page[address >> 14][address & 0x3FFF] = z80_data(pins);
   } else if ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
-    uint16_t address = z80_address(pins);
-    io_write(cpc, address, z80_data(pins));
-    if (!(address & 0x4000)) {
-      crtc_bus(cpc, address, z80_data(pins));
-    }
+    io_write(cpc, z80_address(pins), z80_data(pins));
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
-    /* The bus floats at &FF by convention; a device that drives it
-       overwrites. On hardware the Gate Array would execute the floating
-       byte as a command ("The Gate Array"); &FF dispatches to the
-       write-only PAL, so even that is silence. */
-    uint16_t address = z80_address(pins);
-    uint8_t data = 0xFF;
-    if (!(address & 0x4000)) {
-      data = crtc_data(crtc_bus(cpc, address, data));
-    }
-    if (!(address & 0x0800)) {
-      present_port_b(cpc);
-      run_psg(cpc);
-      data = ppi_read(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03));
-    }
-    pins = z80_set_data(pins, data);
+    pins = z80_set_data(pins, io_read(cpc, z80_address(pins)));
   }
   cpc->pins = pins;
   return pins;
