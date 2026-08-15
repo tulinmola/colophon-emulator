@@ -3,15 +3,16 @@
  *
  * This is the machine file: the one place that knows the chips are soldered
  * into a CPC. It owns the memory map and the I/O decode; the chips it wires
- * know nothing about it. At this stage the machine is a Z80, its memory,
- * and a CRTC counting out the frame — no pixels yet, no wait states, no
- * interrupts. Each chip claims its registers as its module arrives.
+ * know nothing about it. At this stage the machine is a Z80, its memory, a
+ * CRTC counting out the frame, and a Gate Array raising the 300Hz interrupt
+ * from it — no pixels yet, no wait states. Each chip claims its registers
+ * as its module arrives.
  *
  * Sources:
  * - "The Gate Array" (Grim),
  *   https://www.grimware.org/doku.php/documentations/devices/gatearray — the
- *   &7Fxx command dispatch (data bits 7-6 select the register), RMR's
- *   ROM-enable bits, the eight MMR banking configurations.
+ *   &7Fxx command dispatch the wiring routes by, and the eight MMR banking
+ *   configurations.
  * - "Amstrad CPC Ram Paging" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/rampage.html — the 6128's PAL decodes
  *   only MMR bits 2-0.
@@ -33,6 +34,7 @@
 #include <stdint.h>
 
 #include "crtc.h"
+#include "gate_array.h"
 #include "z80.h"
 
 typedef struct {
@@ -40,9 +42,11 @@ typedef struct {
   uint64_t pins; /* the bus between ticks */
 
   crtc_t crtc;
-  uint64_t crtc_pins;  /* the CRTC's outputs as of its last character clock */
-  uint8_t clock_phase; /* of four: the CRTC receives one character clock per
-                          four CPU ticks (16MHz master: 4MHz Z80, 1MHz CRTC) */
+  uint64_t crtc_pins; /* the CRTC's outputs as of its last character clock */
+  gate_array_t gate_array;
+  uint8_t clock_phase; /* of four: the CRTC and Gate Array receive one
+                          character clock per four CPU ticks (16MHz master:
+                          4MHz Z80, 1MHz character clock) */
 
   /* Host-provided storage; the core allocates nothing. 64K means no PAL is
      fitted and banking commands die on the empty socket; 128K is a 6128,
@@ -59,13 +63,8 @@ typedef struct {
      expansions fit. */
   uint8_t mmr;
 
-  /* RMR bits 3 and 2, parked here until the Gate Array module exists to own
-     the register. In RMR a cleared bit enables; these store the enabled
-     state directly. */
-  bool lower_rom_enabled;
-  bool upper_rom_enabled;
-
-  /* Derived from the registers above by remap(); cache, never the state. */
+  /* Derived from MMR and the Gate Array's ROM enables by remap(); cache,
+     never the state. */
   const uint8_t *read_page[4];
   uint8_t *write_page[4];
 } cpc_t;

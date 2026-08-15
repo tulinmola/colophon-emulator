@@ -40,6 +40,38 @@ static bool run_to_halt(void) {
   return false;
 }
 
+static void run_ticks(long count) {
+  for (long tick = 0; tick < count; tick++) {
+    cpc_tick(&cpc);
+  }
+}
+
+/* Append a select-and-write pair for one CRTC register. */
+static size_t append_crtc_write(uint8_t *program, size_t length, uint8_t reg, uint8_t value) {
+  program[length++] = 0x01; /* LD BC,&BC00+reg */
+  program[length++] = reg;
+  program[length++] = 0xBC;
+  program[length++] = 0xED; /* OUT (C),C */
+  program[length++] = 0x49;
+  program[length++] = 0x01; /* LD BC,&BD00+value */
+  program[length++] = value;
+  program[length++] = 0xBD;
+  program[length++] = 0xED; /* OUT (C),C */
+  program[length++] = 0x49;
+  return length;
+}
+
+/* The syncs of the standard frame: R0, R2, R3, R4, R7, R9. */
+static size_t append_standard_syncs(uint8_t *program, size_t length) {
+  length = append_crtc_write(program, length, 0, 63);
+  length = append_crtc_write(program, length, 2, 46);
+  length = append_crtc_write(program, length, 3, 0x8E);
+  length = append_crtc_write(program, length, 4, 38);
+  length = append_crtc_write(program, length, 7, 30);
+  length = append_crtc_write(program, length, 9, 7);
+  return length;
+}
+
 static void reset_shows_both_roms_and_the_base_map(void) {
   power_on(sizeof ram);
   lower_rom[0x123] = 0x11;
@@ -196,8 +228,8 @@ static void one_write_reaches_the_pal_and_the_rom_latch(void) {
   TEST_CHECK(run_to_halt());
   TEST_EQUAL(cpc.mmr, 0xC1);
   TEST_EQUAL(cpc.upper_rom_number, 0xC1);
-  TEST_CHECK(cpc.lower_rom_enabled);
-  TEST_CHECK(cpc.upper_rom_enabled);
+  TEST_CHECK(cpc.gate_array.lower_rom_enabled);
+  TEST_CHECK(cpc.gate_array.upper_rom_enabled);
   /* A14 is low too, so the CRTC heard the same write as a select. */
   TEST_EQUAL(cpc.crtc.address_register, 0xC1 & 0x1F);
 }
@@ -212,8 +244,8 @@ static void the_gate_array_needs_address_bit_14(void) {
   };
   rom_program(program, sizeof program);
   TEST_CHECK(run_to_halt());
-  TEST_CHECK(cpc.lower_rom_enabled);
-  TEST_CHECK(cpc.upper_rom_enabled);
+  TEST_CHECK(cpc.gate_array.lower_rom_enabled);
+  TEST_CHECK(cpc.gate_array.upper_rom_enabled);
   TEST_EQUAL(cpc_peek(&cpc, 0), 0x01); /* still the ROM's first byte */
 }
 
@@ -226,16 +258,7 @@ static void the_crtc_learns_the_firmware_table(void) {
   uint8_t program[161];
   size_t length = 0;
   for (int reg = 15; reg >= 0; reg--) {
-    program[length++] = 0x01; /* LD BC,&BC00+reg */
-    program[length++] = (uint8_t)reg;
-    program[length++] = 0xBC;
-    program[length++] = 0xED; /* OUT (C),C */
-    program[length++] = 0x49;
-    program[length++] = 0x01; /* LD BC,&BD00+value */
-    program[length++] = table[reg];
-    program[length++] = 0xBD;
-    program[length++] = 0xED; /* OUT (C),C */
-    program[length++] = 0x49;
+    length = append_crtc_write(program, length, (uint8_t)reg, table[reg]);
   }
   program[length++] = 0x76; /* HALT */
   rom_program(program, length);
@@ -283,6 +306,72 @@ static void a_machine_tick_is_a_quarter_character(void) {
   TEST_EQUAL(cpc.crtc.c0, c0_at_halt);
 }
 
+static void pens_and_inks_reach_the_gate_array(void) {
+  power_on(sizeof ram);
+  const uint8_t program[] = {
+      0x01, 0x05, 0x7F, /* LD BC,&7F05 — PENR: pen 5 */
+      0xED, 0x49,       /* OUT (C),C */
+      0x01, 0x54, 0x7F, /* LD BC,&7F54 — INKR: colour &14 */
+      0xED, 0x49,       /* OUT (C),C */
+      0x01, 0x10, 0x7F, /* LD BC,&7F10 — PENR: the border */
+      0xED, 0x49,       /* OUT (C),C */
+      0x01, 0x4B, 0x7F, /* LD BC,&7F4B — INKR: colour &0B */
+      0xED, 0x49,       /* OUT (C),C */
+      0x76,             /* HALT */
+  };
+  rom_program(program, sizeof program);
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(cpc.gate_array.inks[5], 0x14);
+  TEST_EQUAL(cpc.gate_array.inks[16], 0x0B);
+}
+
+static void the_gate_array_interrupts_six_times_a_frame(void) {
+  power_on(sizeof ram);
+  /* The interrupt handler, at the mode-1 vector inside our fabricated
+     ROM. */
+  const uint8_t handler[] = {
+      0x3C, /* INC A — count the interrupt */
+      0xFB, /* EI */
+      0xC9, /* RET */
+  };
+  memcpy(lower_rom + 0x38, handler, sizeof handler);
+  uint8_t body[80];
+  size_t length = 0;
+  body[length++] = 0x31; /* LD SP,&C000 — the stack must live below the
+                            upper ROM: pushes fall through to RAM anywhere,
+                            but pops beneath an enabled ROM read the ROM */
+  body[length++] = 0x00;
+  body[length++] = 0xC0;
+  length = append_standard_syncs(body, length);
+  body[length++] = 0xAF; /* XOR A */
+  body[length++] = 0xED; /* IM 1 */
+  body[length++] = 0x56;
+  body[length++] = 0xFB; /* EI */
+  body[length++] = 0x76; /* HALT */
+  body[length++] = 0x18; /* JR back to the HALT */
+  body[length++] = 0xFD;
+  memcpy(lower_rom + 0x100, body, length);
+  const uint8_t entry[] = {0xC3, 0x00, 0x01}; /* JP &0100 */
+  memcpy(lower_rom, entry, sizeof entry);
+  /* Two and a half frames of 312 lines at 256 T-states the line: at 300Hz
+     that is 14 or 15 interrupts. */
+  run_ticks(200000);
+  TEST_CHECK(cpc.cpu.a >= 12 && cpc.cpu.a <= 16);
+}
+
+static void an_unheard_interrupt_is_held(void) {
+  power_on(sizeof ram);
+  uint8_t body[70];
+  size_t length = append_standard_syncs(body, 0);
+  body[length++] = 0x76; /* HALT, interrupts never enabled */
+  memcpy(lower_rom + 0x100, body, length);
+  const uint8_t entry[] = {0xC3, 0x00, 0x01}; /* JP &0100 */
+  memcpy(lower_rom, entry, sizeof entry);
+  run_ticks(100000);
+  TEST_CHECK(cpc.cpu.halted);
+  TEST_CHECK(cpc.gate_array.interrupt_request); /* maintained, unheard */
+}
+
 static void poke_lands_beneath_the_rom(void) {
   power_on(sizeof ram);
   lower_rom[0] = 0xAB;
@@ -306,6 +395,9 @@ int main(void) {
   TEST_RUN(the_crtc_learns_the_firmware_table);
   TEST_RUN(the_cpu_reads_the_crtc_back);
   TEST_RUN(a_machine_tick_is_a_quarter_character);
+  TEST_RUN(pens_and_inks_reach_the_gate_array);
+  TEST_RUN(the_gate_array_interrupts_six_times_a_frame);
+  TEST_RUN(an_unheard_interrupt_is_held);
   TEST_RUN(poke_lands_beneath_the_rom);
   return TEST_REPORT("cpc");
 }
