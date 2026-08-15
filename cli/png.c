@@ -8,21 +8,12 @@
 #include <string.h>
 
 static uint32_t crc32_of(const uint8_t *data, size_t length, uint32_t crc) {
-  /* The polynomial the PNG specification prints, reflected. */
-  static uint32_t table[256];
-  static bool built = false;
-  if (!built) {
-    for (uint32_t index = 0; index < 256; index++) {
-      uint32_t value = index;
-      for (int bit = 0; bit < 8; bit++) {
-        value = (value & 1) ? (0xEDB88320u ^ (value >> 1)) : (value >> 1);
-      }
-      table[index] = value;
-    }
-    built = true;
-  }
   for (size_t index = 0; index < length; index++) {
-    crc = table[(crc ^ data[index]) & 0xFF] ^ (crc >> 8);
+    crc ^= data[index];
+    for (int bit = 0; bit < 8; bit++) {
+      /* The polynomial the PNG specification prints, reflected. */
+      crc = (crc & 1) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
+    }
   }
   return crc;
 }

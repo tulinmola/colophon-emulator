@@ -16,12 +16,20 @@
 
 #define OUTPUT_PATH "build/png_test_output.png"
 
+/* The writer works a bit at a time; this works from the table the
+   specification prints beside it. They are different on purpose: two spellings
+   of one algorithm can disagree, and one spelling checking itself cannot. */
 static uint32_t crc32_check(const uint8_t *data, size_t length, uint32_t crc) {
-  for (size_t index = 0; index < length; index++) {
-    crc ^= data[index];
+  uint32_t table[256];
+  for (uint32_t index = 0; index < 256; index++) {
+    uint32_t value = index;
     for (int bit = 0; bit < 8; bit++) {
-      crc = (crc & 1) ? (0xEDB88320u ^ (crc >> 1)) : (crc >> 1);
+      value = (value & 1) ? (0xEDB88320u ^ (value >> 1)) : (value >> 1);
     }
+    table[index] = value;
+  }
+  for (size_t index = 0; index < length; index++) {
+    crc = table[(crc ^ data[index]) & 0xFF] ^ (crc >> 8);
   }
   return crc;
 }
