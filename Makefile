@@ -10,6 +10,7 @@ PPI_C = src/ppi.c
 PSG_C = src/psg.c
 KEYBOARD_C = src/keyboard.c
 SNAPSHOT_C = src/snapshot.c
+FLOPPY_C = src/floppy.c src/dsk.c
 MACHINE_C = src/cpc.c
 Z80_TEST_C = test/z80_test.c
 CRTC_TEST_C = test/crtc_test.c
@@ -22,13 +23,14 @@ CPC_TEST_C = test/cpc_test.c
 PNG_TEST_C = test/png_test.c
 TIMING_TEST_C = test/timing_test.c
 SNAPSHOT_TEST_C = test/snapshot_test.c
+FLOPPY_TEST_C = test/floppy_test.c
 FIRMWARE_TEST_C = test/firmware_test.c
 SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
 EXERCISER_C = test/z80_exerciser_test.c
 CORE_C = $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(PPI_C) $(PSG_C) $(KEYBOARD_C) $(MACHINE_C) $(SNAPSHOT_C)
 PNG_C = cli/png.c
 CLI_C = cli/main.c
-SRC_ALL = $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/ppi.h src/psg.h src/keyboard.h src/cpc.h src/snapshot.h $(PNG_C) $(CLI_C) cli/png.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/test.h
+SRC_ALL = $(CORE_C) $(FLOPPY_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/ppi.h src/psg.h src/keyboard.h src/cpc.h src/snapshot.h src/floppy.h src/dsk.h $(PNG_C) $(CLI_C) cli/png.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/test.h
 
 SINGLE_STEP_DATA = test/data/SingleStepTests/z80/v1
 EXERCISER_DATA = test/data/ZEXALL
@@ -38,7 +40,7 @@ EXERCISER_GROUPS ?= 12
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/cpc_test $(BUILD)/timing_test $(BUILD)/snapshot_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/cpc_test $(BUILD)/timing_test $(BUILD)/snapshot_test $(BUILD)/floppy_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
@@ -90,6 +92,10 @@ $(BUILD)/snapshot_test: $(CORE_C) src/snapshot.h $(SNAPSHOT_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(SNAPSHOT_TEST_C) -o $@
 
+$(BUILD)/floppy_test: $(FLOPPY_C) src/floppy.h src/dsk.h $(FLOPPY_TEST_C) test/test.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Itest $(FLOPPY_C) $(FLOPPY_TEST_C) -o $@
+
 $(BUILD)/png_test: $(PNG_C) cli/png.h $(PNG_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Icli -Itest $(PNG_C) $(PNG_TEST_C) -o $@
@@ -103,7 +109,7 @@ $(BUILD)/z80_exerciser_test: $(SRC_C) src/z80.h $(EXERCISER_C)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SRC_C) $(EXERCISER_C) -o $@
 
 # The fast tier: hermetic, no network, runs on every change.
-test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/cpc_test $(BUILD)/timing_test $(BUILD)/snapshot_test $(BUILD)/png_test
+test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/cpc_test $(BUILD)/timing_test $(BUILD)/snapshot_test $(BUILD)/floppy_test $(BUILD)/png_test
 	@$(BUILD)/z80_test
 	@$(BUILD)/crtc_test
 	@$(BUILD)/gate_array_test
@@ -114,6 +120,7 @@ test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/mon
 	@$(BUILD)/cpc_test
 	@$(BUILD)/timing_test
 	@$(BUILD)/snapshot_test
+	@$(BUILD)/floppy_test
 	@$(BUILD)/png_test
 
 # The firmware images, fetched and pinned by hash. Needed to run a machine,
@@ -149,7 +156,7 @@ format-check:
 	$(CLANG_FORMAT) --dry-run --Werror $(SRC_ALL)
 
 lint:
-	$(CLANG_TIDY) $(CORE_C) $(PNG_C) $(CLI_C) $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) -- $(CFLAGS) -Isrc -Icli -Itest
+	$(CLANG_TIDY) $(CORE_C) $(FLOPPY_C) $(PNG_C) $(CLI_C) $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) -- $(CFLAGS) -Isrc -Icli -Itest
 
 clean:
 	rm -rf $(BUILD)
