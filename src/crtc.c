@@ -3,11 +3,11 @@
  */
 #include "crtc.h"
 
-/* Writable bits per register on type 0 — Compendium ch. 4.3. R3 carries the
-   VSYNC width in its high nibble and the HSYNC width in its low one; R8's
-   interlace and skew bits are stored but nothing reads them yet. R16/R17
-   are the lightpen latches, read-only. */
-static const uint8_t register_widths[18] = {
+/* Type 0 — Compendium ch. 4.3. R3 carries the VSYNC width in its high
+   nibble and the HSYNC width in its low one; R8's interlace and skew bits
+   are stored but nothing reads them yet. R16/R17 are the lightpen latches,
+   read-only. */
+static const uint8_t writable_bits[18] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x1F, 0x7F, 0x7F, 0xF3,
     0x1F, 0x7F, 0x1F, 0x3F, 0xFF, 0x3F, 0xFF, 0x00, 0x00,
 };
@@ -129,7 +129,7 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     return pins;
   }
   if (crtc->address_register < 18) {
-    uint8_t mask = register_widths[crtc->address_register];
+    uint8_t mask = writable_bits[crtc->address_register];
     if (mask != 0) {
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
     }
