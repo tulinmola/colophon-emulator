@@ -26,10 +26,12 @@ Then run a machine and look at it:
 build/emulator boot --screenshot ready.png
 build/emulator boot --machine cpc464 --screenshot ready.png
 build/emulator boot --type 'PRINT 2+2\n' --screenshot sum.png
+build/emulator boot --type 'MODE 0\n' --save state.sna
+build/emulator run state.sna --type 'BORDER 6\n' --screenshot resumed.png
 build/emulator boot --full-raster --screenshot raster.png
 ```
 
-`boot` starts a machine from reset, runs it for a fixed number of frames, types whatever `--type` was given, and writes what the monitor shows. Three machines answer to `--machine` — `cpc6128`, `cpc664`, `cpc464` — and a name is only listed once the machine behind it boots to its prompt. `--full-raster` gives the whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. Nothing consults a clock, so the same command writes the same bytes every time.
+`boot` starts a machine from reset and `run` picks one up from a snapshot; both then run for a fixed number of frames, type whatever `--type` was given, and write what they are asked for — a PNG of the screen, an SNA snapshot of the machine, or both. Three machines answer to `--machine` — `cpc6128`, `cpc664`, `cpc464` — and a name is only listed once the machine behind it boots to its prompt. `--full-raster` gives the whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. Nothing consults a clock, so the same command writes the same bytes every time.
 
 The firmware images are Amstrad's. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here. The images the PNG writer produces are uncompressed — the format allows it, and it saves us a compressor to get wrong.
 
@@ -39,7 +41,7 @@ It can hear you, too. The keyboard is a grid of switches read the long way round
 
 And it runs at the right speed. The Gate Array keeps the CPU off the memory for three cycles in four so the video always wins, which stretches every instruction onto a whole microsecond and costs the processor a quarter of its nominal 4MHz — the tax that makes a CPC a CPC.
 
-What comes next is the disc controller, which is what stands between here and the games.
+It can also be stopped and picked up again: a machine writes itself out as an SNA snapshot, and another reads it back and carries on. What comes next is the disc controller, which is what stands between here and the games.
 
 For development there are also `make format` (clang-format, config in `.clang-format`), `make format-check`, and `make lint` (clang-tidy, config in `.clang-tidy`).
 
@@ -84,6 +86,7 @@ No scribe worked alone. Every claim in this codebase cites its source at the lin
 - ["The CRTC"](https://www.grimware.org/doku.php/documentations/devices/crtc) (Grim) — the register overview, the five types, the board's wiring of the CRTC bus (A14 selects the chip, RS is A8, R/W is A9), and what a monitor does between frames: it holds its beam in the top-left corner, which is where our frame retrace leaves it.
 - ["The Gate Array"](https://www.grimware.org/doku.php/documentations/devices/gatearray) (Grim) — the Gate Array and the PAL as their programmers knew them: the &7Fxx command dispatch, the PENR/INKR/RMR layouts, the eight RAM banking configurations, mode changes taking effect after the HSYNC, which bit of a byte becomes which pixel in each mode, and the palette as measured on the outputs of a real 40010 — so our colours are the ones a machine produced, not the ones the three-state logic implies.
 - ["Screen memory addressess"](https://cpctech.cpcwiki.de/docs/scraddr.html) (Kevin Thacker) — the board's rewiring of the CRTC's address lines on the way to RAM, which is what scatters a character row across eight blocks two kilobytes apart.
+- ["Snapshot file format"](https://cpctech.cpcwiki.de/docs/snapshot.html) (Kevin Thacker) — the SNA header of all three versions, and the notes on the two fields easiest to get backwards: the PPI stores inputs for ports A and B but outputs for C, and the flip-flops it names IFF0 and IFF1 are what everyone else calls IFF1 and IFF2.
 - ["Timings"](https://cpctech.cpcwiki.de/docs/instrtim.html) (Kevin Thacker) — how long every instruction takes on a CPC, in microseconds, measured. Together with the Compendium's chapter 26, which was measured separately, it is what judges our wait states; the two agree on all but one row.
 - ["Reading the keyboard and Joysticks"](https://cpctech.cpcwiki.de/docs/keyboard.html), ["8255 PPI"](https://cpctech.cpcwiki.de/docs/8255cpc.html) and ["AY-3-8912 PSG"](https://cpctech.cpcwiki.de/docs/psg.html) (Kevin Thacker) — the key matrix position by position, the six-step dance that reads one line of it, what each port of the 8255 is wired to, and the rule that a port turned to input presents &FF to whatever is on the other side. Our keyboard, `ppi.c` and `psg.c` are built on them.
 - ["Interrupts on the CPC/CPC+ and KC Compact"](https://cpctech.cpcwiki.de/docs/ints.html) (Kevin Thacker) — the interrupt counter's behaviour from the programmer's side; RMR bit 4 clearing the pending request along with the counter.

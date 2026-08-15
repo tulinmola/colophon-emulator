@@ -1532,14 +1532,9 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case M1_T2:
       pins |= Z80_MREQ | Z80_RD;
-      /* WAIT is sampled here, at the second T-state, and the request pins
-         stay asserted for as long as it holds. Every memory cycle below
-         samples at its own second T-state too; only an I/O cycle differs,
-         sampling at its third, and that one asymmetry is why IN r,(C) costs
-         a microsecond more than IN A,(n) on a CPC. Sources: Zilog UM0080
-         ch. 3 for the sample point, and the Compendium ch. 4.4.4, which
-         enumerates it per cycle type and works through what the Gate Array
-         makes of it. */
+      /* WAIT is sampled at the second T-state of a memory cycle and the
+         request pins hold while it is asserted; an I/O cycle samples at its
+         third instead (Zilog UM0080 ch. 3). */
       if (pins & Z80_WAIT) {
         return pins;
       }

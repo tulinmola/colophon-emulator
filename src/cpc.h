@@ -121,6 +121,17 @@ void cpc_set_links(cpc_t *cpc, bool fifty_hz, uint8_t manufacturer);
  * grid. Returns the bus for the host to watch. */
 uint64_t cpc_tick(cpc_t *cpc);
 
+/* Tick until the CPU is between instructions. A snapshot has nowhere to
+ * record a half-executed one, so anything about to take one owes the
+ * machine this call first. */
+void cpc_finish_instruction(cpc_t *cpc);
+
+/* Recompute which memory answers where. The machine does this itself
+ * whenever the CPU writes one of the registers behind the map; anything
+ * that sets those registers from outside — restoring a snapshot — owes the
+ * machine this call afterwards. */
+void cpc_remap(cpc_t *cpc);
+
 /* The CPU's view without the CPU: reads and writes resolve through the same
  * mapping the CPU's memory cycles use, so a peek under an enabled ROM sees
  * the ROM and a poke lands in the RAM beneath it. */

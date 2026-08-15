@@ -9,7 +9,7 @@
    by convention. */
 static uint8_t absent_rom[0x4000];
 
-static void remap(cpc_t *cpc) {
+void cpc_remap(cpc_t *cpc) {
   /* The eight PAL configurations: which 16K RAM bank answers each quadrant
      of the CPU address space — "The Gate Array" (Grim), MMR table, with the
      6128's single 64K page. */
@@ -54,11 +54,8 @@ static void present_port_b(cpc_t *cpc) {
   ppi_present(&cpc->ppi, PPI_PORT_B, levels);
 }
 
-/* Port C's low nibble selects a keyboard line, and its top two bits are the
-   PSG's BDIR and BC1. Everything the CPU can see through the PSG passes
-   through this one path: the machine hands the matrix to the chip, the chip
-   answers on port A, and port A only reads back while the 8255 has it
-   turned around. */
+/* Port C's low nibble selects a keyboard line and its top two bits are the
+   PSG's BDIR and BC1 ("8255 PPI"). */
 static void run_psg(cpc_t *cpc) {
   uint8_t port_c = ppi_output_of(&cpc->ppi, PPI_PORT_C);
   psg_present_port_a(&cpc->psg, keyboard_line(&cpc->keyboard, port_c & 0x0F));
@@ -74,17 +71,17 @@ static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
   bool pal_fitted = cpc->ram_size >= 0x20000;
   if ((address & 0x8000) == 0 && (data & 0xC0) == 0xC0 && pal_fitted) {
     cpc->mmr = data;
-    remap(cpc);
+    cpc_remap(cpc);
   }
   if ((address & 0xC000) == 0x4000) {
     gate_array_write(&cpc->gate_array, data);
     if ((data & 0xC0) == 0x80) {
-      remap(cpc); /* RMR may have moved the ROM enables */
+      cpc_remap(cpc); /* RMR may have moved the ROM enables */
     }
   }
   if ((address & 0x2000) == 0) {
     cpc->upper_rom_number = data;
-    remap(cpc);
+    cpc_remap(cpc);
   }
   if ((address & 0x0800) == 0) {
     /* The PPI, its two low address lines choosing the port. Writing any of
@@ -128,12 +125,12 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
   for (int index = 0; index < 0x4000; index++) {
     absent_rom[index] = 0xFF;
   }
-  remap(cpc);
+  cpc_remap(cpc);
 }
 
 void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom) {
   cpc->upper_roms[number] = rom;
-  remap(cpc);
+  cpc_remap(cpc);
 }
 
 void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer) {
@@ -225,6 +222,14 @@ uint64_t cpc_tick(cpc_t *cpc) {
   }
   cpc->pins = pins;
   return pins;
+}
+
+void cpc_finish_instruction(cpc_t *cpc) {
+  /* Longer than any instruction can take, wait states and all, so a CPU
+     wedged by a machine that never releases WAIT cannot hang the caller. */
+  for (int guard = 0; guard < 256 && !z80_instruction_complete(&cpc->cpu); guard++) {
+    cpc_tick(cpc);
+  }
 }
 
 uint8_t cpc_peek(const cpc_t *cpc, uint16_t address) {

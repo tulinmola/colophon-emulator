@@ -14,6 +14,7 @@
 
 #include "cpc.h"
 #include "png.h"
+#include "snapshot.h"
 
 /* One machine per name the --machine option accepts. A name earns its place
    here the day the machine behind it boots to its prompt, not before. */
@@ -59,6 +60,8 @@ typedef struct {
   const machine_t *machine;
   const char *rom_directory;
   const char *screenshot_path;
+  const char *snapshot_path; /* one to load, for `run` */
+  const char *save_path;     /* one to write when the frames are done */
   const char *text;
   long frames;
   bool full_raster;
@@ -67,9 +70,11 @@ typedef struct {
 } options_t;
 
 static void print_usage(FILE *out) {
-  fprintf(out, "usage: emulator boot [options]\n\n");
-  fprintf(out, "  Runs a machine's firmware from reset and writes what the\n");
-  fprintf(out, "  monitor shows.\n\n");
+  fprintf(out, "usage: emulator boot [options]\n");
+  fprintf(out, "       emulator run SNAPSHOT.sna [options]\n\n");
+  fprintf(out, "  boot starts a machine from reset; run picks one up from a\n");
+  fprintf(out, "  snapshot. Both then run for a number of frames, type what\n");
+  fprintf(out, "  they are told to, and write out what they are asked for.\n\n");
   fprintf(out, "  --machine NAME      which machine to build (default cpc6128)\n");
   for (size_t index = 0; index < machine_count; index++) {
     fprintf(out, "                        %-10s %s\n", machines[index].name,
@@ -81,6 +86,7 @@ static void print_usage(FILE *out) {
   fprintf(out, "                        \\n Return  \\t Tab  \\e Esc  \\b Del  \\\\ backslash\n");
   fprintf(out, "  --sixty-hz          wire the refresh link for 60Hz\n");
   fprintf(out, "  --screenshot PATH   write the screen here as a PNG\n");
+  fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
   fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
   fprintf(out, "  --no-double         one image line per raster line, squashed\n");
 }
@@ -95,8 +101,8 @@ static const machine_t *machine_named(const char *name) {
 }
 
 /* Returns false having reported the problem. */
-static bool parse_options(int argc, char **argv, options_t *options) {
-  for (int index = 2; index < argc; index++) {
+static bool parse_options(int argc, char **argv, int from, options_t *options) {
+  for (int index = from; index < argc; index++) {
     const char *argument = argv[index];
     const char *value = (index + 1 < argc) ? argv[index + 1] : NULL;
     if (strcmp(argument, "--full-raster") == 0) {
@@ -128,6 +134,8 @@ static bool parse_options(int argc, char **argv, options_t *options) {
       options->screenshot_path = value;
     } else if (strcmp(argument, "--type") == 0) {
       options->text = value;
+    } else if (strcmp(argument, "--save") == 0) {
+      options->save_path = value;
     } else if (strcmp(argument, "--frames") == 0) {
       char *end = NULL;
       options->frames = strtol(value, &end, 10);
@@ -197,6 +205,65 @@ static uint8_t *render(const uint8_t *framebuffer, const options_t *options, uin
   return pixels;
 }
 
+/* Read a whole file into a fresh buffer; the caller frees it. */
+static uint8_t *read_file(const char *path, size_t *size_out) {
+  FILE *handle = fopen(path, "rb");
+  if (handle == NULL) {
+    fprintf(stderr, "cannot open %s\n", path);
+    return NULL;
+  }
+  fseek(handle, 0, SEEK_END);
+  long size = ftell(handle);
+  fseek(handle, 0, SEEK_SET);
+  if (size <= 0) {
+    fprintf(stderr, "%s is empty\n", path);
+    fclose(handle);
+    return NULL;
+  }
+  uint8_t *contents = malloc((size_t)size);
+  if (contents == NULL || fread(contents, 1, (size_t)size, handle) != (size_t)size) {
+    fprintf(stderr, "cannot read %s\n", path);
+    free(contents);
+    fclose(handle);
+    return NULL;
+  }
+  fclose(handle);
+  *size_out = (size_t)size;
+  return contents;
+}
+
+static bool write_file(const char *path, const uint8_t *contents, size_t size) {
+  FILE *handle = fopen(path, "wb");
+  if (handle == NULL) {
+    fprintf(stderr, "cannot open %s for writing\n", path);
+    return false;
+  }
+  bool ok = fwrite(contents, 1, size, handle) == size;
+  if (fclose(handle) != 0 || !ok) {
+    fprintf(stderr, "cannot write %s\n", path);
+    return false;
+  }
+  return true;
+}
+
+static bool save_snapshot(const cpc_t *cpc, const char *path) {
+  size_t size = snapshot_size(cpc);
+  uint8_t *contents = malloc(size);
+  if (contents == NULL) {
+    fprintf(stderr, "cannot hold a snapshot of %zu bytes\n", size);
+    return false;
+  }
+  const char *problem = NULL;
+  bool ok = snapshot_save(cpc, contents, size, &problem);
+  if (!ok) {
+    fprintf(stderr, "cannot make a snapshot: %s\n", problem);
+  } else {
+    ok = write_file(path, contents, size);
+  }
+  free(contents);
+  return ok;
+}
+
 static void run_frames(cpc_t *cpc, long frames) {
   for (long tick = 0; tick < frames * 19968L * 4L; tick++) {
     cpc_tick(cpc);
@@ -255,18 +322,29 @@ static bool type_text(cpc_t *cpc, const char *text) {
   return true;
 }
 
-static int boot(int argc, char **argv) {
+static int run_machine(int argc, char **argv, bool from_snapshot) {
   options_t options = {
       .machine = &machines[0],
       .rom_directory = "roms",
       .screenshot_path = NULL,
       .text = NULL,
+      .snapshot_path = NULL,
+      .save_path = NULL,
       .frames = DEFAULT_FRAMES,
       .full_raster = false,
       .double_lines = true,
       .fifty_hz = true,
   };
-  if (!parse_options(argc, argv, &options)) {
+  int first_option = 2;
+  if (from_snapshot) {
+    if (argc < 3 || argv[2][0] == '-') {
+      fprintf(stderr, "run needs a snapshot to start from\n");
+      return 1;
+    }
+    options.snapshot_path = argv[2];
+    first_option = 3;
+  }
+  if (!parse_options(argc, argv, first_option, &options)) {
     return 1;
   }
 
@@ -293,9 +371,31 @@ static int boot(int argc, char **argv) {
   cpc_set_links(cpc, options.fifty_hz, CPC_MANUFACTURER_AMSTRAD);
 
   int status = 0;
-  run_frames(cpc, options.frames);
-  if (options.text != NULL && !type_text(cpc, options.text)) {
+  if (options.snapshot_path != NULL) {
+    size_t size = 0;
+    uint8_t *contents = read_file(options.snapshot_path, &size);
+    if (contents == NULL) {
+      status = 1;
+    } else {
+      const char *problem = NULL;
+      if (!snapshot_load(cpc, contents, size, &problem)) {
+        fprintf(stderr, "%s %s\n", options.snapshot_path, problem);
+        status = 1;
+      }
+      free(contents);
+    }
+  }
+  if (status == 0) {
+    run_frames(cpc, options.frames);
+  }
+  if (status == 0 && options.text != NULL && !type_text(cpc, options.text)) {
     status = 1;
+  }
+  if (status == 0 && options.save_path != NULL) {
+    cpc_finish_instruction(cpc);
+    if (!save_snapshot(cpc, options.save_path)) {
+      status = 1;
+    }
   }
   if (options.screenshot_path != NULL) {
     uint32_t width = 0;
@@ -324,7 +424,10 @@ int main(int argc, char **argv) {
     return 1;
   }
   if (strcmp(argv[1], "boot") == 0) {
-    return boot(argc, argv);
+    return run_machine(argc, argv, false);
+  }
+  if (strcmp(argv[1], "run") == 0) {
+    return run_machine(argc, argv, true);
   }
   if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "help") == 0) {
     print_usage(stdout);
