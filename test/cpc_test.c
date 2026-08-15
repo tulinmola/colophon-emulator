@@ -61,14 +61,28 @@ static size_t append_crtc_write(uint8_t *program, size_t length, uint8_t reg, ui
   return length;
 }
 
-/* The syncs of the standard frame: R0, R2, R3, R4, R7, R9. */
-static size_t append_standard_syncs(uint8_t *program, size_t length) {
+/* The standard 50Hz screen, as the firmware programs it: every register of
+   its table that is not already zero from reset. */
+static size_t append_standard_screen(uint8_t *program, size_t length) {
   length = append_crtc_write(program, length, 0, 63);
+  length = append_crtc_write(program, length, 1, 40);
   length = append_crtc_write(program, length, 2, 46);
   length = append_crtc_write(program, length, 3, 0x8E);
   length = append_crtc_write(program, length, 4, 38);
+  length = append_crtc_write(program, length, 6, 25);
   length = append_crtc_write(program, length, 7, 30);
   length = append_crtc_write(program, length, 9, 7);
+  length = append_crtc_write(program, length, 12, 0x30);
+  return length;
+}
+
+/* One command byte to the Gate Array. */
+static size_t append_gate_array_write(uint8_t *program, size_t length, uint8_t command) {
+  program[length++] = 0x01; /* LD BC,&7F00+command */
+  program[length++] = command;
+  program[length++] = 0x7F;
+  program[length++] = 0xED; /* OUT (C),C */
+  program[length++] = 0x49;
   return length;
 }
 
@@ -335,14 +349,14 @@ static void the_gate_array_interrupts_six_times_a_frame(void) {
       0xC9, /* RET */
   };
   memcpy(lower_rom + 0x38, handler, sizeof handler);
-  uint8_t body[80];
+  uint8_t body[200];
   size_t length = 0;
   body[length++] = 0x31; /* LD SP,&C000 — the stack must live below the
                             upper ROM: pushes fall through to RAM anywhere,
                             but pops beneath an enabled ROM read the ROM */
   body[length++] = 0x00;
   body[length++] = 0xC0;
-  length = append_standard_syncs(body, length);
+  length = append_standard_screen(body, length);
   body[length++] = 0xAF; /* XOR A */
   body[length++] = 0xED; /* IM 1 */
   body[length++] = 0x56;
@@ -361,8 +375,8 @@ static void the_gate_array_interrupts_six_times_a_frame(void) {
 
 static void an_unheard_interrupt_is_held(void) {
   power_on(sizeof ram);
-  uint8_t body[70];
-  size_t length = append_standard_syncs(body, 0);
+  uint8_t body[200];
+  size_t length = append_standard_screen(body, 0);
   body[length++] = 0x76; /* HALT, interrupts never enabled */
   memcpy(lower_rom + 0x100, body, length);
   const uint8_t entry[] = {0xC3, 0x00, 0x01}; /* JP &0100 */
@@ -370,6 +384,111 @@ static void an_unheard_interrupt_is_held(void) {
   run_ticks(100000);
   TEST_CHECK(cpc.cpu.halted);
   TEST_CHECK(cpc.gate_array.interrupt_request); /* maintained, unheard */
+}
+
+static uint8_t framebuffer[CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT];
+
+/* Fill the screen with a full-brightness pattern, program the standard
+   screen in mode 2, and run frames. Pen 1 is the only ink of its colour on
+   the tube, so where it lands is where the display is. */
+static void draw_a_full_screen(void) {
+  power_on(sizeof ram);
+  memset(framebuffer, 0xEE, sizeof framebuffer); /* no colour code is &EE */
+  memset(ram + 0xC000, 0xFF, 0x4000);
+  cpc_connect_monitor(&cpc, framebuffer);
+  uint8_t body[200];
+  size_t length = append_standard_screen(body, 0);
+  length = append_gate_array_write(body, length, 0x00); /* PENR: pen 0 */
+  length = append_gate_array_write(body, length, 0x40 | GATE_ARRAY_BLACK);
+  length = append_gate_array_write(body, length, 0x01);      /* PENR: pen 1 */
+  length = append_gate_array_write(body, length, 0x40 | 11); /* bright white */
+  length = append_gate_array_write(body, length, 0x10);      /* PENR: border */
+  length = append_gate_array_write(body, length, 0x40 | 4);  /* blue */
+  length = append_gate_array_write(body, length, 0x8A);      /* RMR: mode 2 */
+  body[length++] = 0x18;                                     /* JR $ */
+  body[length++] = 0xFE;
+  rom_program(body, length);
+  run_ticks(3L * 19968 * 4); /* three frames of 19968 characters */
+}
+
+static void the_display_lands_where_the_syncs_put_it(void) {
+  draw_a_full_screen();
+  int left = CPC_FRAMEBUFFER_WIDTH;
+  int right = -1;
+  int top = CPC_FRAMEBUFFER_HEIGHT;
+  int bottom = -1;
+  long white = 0;
+  for (int y = 0; y < CPC_FRAMEBUFFER_HEIGHT; y++) {
+    for (int x = 0; x < CPC_FRAMEBUFFER_WIDTH; x++) {
+      if (framebuffer[(size_t)y * CPC_FRAMEBUFFER_WIDTH + x] != 11) {
+        continue;
+      }
+      white++;
+      if (x < left) {
+        left = x;
+      }
+      if (x > right) {
+        right = x;
+      }
+      if (y < top) {
+        top = y;
+      }
+      if (y > bottom) {
+        bottom = y;
+      }
+    }
+  }
+  /* 40 characters of 16 pixel clocks, 25 rows of 8 lines. */
+  TEST_EQUAL(white, 640L * 200L);
+  TEST_EQUAL(right - left + 1, 640);
+  TEST_EQUAL(bottom - top + 1, 200);
+  /* The beam starts its line when the Gate Array's sync does, two
+     characters after the CRTC's HSYNC at R2=46, and the picture arrives a
+     microsecond behind the address that fetched it. */
+  TEST_EQUAL(left, (64 - 48 + 1) * 16);
+  /* The beam's rows begin 48 characters into the CRTC's lines, so a line's
+     display falls in the row its predecessor opened. */
+  TEST_EQUAL(top, 70);
+}
+
+static void the_border_surrounds_the_display(void) {
+  draw_a_full_screen();
+  TEST_EQUAL(framebuffer[70 * CPC_FRAMEBUFFER_WIDTH + 271], 4);  /* left of it */
+  TEST_EQUAL(framebuffer[70 * CPC_FRAMEBUFFER_WIDTH + 912], 4);  /* right of it */
+  TEST_EQUAL(framebuffer[69 * CPC_FRAMEBUFFER_WIDTH + 272], 4);  /* above it */
+  TEST_EQUAL(framebuffer[270 * CPC_FRAMEBUFFER_WIDTH + 272], 4); /* below it */
+}
+
+static void the_beam_sweeps_every_line_below_the_flyback(void) {
+  draw_a_full_screen();
+  /* Rows 0 to 25 hold the frame flyback, where the beam's path is not a
+     full line and its corners are never swept — as on a tube, and blanked
+     black in any case. Everything below is covered edge to edge. */
+  long unpainted = 0;
+  for (int y = 26; y < CPC_FRAMEBUFFER_HEIGHT; y++) {
+    for (int x = 0; x < CPC_FRAMEBUFFER_WIDTH; x++) {
+      if (framebuffer[(size_t)y * CPC_FRAMEBUFFER_WIDTH + x] == 0xEE) {
+        unpainted++;
+      }
+    }
+  }
+  TEST_EQUAL(unpainted, 0);
+}
+
+static void the_screen_is_read_from_the_base_ram_alone(void) {
+  draw_a_full_screen();
+  /* Bank in the extension over &C000 and blank what the CPU now sees
+     there: the video hardware keeps reading the base 64K underneath. */
+  uint8_t body[200];
+  size_t length = append_gate_array_write(body, 0, 0xC2); /* MMR: banks 4-7 */
+  body[length++] = 0x18;
+  body[length++] = 0xFE;
+  memcpy(lower_rom, body, length);
+  cpc.cpu.pc = 0;
+  memset(ram + bank_start(7), 0x00, 0x4000);
+  memset(framebuffer, 0xEE, sizeof framebuffer);
+  run_ticks(2L * 19968 * 4);
+  TEST_EQUAL(framebuffer[71 * CPC_FRAMEBUFFER_WIDTH + 272], 11);
 }
 
 static void poke_lands_beneath_the_rom(void) {
@@ -398,6 +517,10 @@ int main(void) {
   TEST_RUN(pens_and_inks_reach_the_gate_array);
   TEST_RUN(the_gate_array_interrupts_six_times_a_frame);
   TEST_RUN(an_unheard_interrupt_is_held);
+  TEST_RUN(the_display_lands_where_the_syncs_put_it);
+  TEST_RUN(the_border_surrounds_the_display);
+  TEST_RUN(the_beam_sweeps_every_line_below_the_flyback);
+  TEST_RUN(the_screen_is_read_from_the_base_ram_alone);
   TEST_RUN(poke_lands_beneath_the_rom);
   return TEST_REPORT("cpc");
 }

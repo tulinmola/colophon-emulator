@@ -1,7 +1,9 @@
 # Static analysis only — style is clang-format's job, correctness warnings are
 # already -Werror's. Excluded: easily-swappable-parameters is notoriously noisy
 # on small C APIs; unix.Errno demands errno bookkeeping around every stdio call
-# and we never consult errno.
-Checks: 'clang-analyzer-*,bugprone-*,portability-*,-bugprone-easily-swappable-parameters,-clang-analyzer-unix.Errno'
+# and we never consult errno; optin.performance.Padding would have us order a
+# machine's fields by alignment rather than by which chip they belong to, to
+# save bytes in a struct that exists once.
+Checks: 'clang-analyzer-*,bugprone-*,portability-*,-bugprone-easily-swappable-parameters,-clang-analyzer-unix.Errno,-clang-analyzer-optin.performance.Padding'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*'

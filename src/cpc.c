@@ -94,11 +94,35 @@ void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom) {
   remap(cpc);
 }
 
+void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer) {
+  monitor_init(&cpc->monitor, framebuffer, CPC_FRAMEBUFFER_WIDTH, CPC_FRAMEBUFFER_HEIGHT,
+               CPC_FRAME_SYNC_SAMPLES);
+}
+
+/* The CRTC's address lines do not reach the RAM in order. The board sends
+   MA13 and MA12 to A15 and A14, the three raster lines to A13-A11, and the
+   low ten of MA to A10-A1, leaving A0 for the Gate Array to toggle between
+   the two bytes of the character ("Screen memory addressess"). That is why
+   a character row lives in eight blocks two kilobytes apart. */
+static uint16_t video_address(uint64_t crtc_pins) {
+  uint16_t ma = crtc_ma(crtc_pins);
+  uint8_t ra = crtc_ra(crtc_pins);
+  return (uint16_t)(((ma & 0x3000) << 2) | ((ra & 0x07) << 11) | ((ma & 0x03FF) << 1));
+}
+
 uint64_t cpc_tick(cpc_t *cpc) {
   if (cpc->clock_phase == 0) {
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
     gate_array_tick(&cpc->gate_array, (cpc->crtc_pins & CRTC_HSYNC) != 0,
                     (cpc->crtc_pins & CRTC_VSYNC) != 0);
+    /* The video hardware reads the base 64K and nothing else: no ROM, no
+       banked RAM, whatever the CPU is looking at ("The Gate Array", MMR). */
+    uint16_t address = video_address(cpc->crtc_pins);
+    uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+    gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0, cpc->ram[address],
+                     cpc->ram[address | 1], samples);
+    monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
+                    gate_array_csync(&cpc->gate_array));
   }
   cpc->clock_phase = (uint8_t)((cpc->clock_phase + 1) & 3);
 

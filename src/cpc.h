@@ -2,11 +2,11 @@
  * cpc.h — the Amstrad CPC, wired.
  *
  * This is the machine file: the one place that knows the chips are soldered
- * into a CPC. It owns the memory map and the I/O decode; the chips it wires
- * know nothing about it. At this stage the machine is a Z80, its memory, a
- * CRTC counting out the frame, and a Gate Array raising the 300Hz interrupt
- * from it — no pixels yet, no wait states. Each chip claims its registers
- * as its module arrives.
+ * into a CPC. It owns the memory map, the I/O decode and the board's video
+ * address wiring; the chips it wires know nothing about it. At this stage
+ * the machine is a Z80, its memory, a CRTC counting out the frame, a Gate
+ * Array drawing from it, and a monitor to draw on — no wait states yet, and
+ * nothing to type on.
  *
  * Sources:
  * - "The Gate Array" (Grim),
@@ -26,6 +26,10 @@
  *   https://www.grimware.org/doku.php/documentations/devices/crtc — the
  *   board's wiring of the CRTC bus: A14 low selects the chip, RS is A8 and
  *   R/W is A9, giving the four ports &BC00-&BF00.
+ * - "Screen memory addressess" (Kevin Thacker's cpctech),
+ *   https://cpctech.cpcwiki.de/docs/scraddr.html — the board's rewiring of
+ *   the CRTC's address lines on their way to RAM, which is what scatters a
+ *   character row across eight blocks two kilobytes apart.
  */
 #ifndef COLOPHON_CPC_H
 #define COLOPHON_CPC_H
@@ -35,7 +39,17 @@
 
 #include "crtc.h"
 #include "gate_array.h"
+#include "monitor.h"
 #include "z80.h"
+
+/* The whole raster the beam covers: 64µs of line at the Gate Array's
+   16MHz pixel clock, and the 312 lines of a 50Hz frame. The picture is the
+   middle of it; the rest is border, sync and blanking. */
+#define CPC_FRAMEBUFFER_WIDTH 1024
+#define CPC_FRAMEBUFFER_HEIGHT 312
+/* A CTM monitor cannot anchor an image vertically on a sync shorter than
+   11-12µs (Compendium ch. 16.2.4); 12µs is 192 pixel clocks. */
+#define CPC_FRAME_SYNC_SAMPLES 192
 
 typedef struct {
   z80_t cpu;
@@ -44,6 +58,7 @@ typedef struct {
   crtc_t crtc;
   uint64_t crtc_pins; /* the CRTC's outputs as of its last character clock */
   gate_array_t gate_array;
+  monitor_t monitor;
   uint8_t clock_phase; /* of four: the CRTC and Gate Array receive one
                           character clock per four CPU ticks (16MHz master:
                           4MHz Z80, 1MHz character clock) */
@@ -77,6 +92,11 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
 
 /* Fit a 16K ROM as upper ROM `number`; NULL empties the socket. */
 void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom);
+
+/* Plug in a monitor: CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT bytes
+ * of hardware colour codes, host-owned. Unplugged, the machine runs on and
+ * draws into the void, as it would with the cable out. */
+void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer);
 
 /* Advance one T-state: tick the CPU, answer its pins from the map. No wait
  * states yet — timing is the raw Z80's until the Gate Array brings the 4T
