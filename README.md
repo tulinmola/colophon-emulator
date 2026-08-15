@@ -25,16 +25,19 @@ Then run a machine and look at it:
 ```sh
 build/emulator boot --screenshot ready.png
 build/emulator boot --machine cpc464 --screenshot ready.png
+build/emulator boot --type 'PRINT 2+2\n' --screenshot sum.png
 build/emulator boot --full-raster --screenshot raster.png
 ```
 
-`boot` starts a machine from reset, runs it for a fixed number of frames and writes what the monitor shows. Three machines answer to `--machine` — `cpc6128`, `cpc664`, `cpc464` — and a name is only listed once the machine behind it boots to its prompt. `--full-raster` gives the whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. Nothing consults a clock, so the same command writes the same bytes every time.
+`boot` starts a machine from reset, runs it for a fixed number of frames, types whatever `--type` was given, and writes what the monitor shows. Three machines answer to `--machine` — `cpc6128`, `cpc664`, `cpc464` — and a name is only listed once the machine behind it boots to its prompt. `--full-raster` gives the whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. Nothing consults a clock, so the same command writes the same bytes every time.
 
 The firmware images are Amstrad's. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here. The images the PNG writer produces are uncompressed — the format allows it, and it saves us a compressor to get wrong.
 
 There is nothing to play yet, but there is something to see. The Z80 came first — cycle-stepped, complete, every instruction the machine knows, undocumented ones included — and the CPC has been built around it a chip at a time: the memory map with its RAM banking and ROM paging, a 6845 CRTC counting out the frame at one character per microsecond, a Gate Array raising the 300Hz heartbeat and turning bytes into colour, and a monitor that takes the one composite sync wire and separates it the way a tube does. Given the firmware, the machine now boots it, and the Ready prompt arrives on the screen in the right colours, in the right place.
 
-What it cannot do is hear you: the keyboard, and the two chips it speaks through, come next, and come the same way as the rest — documentation first, tests as proof.
+It can hear you, too. The keyboard is a grid of switches read the long way round — the CPU asks the 8255, which asks the sound chip, which reads the grid — and with that path in place you can type at the prompt and BASIC will answer.
+
+What comes next is the wait states that make every instruction take a whole microsecond, and then the disc controller, which is what stands between here and the games.
 
 For development there are also `make format` (clang-format, config in `.clang-format`), `make format-check`, and `make lint` (clang-tidy, config in `.clang-tidy`).
 
@@ -46,12 +49,15 @@ The tests come in tiers, separated by what they answer and what they cost.
 
 ```sh
 make test              # fast, hermetic, no network — runs on every change
+make test-firmware     # boots the real firmware and types at it
 make test-single-step  # the complete SingleStepTests corpus
 make test-exerciser    # the Z80 instruction set exerciser
-make test-all          # all three
+make test-all          # all four
 ```
 
 `make test` covers only what no external suite can see: the reset contract, the invariants of our own machinery, that every opcode on every prefix page finishes without outgrowing its micro-program. Since the machine began it also proves the memory map against its documentation — the eight banking configurations, the ROM paging, the I/O decode — each exercised through the bus by a program running from a fabricated ROM, the CRTC against the Compendium's frame — 312 scanlines of 64 microseconds, the syncs where the registers put them, the video pointer walking the documented rows — the Gate Array against chapter 27 and its own documentation — the interrupt counter looping at 52, bit 5 dying at the acknowledge, the two-HSYNC rule after VSYNC, a byte becoming pixels in each of the four modes — and the video path end to end: a screen of pixels through the whole machine, landing 640 by 200 exactly where the syncs put it. It deliberately restates nothing the corpus already proves.
+
+`make test-firmware` boots the real thing. It runs each of the three machines from reset, reads the screen back as text and checks it says what Amstrad and Locomotive Software wrote, then types `PRINT 2+2` at the prompt and insists BASIC answers `4`. That one line is the strictest test here: the keyboard matrix, the 8255's direction flipping, the PSG, the fifty-times-a-second scan and the interrupt that drives it must all be right at once, and none of it is graded by us. The letters are identified by looking each glyph up in the character table the ROM itself carries — a test that recognised letters by our own table would only prove we agree with ourselves. It needs the firmware, so it fetches it first.
 
 `make test-single-step` runs [SingleStepTests](https://github.com/SingleStepTests/z80): 1,604 files, one per opcode across every prefix page, a thousand randomised cases each — 1,604,000 in all. Every case fixes the CPU and memory before and after, and the state of the bus after each individual clock cycle. That last part is what earns its **1.3 GB**, because it tests timing rather than only results. It matters just as much that we did not write it: a test written from our own understanding agrees with our own mistakes, and this one disagrees. It has already caught a real error — we had concluded an undocumented DD CB behaviour did not exist, and 168 files said otherwise. The corpus is pinned to a commit, so "passes the complete suite" names something exact that cannot shift underneath us. The first run downloads it, which takes a few minutes and needs `curl` and `unzip`; after that it is local.
 
@@ -76,6 +82,7 @@ No scribe worked alone. Every claim in this codebase cites its source at the lin
 - ["The CRTC"](https://www.grimware.org/doku.php/documentations/devices/crtc) (Grim) — the register overview, the five types, the board's wiring of the CRTC bus (A14 selects the chip, RS is A8, R/W is A9), and what a monitor does between frames: it holds its beam in the top-left corner, which is where our frame retrace leaves it.
 - ["The Gate Array"](https://www.grimware.org/doku.php/documentations/devices/gatearray) (Grim) — the Gate Array and the PAL as their programmers knew them: the &7Fxx command dispatch, the PENR/INKR/RMR layouts, the eight RAM banking configurations, mode changes taking effect after the HSYNC, which bit of a byte becomes which pixel in each mode, and the palette as measured on the outputs of a real 40010 — so our colours are the ones a machine produced, not the ones the three-state logic implies.
 - ["Screen memory addressess"](https://cpctech.cpcwiki.de/docs/scraddr.html) (Kevin Thacker) — the board's rewiring of the CRTC's address lines on the way to RAM, which is what scatters a character row across eight blocks two kilobytes apart.
+- ["Reading the keyboard and Joysticks"](https://cpctech.cpcwiki.de/docs/keyboard.html), ["8255 PPI"](https://cpctech.cpcwiki.de/docs/8255cpc.html) and ["AY-3-8912 PSG"](https://cpctech.cpcwiki.de/docs/psg.html) (Kevin Thacker) — the key matrix position by position, the six-step dance that reads one line of it, what each port of the 8255 is wired to, and the rule that a port turned to input presents &FF to whatever is on the other side. Our keyboard, `ppi.c` and `psg.c` are built on them.
 - ["Interrupts on the CPC/CPC+ and KC Compact"](https://cpctech.cpcwiki.de/docs/ints.html) (Kevin Thacker) — the interrupt counter's behaviour from the programmer's side; RMR bit 4 clearing the pending request along with the counter.
 - ["Amstrad CPC Ram Paging"](https://cpctech.cpcwiki.de/docs/rampage.html), ["I/O port allocation"](https://cpctech.cpcwiki.de/docs/iopord.html) (Mark Rison & Kevin Thacker) and ["Expansion ROM Selection"](https://cpctech.cpcwiki.de/docs/exprom.html), from Kevin Thacker's cpctech — the 6128 PAL's partial decode of its register, the address-bit I/O decoding that lets one access reach several devices at once, and the upper ROM latch with its fallback to BASIC. The machine's I/O decode follows them.
 - [json.org](https://www.json.org) — the grammar behind the test harness's hand-rolled JSON reader.

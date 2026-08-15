@@ -37,6 +37,36 @@ static void remap(cpc_t *cpc) {
   }
 }
 
+/* Port B is wired to the outside world and to the CRTC: bit 7 the cassette,
+   bit 6 the printer's ready line inverted, bit 5 the expansion port, bit 4
+   the refresh-rate link, bits 3-1 the manufacturer's, and bit 0 the CRTC's
+   VSYNC straight through ("8255 PPI"). Nothing is connected to the cassette
+   or the printer here, and both float high. */
+static void present_port_b(cpc_t *cpc) {
+  uint8_t levels = 0xE0;
+  if (cpc->fifty_hz) {
+    levels |= 0x10;
+  }
+  levels |= (uint8_t)(cpc->manufacturer << 1);
+  if (cpc->crtc_pins & CRTC_VSYNC) {
+    levels |= 0x01;
+  }
+  ppi_present(&cpc->ppi, PPI_PORT_B, levels);
+}
+
+/* Port C's low nibble selects a keyboard line, and its top two bits are the
+   PSG's BDIR and BC1. Everything the CPU can see through the PSG passes
+   through this one path: the machine hands the matrix to the chip, the chip
+   answers on port A, and port A only reads back while the 8255 has it
+   turned around. */
+static void run_psg(cpc_t *cpc) {
+  uint8_t port_c = ppi_output_of(&cpc->ppi, PPI_PORT_C);
+  psg_present_port_a(&cpc->psg, keyboard_line(&cpc->keyboard, port_c & 0x0F));
+  psg_function function = (psg_function)(port_c >> 6);
+  uint8_t bus = psg_access(&cpc->psg, function, ppi_output_of(&cpc->ppi, PPI_PORT_A));
+  ppi_present(&cpc->ppi, PPI_PORT_A, bus);
+}
+
 static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
   /* Devices decode single address bits, so one write can reach several at
      once; each test below is independent — "I/O port allocation" (Rison &
@@ -55,6 +85,13 @@ static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
   if ((address & 0x2000) == 0) {
     cpc->upper_rom_number = data;
     remap(cpc);
+  }
+  if ((address & 0x0800) == 0) {
+    /* The PPI, its two low address lines choosing the port. Writing any of
+       them can change what the PSG is being told, so the chip is run
+       afterwards. */
+    ppi_write(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03), data);
+    run_psg(cpc);
   }
 }
 
@@ -79,6 +116,11 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
   z80_init(&cpc->cpu);
   crtc_init(&cpc->crtc);
   gate_array_init(&cpc->gate_array);
+  ppi_init(&cpc->ppi);
+  psg_init(&cpc->psg);
+  keyboard_init(&cpc->keyboard);
+  cpc->fifty_hz = true;
+  cpc->manufacturer = CPC_MANUFACTURER_AMSTRAD;
   cpc->ram = ram;
   cpc->ram_size = ram_size;
   cpc->lower_rom = lower_rom;
@@ -97,6 +139,11 @@ void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom) {
 void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer) {
   monitor_init(&cpc->monitor, framebuffer, CPC_FRAMEBUFFER_WIDTH, CPC_FRAMEBUFFER_HEIGHT,
                CPC_FRAME_SYNC_SAMPLES);
+}
+
+void cpc_set_links(cpc_t *cpc, bool fifty_hz, uint8_t manufacturer) {
+  cpc->fifty_hz = fifty_hz;
+  cpc->manufacturer = manufacturer & 0x07;
 }
 
 /* The CRTC's address lines do not reach the RAM in order. The board sends
@@ -163,6 +210,11 @@ uint64_t cpc_tick(cpc_t *cpc) {
     uint8_t data = 0xFF;
     if (!(address & 0x4000)) {
       data = crtc_data(crtc_bus(cpc, address, data));
+    }
+    if (!(address & 0x0800)) {
+      present_port_b(cpc);
+      run_psg(cpc);
+      data = ppi_read(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03));
     }
     pins = z80_set_data(pins, data);
   }

@@ -5,8 +5,8 @@
  * into a CPC. It owns the memory map, the I/O decode and the board's video
  * address wiring; the chips it wires know nothing about it. At this stage
  * the machine is a Z80, its memory, a CRTC counting out the frame, a Gate
- * Array drawing from it, and a monitor to draw on — no wait states yet, and
- * nothing to type on.
+ * Array drawing from it, a monitor to draw on, and a keyboard read the long
+ * way round through two more chips. No wait states yet.
  *
  * Sources:
  * - "The Gate Array" (Grim),
@@ -30,6 +30,10 @@
  *   https://cpctech.cpcwiki.de/docs/scraddr.html — the board's rewiring of
  *   the CRTC's address lines on their way to RAM, which is what scatters a
  *   character row across eight blocks two kilobytes apart.
+ * - "8255 PPI" (Kevin Thacker's cpctech),
+ *   https://cpctech.cpcwiki.de/docs/8255cpc.html — what each port is wired
+ *   to here: the PSG's bus on A, VSYNC and the board's links on B, the
+ *   PSG's function lines and the keyboard line on C.
  */
 #ifndef COLOPHON_CPC_H
 #define COLOPHON_CPC_H
@@ -39,7 +43,10 @@
 
 #include "crtc.h"
 #include "gate_array.h"
+#include "keyboard.h"
 #include "monitor.h"
+#include "ppi.h"
+#include "psg.h"
 #include "z80.h"
 
 /* The whole raster the beam covers: 64µs of line at the Gate Array's
@@ -59,9 +66,18 @@ typedef struct {
   uint64_t crtc_pins; /* the CRTC's outputs as of its last character clock */
   gate_array_t gate_array;
   monitor_t monitor;
-  uint8_t clock_phase; /* of four: the CRTC and Gate Array receive one
-                          character clock per four CPU ticks (16MHz master:
-                          4MHz Z80, 1MHz character clock) */
+  ppi_t ppi;
+  psg_t psg;
+  keyboard_t keyboard;
+
+  /* Links soldered on the board, which software reads and cannot change.
+     The refresh rate decides which of the two tables in the firmware's ROM
+     it programs the CRTC from. */
+  bool fifty_hz;
+  uint8_t manufacturer; /* 0-7; seven is Amstrad, see cpc_manufacturer */
+  uint8_t clock_phase;  /* of four: the CRTC and Gate Array receive one
+                           character clock per four CPU ticks (16MHz master:
+                           4MHz Z80, 1MHz character clock) */
 
   /* Host-provided storage; the core allocates nothing. 64K means no PAL is
      fitted and banking commands die on the empty socket; 128K is a 6128,
@@ -97,6 +113,11 @@ void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom);
  * of hardware colour codes, host-owned. Unplugged, the machine runs on and
  * draws into the void, as it would with the cable out. */
 void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer);
+
+/* The board's links. A machine is 50Hz and made by Amstrad unless someone
+ * resoldered it, and the firmware reads both before it programs anything. */
+#define CPC_MANUFACTURER_AMSTRAD 7
+void cpc_set_links(cpc_t *cpc, bool fifty_hz, uint8_t manufacturer);
 
 /* Advance one T-state: tick the CPU, answer its pins from the map. No wait
  * states yet — timing is the raw Z80's until the Gate Array brings the 4T

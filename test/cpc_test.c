@@ -491,6 +491,114 @@ static void the_screen_is_read_from_the_base_ram_alone(void) {
   TEST_EQUAL(framebuffer[71 * CPC_FRAMEBUFFER_WIDTH + 272], 11);
 }
 
+/* One OUT to a PPI port: LD BC,&Fx00+value; OUT (C),C. */
+static size_t append_ppi_write(uint8_t *program, size_t length, uint8_t port, uint8_t value) {
+  program[length++] = 0x01;
+  program[length++] = value;
+  program[length++] = port;
+  program[length++] = 0xED;
+  program[length++] = 0x49;
+  return length;
+}
+
+/* The keyboard scan exactly as cpctech documents it: name register 14, go
+   inactive, turn port A around, choose a line, read, turn back. */
+static void the_documented_scan_reads_a_line(void) {
+  power_on(sizeof ram);
+  keyboard_press(&cpc.keyboard, KEYBOARD_KEY(6, 3)); /* T */
+  uint8_t body[80];
+  size_t length = 0;
+  length = append_ppi_write(body, length, 0xF7, 0x82); /* port A output */
+  length = append_ppi_write(body, length, 0xF4, 14);   /* the register index */
+  length = append_ppi_write(body, length, 0xF6, 0xC0); /* select it */
+  length = append_ppi_write(body, length, 0xF6, 0x00); /* inactive */
+  length = append_ppi_write(body, length, 0xF7, 0x92); /* port A input */
+  length = append_ppi_write(body, length, 0xF6, 0x06); /* line 6 */
+  length = append_ppi_write(body, length, 0xF6, 0x46); /* read, line 6 */
+  body[length++] = 0x01;                               /* LD BC,&F400 */
+  body[length++] = 0x00;
+  body[length++] = 0xF4;
+  body[length++] = 0xED; /* IN A,(C) */
+  body[length++] = 0x78;
+  body[length++] = 0x76; /* HALT */
+  rom_program(body, length);
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(cpc.cpu.a, 0xF7); /* bit 3 down, the rest released */
+}
+
+static void an_unpressed_keyboard_reads_high_through_the_chips(void) {
+  power_on(sizeof ram);
+  uint8_t body[80];
+  size_t length = 0;
+  length = append_ppi_write(body, length, 0xF7, 0x82);
+  length = append_ppi_write(body, length, 0xF4, 14);
+  length = append_ppi_write(body, length, 0xF6, 0xC0);
+  length = append_ppi_write(body, length, 0xF6, 0x00);
+  length = append_ppi_write(body, length, 0xF7, 0x92);
+  length = append_ppi_write(body, length, 0xF6, 0x42); /* read, line 2 */
+  body[length++] = 0x01;
+  body[length++] = 0x00;
+  body[length++] = 0xF4;
+  body[length++] = 0xED;
+  body[length++] = 0x78;
+  body[length++] = 0x76;
+  rom_program(body, length);
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(cpc.cpu.a, 0xFF);
+}
+
+static void port_b_carries_the_links_and_the_vsync(void) {
+  power_on(sizeof ram);
+  const uint8_t program[] = {
+      0x01, 0x00, 0xF5, /* LD BC,&F500 — port B */
+      0xED, 0x78,       /* IN A,(C) */
+      0x76,             /* HALT */
+  };
+  rom_program(program, sizeof program);
+  TEST_CHECK(run_to_halt());
+  /* 50Hz and Amstrad, with the cassette, printer and expansion floating
+     high. Bit 0 is the CRTC's VSYNC passed straight through, whatever it
+     happens to be: an unprogrammed CRTC has R7 at zero and so never leaves
+     its VSYNC, which is a degenerate frame but a real one. */
+  TEST_EQUAL(cpc.cpu.a & 0x10, 0x10);
+  TEST_EQUAL((cpc.cpu.a >> 1) & 0x07, CPC_MANUFACTURER_AMSTRAD);
+  TEST_EQUAL(cpc.cpu.a & 0x01, (cpc.crtc_pins & CRTC_VSYNC) ? 1 : 0);
+
+  power_on(sizeof ram);
+  cpc_set_links(&cpc, false, 5); /* 60Hz, Schneider */
+  rom_program(program, sizeof program);
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(cpc.cpu.a & 0x10, 0);
+  TEST_EQUAL((cpc.cpu.a >> 1) & 0x07, 5);
+}
+
+static void port_b_follows_the_crtc_into_vsync(void) {
+  power_on(sizeof ram);
+  uint8_t body[200];
+  size_t length = append_standard_screen(body, 0);
+  /* Poll port B until VSYNC arrives, then halt. */
+  size_t loop = length;
+  body[length++] = 0x01; /* LD BC,&F500 */
+  body[length++] = 0x00;
+  body[length++] = 0xF5;
+  body[length++] = 0xED; /* IN A,(C) */
+  body[length++] = 0x78;
+  body[length++] = 0xE6; /* AND 1 */
+  body[length++] = 0x01;
+  body[length++] = 0x28; /* JR Z,loop */
+  uint8_t displacement = (uint8_t)(loop - (length + 1));
+  body[length++] = displacement;
+  body[length++] = 0x76; /* HALT */
+  rom_program(body, length);
+  for (int ticks = 0; ticks < 400000; ticks++) {
+    if (cpc_tick(&cpc) & Z80_HALT) {
+      break;
+    }
+  }
+  TEST_CHECK(cpc.cpu.halted);
+  TEST_CHECK((cpc.crtc_pins & CRTC_VSYNC) != 0);
+}
+
 static void poke_lands_beneath_the_rom(void) {
   power_on(sizeof ram);
   lower_rom[0] = 0xAB;
@@ -521,6 +629,10 @@ int main(void) {
   TEST_RUN(the_border_surrounds_the_display);
   TEST_RUN(the_beam_sweeps_every_line_below_the_flyback);
   TEST_RUN(the_screen_is_read_from_the_base_ram_alone);
+  TEST_RUN(the_documented_scan_reads_a_line);
+  TEST_RUN(an_unpressed_keyboard_reads_high_through_the_chips);
+  TEST_RUN(port_b_carries_the_links_and_the_vsync);
+  TEST_RUN(port_b_follows_the_crtc_into_vsync);
   TEST_RUN(poke_lands_beneath_the_rom);
   return TEST_REPORT("cpc");
 }
