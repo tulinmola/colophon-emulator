@@ -2,11 +2,9 @@
  * cpc.h — the Amstrad CPC, wired.
  *
  * This is the machine file: the one place that knows the chips are soldered
- * into a CPC. It owns the memory map, the I/O decode and the board's video
- * address wiring; the chips it wires know nothing about it. At this stage
- * the machine is a Z80, its memory, a CRTC counting out the frame, a Gate
- * Array drawing from it, a monitor to draw on, and a keyboard read the long
- * way round through two more chips. No wait states yet.
+ * into a CPC. It owns the memory map, the I/O decode, the board's video
+ * address wiring and the clock that divides between the chips; the chips it
+ * wires know nothing about it.
  *
  * Sources:
  * - "The Gate Array" (Grim),
@@ -116,9 +114,8 @@ void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer);
 #define CPC_MANUFACTURER_AMSTRAD 7
 void cpc_set_links(cpc_t *cpc, bool fifty_hz, uint8_t manufacturer);
 
-/* Advance one T-state: tick the CPU, answer its pins from the map. No wait
- * states yet — timing is the raw Z80's until the Gate Array brings the 4T
- * grid. Returns the bus for the host to watch. */
+/* Advance the machine one T-state: the CPU every time, the chips on the
+ * character clock every fourth. Returns the bus for the host to watch. */
 uint64_t cpc_tick(cpc_t *cpc);
 
 /* Tick until the CPU is between instructions. A snapshot has nowhere to
