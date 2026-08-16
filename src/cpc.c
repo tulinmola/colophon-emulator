@@ -174,9 +174,9 @@ void cpc_set_links(cpc_t *cpc, bool fifty_hz, uint8_t manufacturer) {
    low ten of MA to A10-A1, leaving A0 for the Gate Array to toggle between
    the two bytes of the character ("Screen memory addressess"). That is why
    a character row lives in eight blocks two kilobytes apart. */
-static uint16_t video_address(uint64_t crtc_pins) {
-  uint16_t ma = crtc_ma(crtc_pins);
-  uint8_t ra = crtc_ra(crtc_pins);
+uint16_t cpc_video_address(const cpc_t *cpc) {
+  uint16_t ma = crtc_ma(cpc->crtc_pins);
+  uint8_t ra = crtc_ra(cpc->crtc_pins);
   return (uint16_t)(((ma & 0x3000) << 2) | ((ra & 0x07) << 11) | ((ma & 0x03FF) << 1));
 }
 
@@ -188,7 +188,7 @@ uint64_t cpc_tick(cpc_t *cpc) {
                     (cpc->crtc_pins & CRTC_VSYNC) != 0);
     /* The video hardware reads the base 64K and nothing else: no ROM, no
        banked RAM, whatever the CPU is looking at ("The Gate Array", MMR). */
-    uint16_t address = video_address(cpc->crtc_pins);
+    uint16_t address = cpc_video_address(cpc);
     uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
     gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0, cpc->ram[address],
                      cpc->ram[address | 1], samples);

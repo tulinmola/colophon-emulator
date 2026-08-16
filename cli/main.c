@@ -60,6 +60,7 @@ typedef struct {
   const machine_t *machine;
   const char *rom_directory;
   const char *screenshot_path;
+  const char *writes_path;
   const char *snapshot_path; /* one to load, for `run` */
   const char *save_path;     /* one to write when the frames are done */
   const char *text;
@@ -86,6 +87,7 @@ static void print_usage(FILE *out) {
   fprintf(out, "                        \\n Return  \\t Tab  \\e Esc  \\b Del  \\\\ backslash\n");
   fprintf(out, "  --sixty-hz          wire the refresh link for 60Hz\n");
   fprintf(out, "  --screenshot PATH   write the screen here as a PNG\n");
+  fprintf(out, "  --writes PATH       write a map of memory writes here as a PNG\n");
   fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
   fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
   fprintf(out, "  --no-double         one image line per raster line, squashed\n");
@@ -132,6 +134,8 @@ static bool parse_options(int argc, char **argv, int from, options_t *options) {
       options->rom_directory = value;
     } else if (strcmp(argument, "--screenshot") == 0) {
       options->screenshot_path = value;
+    } else if (strcmp(argument, "--writes") == 0) {
+      options->writes_path = value;
     } else if (strcmp(argument, "--type") == 0) {
       options->text = value;
     } else if (strcmp(argument, "--save") == 0) {
@@ -205,6 +209,105 @@ static uint8_t *render(const uint8_t *framebuffer, const options_t *options, uin
   return pixels;
 }
 
+/* Writes per byte of RAM, or NULL when nobody asked for the map. The
+   machine is told nothing about this: cpc_tick already returns the bus, and
+   every write the CPU makes crosses it. */
+static uint32_t *writes;
+
+/* Which byte of RAM the beam painted at each sample of the raster, held as
+   the address plus one so that zero means the beam showed no byte there —
+   border, sync or blanking. Rewritten every frame, so what survives the run
+   is the screen as the machine last drew it.
+
+   It is recorded rather than calculated. Where a byte lands on the picture
+   depends on the whole CRTC configuration, and a program that reprograms it
+   mid-frame has no single answer; watching the addresses the chip actually
+   emits costs the same and stays true through a split screen. */
+static uint32_t *displayed;
+
+/* Base-2 logarithm in 8.8 fixed point: the position of the highest set bit,
+   refined by the eight beneath it. Integer-only, so nothing links libm. */
+static uint32_t log2_fixed(uint32_t value) {
+  uint32_t bit = 31;
+  while ((value >> bit) == 0) {
+    bit--;
+  }
+  uint32_t fraction = bit >= 8 ? (value >> (bit - 8)) : (value << (8 - bit));
+  return bit * 256 + (fraction & 0xFF);
+}
+
+/* Black where nothing was ever written, then a ramp through blue, magenta
+   and yellow to white. Logarithmic because the range is four orders of
+   magnitude: a byte written once and a stack byte written half a million
+   times must both stay legible. */
+static uint32_t heat_colour(uint32_t count, uint32_t peak) {
+  if (count == 0) {
+    return 0x000000;
+  }
+  uint32_t top = log2_fixed(peak);
+  uint32_t level = top == 0 ? 255 : 16 + log2_fixed(count) * 239 / top;
+  uint32_t red = 0;
+  uint32_t green = 0;
+  uint32_t blue = 0;
+  if (level < 64) {
+    blue = 64 + level * 3;
+  } else if (level < 128) {
+    red = (level - 64) * 4;
+    blue = 255;
+  } else if (level < 192) {
+    red = 255;
+    green = (level - 128) * 4;
+    blue = 255 - (level - 128) * 4;
+  } else {
+    red = 255;
+    green = 255;
+    blue = (level - 192) * 4;
+  }
+  return (red << 16) | (green << 8) | blue;
+}
+
+/* The heat where the beam put it: the same crop and the same line doubling
+   the screenshot uses, so the two images lie over one another. The scale is
+   taken over the bytes that reached the screen alone — the firmware's stack
+   is written a hundred times harder than any pixel, and letting it set the
+   top of the range would flatten everything the picture is for. */
+static uint8_t *render_writes(const options_t *options, uint32_t *width_out, uint32_t *height_out) {
+  uint32_t left = options->full_raster ? 0 : CROP_LEFT;
+  uint32_t top = options->full_raster ? 0 : CROP_TOP;
+  uint32_t width = options->full_raster ? CPC_FRAMEBUFFER_WIDTH : CROP_WIDTH;
+  uint32_t lines = options->full_raster ? CPC_FRAMEBUFFER_HEIGHT : CROP_HEIGHT;
+  uint32_t repeat = options->double_lines ? 2 : 1;
+  uint32_t height = lines * repeat;
+
+  uint32_t peak = 0;
+  for (uint32_t at = 0; at < CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT; at++) {
+    if (displayed[at] != 0 && writes[displayed[at] - 1] > peak) {
+      peak = writes[displayed[at] - 1];
+    }
+  }
+
+  uint8_t *pixels = malloc((size_t)width * height * 3);
+  if (pixels == NULL) {
+    fprintf(stderr, "cannot hold a %ux%u image\n", width, height);
+    return NULL;
+  }
+  uint8_t *out = pixels;
+  for (uint32_t line = 0; line < lines; line++) {
+    const uint32_t *row = displayed + (size_t)(top + line) * CPC_FRAMEBUFFER_WIDTH + left;
+    for (uint32_t again = 0; again < repeat; again++) {
+      for (uint32_t column = 0; column < width; column++) {
+        uint32_t rgb = row[column] == 0 ? 0 : heat_colour(writes[row[column] - 1], peak);
+        *out++ = (uint8_t)(rgb >> 16);
+        *out++ = (uint8_t)(rgb >> 8);
+        *out++ = (uint8_t)rgb;
+      }
+    }
+  }
+  *width_out = width;
+  *height_out = height;
+  return pixels;
+}
+
 /* Read a whole file into a fresh buffer; the caller frees it. */
 static uint8_t *read_file(const char *path, size_t *size_out) {
   FILE *handle = fopen(path, "rb");
@@ -264,9 +367,46 @@ static bool save_snapshot(const cpc_t *cpc, const char *path) {
   return ok;
 }
 
+static void record_displayed(const cpc_t *cpc) {
+  /* The Gate Array shows a character one microsecond after the CRTC hands
+     over its address, so the samples just painted came from the address
+     fetched last time — and blanking is judged now, as the chip judges it. */
+  static uint16_t pending_address;
+  static bool pending_display;
+
+  uint16_t beam_x = cpc->monitor.beam_x;
+  uint16_t beam_y = cpc->monitor.beam_y;
+  bool blanked = cpc->gate_array.black_hsync || cpc->gate_array.black_vsync;
+  if (pending_display && !blanked && beam_y < CPC_FRAMEBUFFER_HEIGHT &&
+      beam_x >= GATE_ARRAY_SAMPLES_PER_CHARACTER) {
+    uint32_t start =
+        (uint32_t)beam_y * CPC_FRAMEBUFFER_WIDTH + beam_x - GATE_ARRAY_SAMPLES_PER_CHARACTER;
+    for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+      /* Two bytes make sixteen samples, eight each, whatever the mode. */
+      uint16_t address = pending_address | (sample < 8 ? 0 : 1);
+      displayed[start + sample] = (uint32_t)address + 1;
+    }
+  }
+  pending_address = cpc_video_address(cpc);
+  pending_display = (cpc->crtc_pins & CRTC_DISPTMG) != 0;
+}
+
 static void run_frames(cpc_t *cpc, long frames) {
   for (long tick = 0; tick < frames * CPC_TICKS_PER_STANDARD_FRAME; tick++) {
-    cpc_tick(cpc);
+    uint64_t pins = cpc_tick(cpc);
+    if (writes == NULL) {
+      continue;
+    }
+    if ((pins & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR)) {
+      /* Counted against the byte it landed in rather than the address it
+         was sent to: under banking, two writes to &4000 can reach different
+         halves of the machine. */
+      uint16_t address = z80_address(pins);
+      writes[cpc->write_page[address >> 14] + (address & 0x3FFF) - cpc->ram]++;
+    }
+    if (gate_array_character_clock(&cpc->gate_array)) {
+      record_displayed(cpc);
+    }
   }
 }
 
@@ -327,6 +467,7 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
       .machine = &machines[0],
       .rom_directory = "roms",
       .screenshot_path = NULL,
+      .writes_path = NULL,
       .text = NULL,
       .snapshot_path = NULL,
       .save_path = NULL,
@@ -356,8 +497,15 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   uint8_t *ram = calloc(options.machine->ram_size, 1);
   uint8_t *framebuffer = calloc((size_t)CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT, 1);
   cpc_t *cpc = calloc(1, sizeof *cpc);
-  if (ram == NULL || framebuffer == NULL || cpc == NULL) {
+  if (options.writes_path != NULL) {
+    writes = calloc(options.machine->ram_size, sizeof *writes);
+    displayed = calloc((size_t)CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT, sizeof *displayed);
+  }
+  if (ram == NULL || framebuffer == NULL || cpc == NULL ||
+      (options.writes_path != NULL && (writes == NULL || displayed == NULL))) {
     fprintf(stderr, "cannot hold the machine\n");
+    free(displayed);
+    free(writes);
     free(cpc);
     free(framebuffer);
     free(ram);
@@ -397,6 +545,17 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
       status = 1;
     }
   }
+  if (status == 0 && options.writes_path != NULL) {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint8_t *pixels = render_writes(&options, &width, &height);
+    if (pixels == NULL || !png_write(options.writes_path, pixels, width, height)) {
+      status = 1;
+    } else {
+      printf("%s: writes %ux%u to %s\n", options.machine->name, width, height, options.writes_path);
+    }
+    free(pixels);
+  }
   if (status == 0 && options.screenshot_path != NULL) {
     uint32_t width = 0;
     uint32_t height = 0;
@@ -412,6 +571,8 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
     printf("%s: %ld frames\n", options.machine->name, options.frames);
   }
 
+  free(displayed);
+  free(writes);
   free(cpc);
   free(framebuffer);
   free(ram);

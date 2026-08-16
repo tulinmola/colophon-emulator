@@ -142,6 +142,13 @@ void cpc_finish_instruction(cpc_t *cpc);
  * machine this call afterwards. */
 void cpc_remap(cpc_t *cpc);
 
+/* Where the video hardware last read for a character: the board's rewiring
+ * of the CRTC's address lines, applied to the pins the chip put out on the
+ * last character clock. The byte it names and the one beside it are the
+ * pair the Gate Array puts on screen a microsecond later, which is what a
+ * host must allow for when lining a byte up against the picture. */
+uint16_t cpc_video_address(const cpc_t *cpc);
+
 /* The CPU's view without the CPU: reads and writes resolve through the same
  * mapping the CPU's memory cycles use, so a peek under an enabled ROM sees
  * the ROM and a poke lands in the RAM beneath it. */
