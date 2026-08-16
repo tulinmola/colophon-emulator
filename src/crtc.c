@@ -74,8 +74,10 @@ uint64_t crtc_tick(crtc_t *crtc) {
     crtc->vma_ = crtc->vma;
   }
 
-  /* HSYNC begins on the character where C0 meets R2 (ch. 6.1.2). */
-  if (crtc->c0 == r[2] && !crtc->hsync) {
+  /* HSYNC begins on the character where C0 meets R2 (ch. 6.1.2). A width of
+     zero is no HSYNC at all on this type — the 16 the other types read there
+     is what a program uses to tell them apart (ch. 14.1, 14.5, 28.1.5). */
+  if (crtc->c0 == r[2] && !crtc->hsync && (r[3] & 0x0F) != 0) {
     crtc->hsync = true;
     crtc->c3l = 0;
   }

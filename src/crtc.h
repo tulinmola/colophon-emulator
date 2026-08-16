@@ -73,7 +73,9 @@ typedef struct {
                   0 has no C5 and spends C9 on the vertical adjustment too
                   (ch. 11.2.2) */
   uint8_t c4;  /* character row counter, 7 bits */
-  uint8_t c3l; /* HSYNC width counter, 4 bits: R3 low nibble, 0 counts 16 */
+  uint8_t c3l; /* HSYNC width counter, 4 bits: R3 low nibble. A nibble of 0
+                  is no HSYNC at all on this type, where types 2, 3 and 4
+                  read it as 16 (ch. 14.1, 14.5) */
   uint8_t c3h; /* VSYNC scanline counter, 4 bits: R3 high nibble, 0 counts 16 */
 
   /* This line ends the frame. Decided while C0 is 0 or 1 and held for the

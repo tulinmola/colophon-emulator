@@ -403,6 +403,28 @@ static void a_c0_that_overflowed_does_not_open_the_display(void) {
   TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
 }
 
+static void a_sync_width_of_zero_makes_no_hsync(void) {
+  /* Where types 2, 3 and 4 read 16, this one reads none — the difference a
+     program tells them apart by (ch. 14.1, 14.5, 28.1.5). */
+  program_standard();
+  write_register(3, 0x80);
+  int hsyncs = 0, vsyncs = 0;
+  bool hsync_before = false, vsync_before = false;
+  for (int tick = 0; tick < 2 * FRAME_TICKS; tick++) {
+    uint64_t pins = crtc_tick(&crtc);
+    if ((pins & CRTC_HSYNC) && !hsync_before) {
+      hsyncs++;
+    }
+    if ((pins & CRTC_VSYNC) && !vsync_before) {
+      vsyncs++;
+    }
+    hsync_before = (pins & CRTC_HSYNC) != 0;
+    vsync_before = (pins & CRTC_VSYNC) != 0;
+  }
+  TEST_EQUAL(hsyncs, 0);
+  TEST_EQUAL(vsyncs, 2); /* R3's high nibble is untouched by the rule */
+}
+
 int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(select_wears_five_bits);
@@ -425,5 +447,6 @@ int main(void) {
   TEST_RUN(the_r6_border_is_shut_for_the_whole_frame);
   TEST_RUN(an_r1_of_zero_leaves_the_line_displayed);
   TEST_RUN(a_c0_that_overflowed_does_not_open_the_display);
+  TEST_RUN(a_sync_width_of_zero_makes_no_hsync);
   return TEST_REPORT("crtc");
 }
