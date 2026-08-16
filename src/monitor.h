@@ -13,6 +13,13 @@
  * many lines make a frame, and how long a sync must be held to mean the
  * frame is over.
  *
+ * A line is timed from the middle of its sync pulse, not the edge. This is
+ * what makes a shortened pulse move the picture: the tube's oscillator locks
+ * on the pulse as a whole, so trimming a microsecond off the end walks the
+ * middle half a microsecond earlier and the picture half a microsecond right.
+ * Programs buy a half-character of horizontal scroll that way, which is one
+ * byte, the step R12/R13 cannot reach.
+ *
  * Not modelled: the flywheel a real tube runs its horizontal oscillator on.
  * Every sync edge retraces here, and a frame that outruns the tube clamps
  * at the bottom where a monitor would lose vertical hold and roll.
@@ -46,6 +53,9 @@ typedef struct {
   /* A sync held at least this many samples means a frame retrace. Anything
      shorter is a line. */
   uint16_t frame_sync_samples;
+  /* Where the middle of a line's sync pulse falls, counted from the left of
+     the picture. A pulse longer than twice this is not a line's. */
+  uint16_t line_sync_centre;
 
   uint16_t beam_x;
   uint16_t beam_y;
@@ -55,7 +65,7 @@ typedef struct {
 } monitor_t;
 
 void monitor_init(monitor_t *monitor, uint8_t *framebuffer, uint16_t width, uint16_t height,
-                  uint16_t frame_sync_samples);
+                  uint16_t frame_sync_samples, uint16_t line_sync_centre);
 
 /* Receive a run of samples during which the sync line held one level. The
  * bool models assertion, not voltage: composite sync is active low on the

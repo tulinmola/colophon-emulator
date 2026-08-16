@@ -6,12 +6,13 @@
 #include "monitor.h"
 
 void monitor_init(monitor_t *monitor, uint8_t *framebuffer, uint16_t width, uint16_t height,
-                  uint16_t frame_sync_samples) {
+                  uint16_t frame_sync_samples, uint16_t line_sync_centre) {
   *monitor = (monitor_t){0};
   monitor->framebuffer = framebuffer;
   monitor->width = width;
   monitor->height = height;
   monitor->frame_sync_samples = frame_sync_samples;
+  monitor->line_sync_centre = line_sync_centre;
 }
 
 void monitor_receive(monitor_t *monitor, const uint8_t *samples, uint8_t count, bool sync) {
@@ -34,6 +35,15 @@ void monitor_receive(monitor_t *monitor, const uint8_t *samples, uint8_t count, 
        serrations that keep the lines locked are gaps, not pulses — so this
        arms exactly once per frame. */
     monitor->frame_retraced = false;
+  }
+
+  if (!sync && monitor->sync && monitor->sync_held <= 2 * monitor->line_sync_centre) {
+    /* A line's sync has ended, and only now is its width known. The beam is
+       placed as if the line had been timed from the pulse's middle, which is
+       what carries a shortened pulse into a picture shifted right by half of
+       what was taken off (Compendium ch. 14.3). A pulse too long for a line
+       is the frame's, and the beam is left where it stands. */
+    monitor->beam_x = (uint16_t)(monitor->line_sync_centre + monitor->sync_held / 2);
   }
   monitor->sync = sync;
 

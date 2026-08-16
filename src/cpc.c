@@ -156,7 +156,7 @@ void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom) {
 
 void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer) {
   monitor_init(&cpc->monitor, framebuffer, CPC_FRAMEBUFFER_WIDTH, CPC_FRAMEBUFFER_HEIGHT,
-               CPC_FRAME_SYNC_SAMPLES);
+               CPC_FRAME_SYNC_SAMPLES, CPC_LINE_SYNC_CENTRE);
 }
 
 void cpc_set_links(cpc_t *cpc, bool fifty_hz, uint8_t manufacturer) {

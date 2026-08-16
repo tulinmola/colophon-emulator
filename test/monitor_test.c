@@ -3,7 +3,8 @@
  *
  * The monitor here is 32 samples across and 8 lines down, with a frame
  * sync of 12 samples, so a whole frame fits in one screenful of assertions.
- * Runs are 4 samples long, the way a machine would hand over a character.
+ * Runs are 4 samples long, the way a machine would hand over a character,
+ * and a line's sync is one of them, so its middle sits at sample 2.
  */
 #include <string.h>
 
@@ -13,6 +14,7 @@
 #define WIDTH 32
 #define HEIGHT 8
 #define FRAME_SYNC 12
+#define SYNC_CENTRE 2
 #define RUN 4
 
 static uint8_t framebuffer[WIDTH * HEIGHT];
@@ -20,7 +22,7 @@ static monitor_t monitor;
 
 static void power_on(void) {
   memset(framebuffer, 0, sizeof framebuffer);
-  monitor_init(&monitor, framebuffer, WIDTH, HEIGHT, FRAME_SYNC);
+  monitor_init(&monitor, framebuffer, WIDTH, HEIGHT, FRAME_SYNC, SYNC_CENTRE);
 }
 
 /* A run of `count` samples all of one value, with the sync line held. */
@@ -54,6 +56,39 @@ static void a_short_sync_starts_the_next_line(void) {
   TEST_EQUAL(monitor.beam_x, 4);
   receive(0x22, RUN, false);
   TEST_EQUAL(at(4, 1), 0x22);
+}
+
+static void a_shortened_sync_moves_the_picture_right(void) {
+  /* The line is timed from the middle of its sync, so a pulse cut short
+     walks its middle earlier and the picture later by half as much
+     (Compendium ch. 14.3). Two samples off this pulse move the picture one
+     sample right — the half-character a program buys itself when R12/R13
+     can only step whole ones. The width is known only once the pulse ends,
+     so the beam is placed on the run after it, which is the run that
+     carries the picture. */
+  power_on();
+  receive(0x11, RUN, false);
+  receive(0, RUN, true);
+  receive(0x22, RUN, false);
+  TEST_EQUAL(monitor.beam_y, 1);
+  TEST_EQUAL(at(4, 1), 0x22);
+
+  power_on();
+  receive(0x11, RUN, false);
+  receive(0, RUN - 2, true); /* one microsecond less, in this tube's units */
+  receive(0x22, RUN, false);
+  TEST_EQUAL(monitor.beam_y, 1);
+  TEST_EQUAL(at(3, 1), 0x22);
+}
+
+static void a_frame_sync_leaves_the_beam_alone(void) {
+  /* Only a line's pulse is short enough to time a line from. A longer one
+     is the frame's, and it must not drag the beam back across the tube. */
+  power_on();
+  receive(0x11, RUN, false);
+  receive(0, RUN * 2, true); /* longer than twice the centre */
+  receive(0x22, RUN, false);
+  TEST_EQUAL(at(RUN * 2, 1), 0x22);
 }
 
 static void a_long_sync_starts_the_next_frame(void) {
@@ -124,7 +159,7 @@ static void samples_past_the_edge_are_dropped(void) {
 }
 
 static void an_unplugged_monitor_ignores_the_cable(void) {
-  monitor_init(&monitor, NULL, WIDTH, HEIGHT, FRAME_SYNC);
+  monitor_init(&monitor, NULL, WIDTH, HEIGHT, FRAME_SYNC, SYNC_CENTRE);
   receive(0x55, RUN, false);
   receive(0x55, RUN, true);
   TEST_EQUAL(monitor.beam_x, 0);
@@ -134,6 +169,8 @@ static void an_unplugged_monitor_ignores_the_cable(void) {
 int main(void) {
   TEST_RUN(the_beam_paints_where_it_stands);
   TEST_RUN(a_short_sync_starts_the_next_line);
+  TEST_RUN(a_shortened_sync_moves_the_picture_right);
+  TEST_RUN(a_frame_sync_leaves_the_beam_alone);
   TEST_RUN(a_long_sync_starts_the_next_frame);
   TEST_RUN(one_frame_retrace_per_sync_block);
   TEST_RUN(a_short_pulse_arms_the_next_frame);
