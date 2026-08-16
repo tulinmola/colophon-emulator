@@ -607,6 +607,30 @@ static void poke_lands_beneath_the_rom(void) {
   TEST_EQUAL(cpc_peek(&cpc, 0), 0xAB);
 }
 
+static void in_a_writes_the_crtc_register_the_accumulator_holds(void) {
+  /* The CRTC is wired without a direction line, so a read of a write port
+     writes whatever the CPU had on the address bus. IN A,(n) puts A there,
+     which is the documented way to select and load a register in three
+     microseconds (Compendium ch. 4.4.2). The document's own example. */
+  uint8_t program[64];
+  size_t length = 0;
+  program[length++] = 0x01; /* LD BC,&BC02 — select R2 */
+  program[length++] = 0x02;
+  program[length++] = 0xBC;
+  program[length++] = 0xED; /* OUT (C),C */
+  program[length++] = 0x49;
+  program[length++] = 0x3E; /* LD A,&19 */
+  program[length++] = 0x19;
+  program[length++] = 0xDB; /* IN A,(&FF) — the address bus carries &19FF */
+  program[length++] = 0xFF;
+  program[length++] = 0x76; /* HALT */
+
+  power_on(0x20000);
+  rom_program(program, length);
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(cpc.crtc.registers[2], 0x19);
+}
+
 int main(void) {
   TEST_RUN(reset_shows_both_roms_and_the_base_map);
   TEST_RUN(programs_fetch_from_the_lower_rom);
@@ -634,5 +658,6 @@ int main(void) {
   TEST_RUN(port_b_carries_the_links_and_the_vsync);
   TEST_RUN(port_b_follows_the_crtc_into_vsync);
   TEST_RUN(poke_lands_beneath_the_rom);
+  TEST_RUN(in_a_writes_the_crtc_register_the_accumulator_holds);
   return TEST_REPORT("cpc");
 }

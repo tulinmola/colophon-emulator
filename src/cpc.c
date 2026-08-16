@@ -66,9 +66,9 @@ static void run_psg(cpc_t *cpc) {
 
 /* The board wires the CRTC bus from the address lines: RS is A8 and R/W is
    A9, so &BC00-&BF00 are select, write, status and read — "The CRTC" (Grim),
-   I/O ports. The chip is strobed by any I/O request when A14 is low: a CPU
-   read of a write port still makes it latch the bus, which floats — &FF by
-   our convention. */
+   I/O ports. The direction comes from the address and not from the CPU, so
+   the chip is strobed by any I/O request when A14 is low, and a CPU read of
+   one of the two write ports latches whatever the address bus carried. */
 static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
   uint64_t pins = CRTC_CS | crtc_set_data(0, data);
   if (address & 0x0100) {
@@ -119,7 +119,12 @@ static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
 static uint8_t io_read(cpc_t *cpc, uint16_t address) {
   uint8_t data = 0xFF;
   if ((address & 0x4000) == 0) {
-    data = crtc_data(crtc_bus(cpc, address, data));
+    /* The CRTC is given no direction line here, so a read of a write port
+       writes: whatever the CPU happened to put on the address bus lands in
+       the selected register. For IN A,(n) that byte is A, which is the
+       documented three-microsecond way to write a register (Compendium ch.
+       4.4.2); for IN r,(C) it is B, which the document leaves undefined. */
+    data = crtc_data(crtc_bus(cpc, address, (uint8_t)(address >> 8)));
   }
   if ((address & 0x0800) == 0) {
     present_port_b(cpc);
