@@ -15,7 +15,11 @@
  * the block that stops one VSYNC condition serving twice. Not yet: interlace
  * and skew (R8 is stored, unread), cursor, lightpen, the first three
  * microseconds of a line (ch. 13.2), and the per-type divergences — each
- * arrives when Shaker can judge it.
+ * arrives when Shaker can judge it. Two of the border's rules need a finer
+ * pin than this one: the byte of border at C0=R0 when R1 exceeds it (ch.
+ * 17.6.2) and the byte-by-byte alternation an R6 of 0 makes on a frame's
+ * first line (ch. 18.3.2) both toggle DISPLAY ENABLE inside a character,
+ * where crtc_tick reports it once per character.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -80,6 +84,16 @@ typedef struct {
   /* One C4/R7 equality raises one VSYNC: the comparison must change, by C4
      moving or R7 being written, before it raises another (ch. 16.3). */
   bool vsync_blocked;
+
+  /* DISPLAY ENABLE is two latches rather than two comparisons (ch. 6.1.3,
+     18.2.1). The R1 one opens at the head of every line; the R6 one, once
+     shut, is shut for the frame, and it outranks the other. */
+  bool border_r1;
+  bool border_r6;
+  /* The line ran its length. Only the C0 that returns to 0 from R0 opens the
+     display again — one that got there by overflowing 255 does not (ch.
+     17.1). */
+  bool c0_reached_r0;
 
   /* VMA and VMA', the two internal pointers (ch. 20): VMA runs, one
      character per tick; VMA' is the transient row latch that captures VMA

@@ -56,11 +56,11 @@ static void run_scanlines(int count) { run_characters(count * SCANLINE); }
 /* Stop on the first character of the row named, however long the chip takes
    to get there; 4000 scanlines is a dozen frames and a failed loop. */
 static bool run_to_row(uint8_t row) {
-  for (int scanline = 0; scanline < 4000; scanline++) {
+  for (int character = 0; character < 4000 * SCANLINE; character++) {
     if (crtc.c4 == row && crtc.c9 == 0 && crtc.c0 == 0) {
       return true;
     }
-    run_scanlines(1);
+    crtc_tick(&crtc);
   }
   return false;
 }
@@ -329,6 +329,80 @@ static void one_vsync_per_equality_of_c4_and_r7(void) {
   TEST_CHECK(crtc.vsync);
 }
 
+static void the_r1_border_holds_until_the_line_begins_again(void) {
+  /* The display opens where the line begins and shuts where C0 meets R1,
+     and neither is a comparison standing (ch. 6.1.3, 17.1). Moving R1 out
+     of C0's way afterwards cannot reopen the border, which is what makes
+     ch. 17.3's trick work: R1 is moved during the border so the video
+     pointer is carried forward without the data being shown. */
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  run_characters(45); /* past R1=40, so the border has begun */
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  write_register(1, 50);
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  /* The next line opens it again. */
+  run_scanlines(1);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+
+  /* And R1 put below C0 cannot shut it: the equality never comes round. */
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  run_characters(20);
+  write_register(1, 10);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  run_characters(30);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+static void the_r6_border_is_shut_for_the_whole_frame(void) {
+  /* Where C4 meets R6 the border is immediate and final; only a new frame
+     opens it, and while it is shut R1 has no say (ch. 18.2.1, 18.2.2). */
+  program_standard();
+  TEST_CHECK(run_to_row(26)); /* past R6=25 */
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  write_register(6, 30);
+  run_scanlines(1);
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  /* The frame's first row has it open again. */
+  TEST_CHECK(run_to_row(0));
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+
+  /* R6 put below C4 cannot shut it either. */
+  program_standard();
+  TEST_CHECK(run_to_row(10));
+  write_register(6, 5);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+static void an_r1_of_zero_leaves_the_line_displayed(void) {
+  /* Both conditions land on the same character, and the document gives the
+     opening priority (ch. 18.3.1). */
+  program_standard();
+  write_register(1, 0);
+  TEST_CHECK(run_to_row(1));
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+static void a_c0_that_overflowed_does_not_open_the_display(void) {
+  /* Only the C0 that returns to 0 from R0 opens it. One that got there by
+     running past 255 does not (ch. 17.1). */
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  run_characters(45); /* the R1 border has begun */
+  write_register(0, 5);
+  while (crtc.c0 != 0) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  /* The next line runs its length, and that one does open it. */
+  while (crtc.c0 != 0) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
 int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(select_wears_five_bits);
@@ -347,5 +421,9 @@ int main(void) {
   TEST_RUN(a_late_write_can_still_end_the_frame);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
+  TEST_RUN(the_r1_border_holds_until_the_line_begins_again);
+  TEST_RUN(the_r6_border_is_shut_for_the_whole_frame);
+  TEST_RUN(an_r1_of_zero_leaves_the_line_displayed);
+  TEST_RUN(a_c0_that_overflowed_does_not_open_the_display);
   return TEST_REPORT("crtc");
 }

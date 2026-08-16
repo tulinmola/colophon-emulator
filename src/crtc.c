@@ -89,7 +89,26 @@ uint64_t crtc_tick(crtc_t *crtc) {
     crtc->c3h = 0;
   }
 
-  bool display = crtc->c0 < r[1] && crtc->c4 < r[6];
+  /* DISPLAY ENABLE, as two latches the equalities throw rather than two
+     comparisons standing (ch. 6.1.3, 17.1, 18.1). R1's opens where the line
+     begins and shuts where C0 meets R1; when R1 is 0 both fall on the same
+     character and the opening wins (ch. 18.3.1). R6's shuts where C4 meets
+     R6 and nothing but a new frame opens it, and while it is shut R1 has no
+     say (ch. 18.2.1, 18.2.2). The first line of a frame is exempt, which is
+     what leaves an R6 of 0 cancellable there (ch. 18.3.2). */
+  bool first_line = crtc->c4 == 0 && crtc->c9 == 0;
+  if (crtc->c0 == r[1]) {
+    crtc->border_r1 = true;
+  }
+  if (crtc->c0 == 0 && crtc->c0_reached_r0) {
+    crtc->border_r1 = false;
+  }
+  if (first_line && crtc->c0 == 0) {
+    crtc->border_r6 = false;
+  } else if (crtc->c4 == r[6] && !first_line) {
+    crtc->border_r6 = true;
+  }
+  bool display = !crtc->border_r1 && !crtc->border_r6;
   uint64_t pins = (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)(crtc->c9 & 0x1F) << 24) |
                   (display ? CRTC_DISPTMG : 0) | (crtc->hsync ? CRTC_HSYNC : 0) |
                   (crtc->vsync ? CRTC_VSYNC : 0);
@@ -104,9 +123,14 @@ uint64_t crtc_tick(crtc_t *crtc) {
   }
   if (crtc->c0 != r[0]) {
     crtc->c0++;
+    if (crtc->c0 == 0) {
+      /* R0 was moved under C0 and the counter came back the long way. */
+      crtc->c0_reached_r0 = false;
+    }
     return pins;
   }
   crtc->c0 = 0;
+  crtc->c0_reached_r0 = true;
 
   /* A scanline ended. C3h counts VSYNC scanlines on its 4 bits, so a width
      of 0 runs the full 16 (ch. 6.1.2). */
