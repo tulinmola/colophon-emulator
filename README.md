@@ -23,35 +23,40 @@ make roms   # fetch the firmware, once
 Then run a machine and look at it:
 
 ```sh
-build/emulator boot --screenshot ready.png
-build/emulator boot --machine cpc464 --screenshot ready.png
 build/emulator boot --type 'PRINT 2+2\n' --screenshot sum.png
-build/emulator boot --type 'MODE 0\n' --save state.sna
-build/emulator run state.sna --type 'BORDER 6\n' --screenshot resumed.png
-build/emulator boot --full-raster --screenshot raster.png
 ```
 
-`boot` starts a machine from reset and `run` picks one up from a snapshot; both then run for a fixed number of frames, type whatever `--type` was given, and write what they are asked for — a PNG of the screen, an SNA snapshot of the machine, or both. Three machines answer to `--machine` — `cpc6128`, `cpc664`, `cpc464` — and a name is only listed once the machine behind it boots to its prompt. `--full-raster` gives the whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. Nothing consults a clock, so the same command writes the same bytes every time.
+`boot` starts a machine from reset and `run` picks one up from a snapshot; both then run for a fixed number of frames, type whatever `--type` was given, and write what they are asked for — a PNG of the screen, an SNA snapshot of the machine, a map of every write it made, or all three. Nothing consults a clock, so the same command writes the same bytes every time. [The command line](docs/command-line.en.md) sets out the rest.
 
-The firmware images are Amstrad's. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here. The images the PNG writer produces are uncompressed — the format allows it, and it saves us a compressor to get wrong.
+The firmware images are Amstrad's. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here.
+
+For development there are also `make format` (clang-format, config in `.clang-format`), `make format-check`, and `make lint` (clang-tidy, config in `.clang-tidy`).
+
+## Where it stands
 
 There is nothing to play yet, but there is something to see. The Z80 came first — cycle-stepped, complete, every instruction the machine knows, undocumented ones included — and the CPC has been built around it a chip at a time: the memory map with its RAM banking and ROM paging, a 6845 CRTC counting out the frame at one character per microsecond, a Gate Array raising the 300Hz heartbeat and turning bytes into colour, and a monitor that takes the one composite sync wire and separates it the way a tube does. Given the firmware, the machine now boots it, and the Ready prompt arrives on the screen in the right colours, in the right place.
 
-It can hear you, too. The keyboard is a grid of switches read the long way round — the CPU asks the 8255, which asks the sound chip, which reads the grid — and with that path in place you can type at the prompt and BASIC will answer.
-
-And it runs at the right speed. The Gate Array keeps the CPU off the memory for three cycles in four so the video always wins, which stretches every instruction onto a whole microsecond and costs the processor a quarter of its nominal 4MHz — the tax that makes a CPC a CPC.
+It can hear you, too. The keyboard is a grid of switches read the long way round — the CPU asks the 8255, which asks the sound chip, which reads the grid — and with that path in place you can type at the prompt and BASIC will answer. And it runs at the right speed: the Gate Array keeps the CPU off the memory for three cycles in four so the video always wins, which stretches every instruction onto a whole microsecond and costs the processor a quarter of its nominal 4MHz — the tax that makes a CPC a CPC.
 
 It can also be stopped and picked up again: a machine writes itself out as an SNA snapshot, and another reads it back and carries on.
 
 And there is a disc, though nothing yet to read it with. A disc image becomes a medium — cylinders, sides, and the sectors lying under the head with the identities they announce, the wrong lengths some of them claim, and the several readings a protected one keeps. What comes next is the controller that turns a head across it, which is what stands between here and the games.
 
-For development there are also `make format` (clang-format, config in `.clang-format`), `make format-check`, and `make lint` (clang-tidy, config in `.clang-tidy`).
+[The machine](docs/machine.en.md) is the full accounting, chip by chip, of what is there and what is not.
+
+## Documentation
+
+The emulator's documentation lives in `docs/`, beside the code it describes, and is gathered and published by [The Colophon Project](https://github.com/tulinmola/colophon-project).
+
+- [The machine](docs/machine.en.md) — what it does today, chip by chip, and what it does not.
+- [The evidence](docs/evidence.en.md) — the tiers of tests, what each proves, and what each cannot see.
+- [The command line](docs/command-line.en.md) — booting a machine, typing at it, and carrying away a picture or a snapshot.
+- [The core](docs/core.en.md) — the interface a host builds on.
+- [Observation](docs/observation.en.md) — how a debugger attaches to a machine that had nothing added to it.
 
 ## Evidence
 
-An emulator that looks right and an emulator that is right are different things, and the difference surfaces years later, in the one game nobody tried. So every claim here has a check behind it, and wherever possible the check comes from outside — written by someone else, who did not know what we believe.
-
-The tests come in tiers, separated by what they answer and what they cost.
+An emulator that looks right and an emulator that is right are different things, and the difference surfaces years later, in the one game nobody tried. So every claim here has a check behind it, and wherever possible the check comes from outside — written by someone else, who did not know what we believe. A test built from our own understanding agrees with our own mistakes.
 
 ```sh
 make test              # fast, hermetic, no network — runs on every change
@@ -61,17 +66,9 @@ make test-exerciser    # the Z80 instruction set exerciser
 make test-all          # all four
 ```
 
-`make test` covers only what no external suite can see: the reset contract, the invariants of our own machinery, that every opcode on every prefix page finishes without outgrowing its micro-program. Since the machine began it also proves the memory map against its documentation — the eight banking configurations, the ROM paging, the I/O decode — each exercised through the bus by a program running from a fabricated ROM, the CRTC against the Compendium's frame — 312 scanlines of 64 microseconds, the syncs where the registers put them, the video pointer walking the documented rows, the last line decided while C0 is still 0 or 1, the counters running to their own tops when a program writes a limit beneath them, the vertical adjustment that brings a runaway row counter home, the display and the border as the latches the equalities throw rather than comparisons standing, and the sync width of zero that leaves this type with no line sync at all — the monitor timing its lines from the middle of that sync, which is what turns a trimmed one into half a character of scroll — the Gate Array against chapter 27 and its own documentation — the interrupt counter looping at 52, bit 5 dying at the acknowledge, the two-HSYNC rule after VSYNC, a byte becoming pixels in each of the four modes — the video path end to end — a screen of pixels through the whole machine, landing 640 by 200 exactly where the syncs put it — and the duration of seventy-odd instructions in microseconds, against two tables of measurements made independently of each other and of us. It deliberately restates nothing the corpus already proves, and the corpus proves nothing about wait states: it runs the CPU with the pin released throughout.
+Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — and all three machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table the ROM itself carries.
 
-`make test-firmware` boots the real thing. It runs each of the three machines from reset, reads the screen back as text and checks it says what Amstrad and Locomotive Software wrote, then types `PRINT 2+2` at the prompt and insists BASIC answers `4`. That one line is the strictest test here: the keyboard matrix, the 8255's direction flipping, the PSG, the fifty-times-a-second scan and the interrupt that drives it must all be right at once, and none of it is graded by us. The letters are identified by looking each glyph up in the character table the ROM itself carries — a test that recognised letters by our own table would only prove we agree with ourselves. It needs the firmware, so it fetches it first.
-
-`make test-single-step` runs [SingleStepTests](https://github.com/SingleStepTests/z80): 1,604 files, one per opcode across every prefix page, a thousand randomised cases each — 1,604,000 in all. Every case fixes the CPU and memory before and after, and the state of the bus after each individual clock cycle. That last part is what earns its **1.3 GB**, because it tests timing rather than only results. It matters just as much that we did not write it: a test written from our own understanding agrees with our own mistakes, and this one disagrees. It has already caught a real error — we had concluded an undocumented DD CB behaviour did not exist, and 168 files said otherwise. The corpus is pinned to a commit, so "passes the complete suite" names something exact that cannot shift underneath us. The first run downloads it, which takes a few minutes and needs `curl` and `unzip`; after that it is local.
-
-Today every instruction the Z80 knows passes it, per cycle.
-
-`make test-exerciser` runs [Frank Cringle's Z80 instruction set exerciser](https://github.com/agn453/ZEXALL) from 1994, in both its forms: ZEXDOC checks the documented flags, ZEXALL all eight bits including the undocumented two. It sweeps each instruction across long runs of operands and flags and checks the result against a CRC recorded from real hardware. Its method is independent of the corpus, but the deeper difference is that it is a *program*: millions of instructions in sequence, each inheriting whatever the last one left behind, where the corpus tests each instruction alone from a clean state. That is the failure the corpus cannot see, and the one that decides whether real software runs. It is slow — hours of 4 MHz machine time, minutes of ours — so it runs by the group: `EXERCISER_GROUPS=0` for all sixty-seven.
-
-Two suites are still to come, each proving something the others cannot. **Shaker**, Longshot's CRTC acid tests, compares against recordings made on real machines, one set per CRTC type. And a battery of demos, which break on anything less than exact — the only tests written by people trying to make the hardware do something beautiful rather than something correct.
+[The evidence](docs/evidence.en.md) sets out what each tier proves, what it costs, and the two suites still to come.
 
 ## Sources
 
