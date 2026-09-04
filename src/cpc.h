@@ -32,6 +32,14 @@
  *   https://cpctech.cpcwiki.de/docs/8255cpc.html — what each port is wired
  *   to here: the PSG's bus on A, VSYNC and the board's links on B, the
  *   PSG's function lines and the keyboard line on C.
+ * - "Floppy disc controller and Floppy disc drives" (Kevin Thacker's
+ *   cpctech), https://cpctech.cpcwiki.de/docs/fdc.html — the disc
+ *   interface's decode: A10 and A7 low select it, A8 and A0 then choose
+ *   between the drive motor and the controller's two registers; the motor
+ *   port drives every drive at once from bit 0; INT, DMA and terminal
+ *   count left unconnected. It prints the selecting bit as 11 where "I/O
+ *   port allocation" says 10; &FB7E has bit 10 low and bit 11 high, which
+ *   settles it.
  */
 #ifndef COLOPHON_CPC_H
 #define COLOPHON_CPC_H
@@ -40,11 +48,13 @@
 #include <stdint.h>
 
 #include "crtc.h"
+#include "drive.h"
 #include "gate_array.h"
 #include "keyboard.h"
 #include "monitor.h"
 #include "ppi.h"
 #include "psg.h"
+#include "upd765.h"
 #include "z80.h"
 
 /* The whole raster the beam covers: 64µs of line at the Gate Array's
@@ -81,6 +91,15 @@ typedef struct {
   psg_t psg;
   keyboard_t keyboard;
 
+  /* The disc interface: built into the 664 and 6128, plugged into a 464
+     as the DDI-1. Absent, its ports are nobody's and float. Drive A is the
+     machine's own one-headed 3" drive; B is the connector for a second
+     drive, given two heads here. The motor port turns both. */
+  bool disc_interface;
+  drive_t drives[2];
+  upd765_t fdc;
+  uint8_t fdc_bus; /* the controller's answer, held for the rest of a read */
+
   /* Links soldered on the board, which software reads and cannot change.
      The refresh rate decides which of the two tables in the firmware's ROM
      it programs the CRTC from. */
@@ -116,6 +135,14 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
 
 /* Fit a 16K ROM as upper ROM `number`; NULL empties the socket. */
 void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom);
+
+/* Fit the disc interface, or take it out. The AMSDOS ROM that comes with
+ * it is a ROM like any other and goes in as upper ROM 7. */
+void cpc_fit_disc_interface(cpc_t *cpc, bool fitted);
+
+/* Put a disc in drive 0 (A) or 1 (B), or take it out with NULL. The disc
+ * is borrowed: it must outlive the machine or be taken out first. */
+void cpc_insert_disc(cpc_t *cpc, uint8_t drive, floppy_t *floppy);
 
 /* Plug in a monitor: CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT bytes
  * of hardware colour codes, host-owned. Unplugged, the machine runs on and

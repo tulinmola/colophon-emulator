@@ -103,9 +103,8 @@ static void reset_shows_both_roms_and_the_base_map(void) {
 static void programs_fetch_from_the_lower_rom(void) {
   power_on(sizeof ram);
   const uint8_t program[] = {
-      0x3E,
-      0x42, /* LD A,&42 */
-      0x76, /* HALT */
+      0x3E, 0x42, /* LD A,&42 */
+      0x76,       /* HALT */
   };
   rom_program(program, sizeof program);
   TEST_CHECK(run_to_halt());
@@ -631,6 +630,66 @@ static void in_a_writes_the_crtc_register_the_accumulator_holds(void) {
   TEST_EQUAL(cpc.crtc.registers[2], 0x19);
 }
 
+/* The disc interface answers at A10 and A7 low: the motor port with A8
+   low, the controller with A8 high. One OUT is one byte to the chip
+   however long the Gate Array holds the cycle, and one IN one read — the
+   chip hands over its next byte on each, so a repeated dispatch would
+   have shown here as a command with too many bytes. */
+static void the_disc_interface_decodes_its_two_ports(void) {
+  power_on(sizeof ram);
+  cpc_fit_disc_interface(&cpc, true);
+  const uint8_t program[] = {
+      0x01, 0x7E, 0xFA, /* LD BC,&FA7E — the motor port */
+      0x3E, 0x01,       /* LD A,1 */
+      0xED, 0x79,       /* OUT (C),A: motor on */
+      0x01, 0x7F, 0xFB, /* LD BC,&FB7F — the data register */
+      0x3E, 0x04,       /* LD A,4 — Sense Drive Status, wanting one more byte */
+      0xED, 0x79,       /* OUT (C),A */
+      0x01, 0x7E, 0xFB, /* LD BC,&FB7E — the status register */
+      0xED, 0x78,       /* IN A,(C) */
+      0x32, 0x00, 0x40, /* LD (&4000),A */
+      0x0C,             /* INC C — &FB7F */
+      0x3E, 0x00,       /* LD A,0 — unit 0 */
+      0xED, 0x79,       /* OUT (C),A: the command is complete */
+      0x0D,             /* DEC C — &FB7E */
+      0xED, 0x78,       /* IN A,(C) */
+      0x32, 0x01, 0x40, /* LD (&4001),A */
+      0x0C,             /* INC C */
+      0xED, 0x78,       /* IN A,(C): the one result byte */
+      0x32, 0x02, 0x40, /* LD (&4002),A */
+      0x0D,             /* DEC C */
+      0xED, 0x78,       /* IN A,(C) */
+      0x32, 0x03, 0x40, /* LD (&4003),A */
+      0x76,             /* HALT */
+  };
+  rom_program(program, sizeof program);
+  TEST_CHECK(run_to_halt());
+  TEST_CHECK(cpc.drives[0].motor);
+  TEST_CHECK(cpc.drives[1].motor);
+  TEST_EQUAL(cpc_peek(&cpc, 0x4000), UPD765_MSR_RQM | UPD765_MSR_CB); /* one byte in */
+  TEST_EQUAL(cpc_peek(&cpc, 0x4001), UPD765_MSR_RQM | UPD765_MSR_DIO | UPD765_MSR_CB);
+  TEST_EQUAL(cpc_peek(&cpc, 0x4002), UPD765_ST3_T0);  /* no disc: not ready, at track 0 */
+  TEST_EQUAL(cpc_peek(&cpc, 0x4003), UPD765_MSR_RQM); /* idle again after the one byte */
+}
+
+/* Without the interface those addresses are nobody's, and float. */
+static void without_the_interface_the_ports_float(void) {
+  power_on(sizeof ram);
+  const uint8_t program[] = {
+      0x01, 0x7E, 0xFA, /* LD BC,&FA7E */
+      0x3E, 0x01,       /* LD A,1 */
+      0xED, 0x79,       /* OUT (C),A */
+      0x01, 0x7E, 0xFB, /* LD BC,&FB7E */
+      0xED, 0x78,       /* IN A,(C) */
+      0x32, 0x00, 0x40, /* LD (&4000),A */
+      0x76,             /* HALT */
+  };
+  rom_program(program, sizeof program);
+  TEST_CHECK(run_to_halt());
+  TEST_CHECK(!cpc.drives[0].motor);
+  TEST_EQUAL(cpc_peek(&cpc, 0x4000), 0xFF);
+}
+
 int main(void) {
   TEST_RUN(reset_shows_both_roms_and_the_base_map);
   TEST_RUN(programs_fetch_from_the_lower_rom);
@@ -659,5 +718,7 @@ int main(void) {
   TEST_RUN(port_b_follows_the_crtc_into_vsync);
   TEST_RUN(poke_lands_beneath_the_rom);
   TEST_RUN(in_a_writes_the_crtc_register_the_accumulator_holds);
+  TEST_RUN(the_disc_interface_decodes_its_two_ports);
+  TEST_RUN(without_the_interface_the_ports_float);
   return TEST_REPORT("cpc");
 }

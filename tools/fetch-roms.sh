@@ -1,6 +1,7 @@
 #!/bin/sh
-# Downloads the Amstrad firmware ROM images into roms/, one file per machine,
-# each 32K: the operating system at 0x0000 and BASIC at 0x4000.
+# Downloads the Amstrad firmware ROM images into roms/: one 32K file per
+# machine, the operating system at 0x0000 and BASIC at 0x4000, and the 16K
+# AMSDOS ROM that comes with the disc interface.
 #
 # Amstrad gave blanket permission to distribute these images with emulators —
 # Cliff Lawson, 1999, on comp.sys.amstrad.8bit — on the terms that the
@@ -29,7 +30,8 @@ roms_directory="$(cd "$(dirname "$0")/.." && pwd)/roms"
 images="\
 cpc464:cpc464.rom:00960d9bf75b2b90856c970f1aa078e1e2aa028b2c104f1dded0262f5d37b15e
 cpc664:cpc664.rom:1fcb20cf169f170774bf94954db9372c95edd038a5cb8e5199774552b93f8747
-cpc6128:cpc6128.rom:31c3668c67bea027dab698ece233c9434d9324f9ba7dac84db58f400b6689562"
+cpc6128:cpc6128.rom:31c3668c67bea027dab698ece233c9434d9324f9ba7dac84db58f400b6689562
+amsdos:amsdos.rom:ea65e0fb44ee93ede4b6c507509b7e5ddf497fb7155023bea91ef229469fa04d"
 
 hash_of() {
     if command -v shasum >/dev/null 2>&1; then
