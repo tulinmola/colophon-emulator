@@ -26,6 +26,8 @@ The **video path** is proved end to end — a screen of pixels through the whole
 
 And the **duration of seventy-odd instructions** in microseconds, against two tables of measurements made independently of each other and of us.
 
+The **disc** is graded in three parts. The medium is proved to lay a track out where a formatter would, to answer every position on it — the identity checks it computes were checked against a CRC-16 computed outside this code — and to read back as the same disc after being written out. The **µPD765** is driven through its own handshake by a loop that plays the processor, one microsecond of disc at a time, and judged against its datasheet: the bytes crossing every 32µs and the overrun when one is late, the sector found only when its identity comes round, the end of the cylinder a read without terminal count runs into, the flags for a sector that is not there and a track that has nothing on it, the seek stepping at the specified rate and the interrupt it leaves, and the change of READY that polling reports. What the datasheet leaves open was settled by the AMSDOS ROM's own listing: a read is one sector with EOT set to R, and success is an abnormal end carrying EN.
+
 It deliberately restates nothing an external suite already proves. The one place it cannot defer is timing: the corpus below runs the processor with its wait pin released throughout, so it proves nothing whatever about wait states.
 
 ## The machine tier
@@ -36,7 +38,9 @@ That one line is the strictest test here. The key matrix, the 8255's direction f
 
 The letters are identified by looking each glyph up in the character table the ROM itself carries. A test that recognised letters by our own table would only prove we agree with ourselves.
 
-It needs the firmware images, so it fetches them first.
+Then it gives the 6128 a disc — Shaker's, written by somebody else's tool — and types `CAT`. The names and sizes AMSDOS prints are set against what a reader written in the test, which knows nothing of floppies or controllers and walks the image's own directory, finds in the same bytes; a file is then loaded through the controller, the ROM and BASIC and compared byte for byte with that reader's copy of it. Two routes to the same 27,004 bytes, only one of them through the chip. Then `RUN"SHAKE27A` must leave the machine in mode 2 with its program counter inside the module, which is Shaker's menu drawn in a font the ROM's reader cannot spell. With no disc at all, the ROM must find the drive not ready and say so.
+
+It needs the firmware and disc images, so it fetches them first.
 
 ## The conformance tier
 
@@ -60,6 +64,6 @@ It is slow — hours of 4MHz machine time, minutes of ours — so it runs by the
 
 Two suites, each proving something the others cannot.
 
-**Shaker**, Longshot's CRTC acid tests, compares against recordings made on real machines, one set per CRTC type. It is what the four unimplemented CRTC types are waiting for, and what will decide the border rules that need a finer instrument than one sample per character.
+**Shaker**, Longshot's CRTC acid tests, compares against recordings made on real machines, one set per CRTC type. Its disc now boots and its modules run; what their screens show against the recordings is the question the four unimplemented CRTC types are waiting on, and what will decide the border rules that need a finer instrument than one sample per character.
 
 And a battery of demos, which break on anything less than exact — the only tests written by people trying to make the hardware do something beautiful rather than something correct.

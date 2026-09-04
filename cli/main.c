@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "cpc.h"
+#include "dsk.h"
 #include "png.h"
 #include "snapshot.h"
 
@@ -22,13 +23,14 @@ typedef struct {
   const char *name;
   const char *rom_file;
   uint32_t ram_size;
+  bool disc_interface; /* built in; a 464 gets one plugged in with a disc */
   const char *description;
 } machine_t;
 
 static const machine_t machines[] = {
-    {"cpc6128", "cpc6128.rom", 0x20000, "Amstrad CPC 6128, 128K, BASIC 1.1"},
-    {"cpc664", "cpc664.rom", 0x10000, "Amstrad CPC 664, 64K, BASIC 1.1"},
-    {"cpc464", "cpc464.rom", 0x10000, "Amstrad CPC 464, 64K, BASIC 1.0"},
+    {"cpc6128", "cpc6128.rom", 0x20000, true, "Amstrad CPC 6128, 128K, BASIC 1.1"},
+    {"cpc664", "cpc664.rom", 0x10000, true, "Amstrad CPC 664, 64K, BASIC 1.1"},
+    {"cpc464", "cpc464.rom", 0x10000, false, "Amstrad CPC 464, 64K, BASIC 1.0"},
 };
 static const size_t machine_count = sizeof machines / sizeof machines[0];
 
@@ -61,10 +63,13 @@ typedef struct {
   const char *rom_directory;
   const char *screenshot_path;
   const char *writes_path;
-  const char *snapshot_path; /* one to load, for `run` */
-  const char *save_path;     /* one to write when the frames are done */
+  const char *snapshot_path;  /* one to load, for `run` */
+  const char *save_path;      /* one to write when the frames are done */
+  const char *disc_paths[2];  /* images for drives A and B */
+  const char *save_disc_path; /* where drive A's disc goes when done */
   const char *text;
   long frames;
+  long frames_after; /* to run once the typing is done */
   bool full_raster;
   bool double_lines;
   bool fifty_hz;
@@ -85,10 +90,14 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --frames N          frames to run before typing (default %d)\n", DEFAULT_FRAMES);
   fprintf(out, "  --type TEXT         type this once the machine has booted\n");
   fprintf(out, "                        \\n Return  \\t Tab  \\e Esc  \\b Del  \\\\ backslash\n");
+  fprintf(out, "  --wait N            frames to run after typing (default 0)\n");
   fprintf(out, "  --sixty-hz          wire the refresh link for 60Hz\n");
   fprintf(out, "  --screenshot PATH   write the screen here as a PNG\n");
   fprintf(out, "  --writes PATH       write a map of memory writes here as a PNG\n");
   fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
+  fprintf(out, "  --disc PATH         put this DSK image in drive A\n");
+  fprintf(out, "  --disc-b PATH       and this one in drive B\n");
+  fprintf(out, "  --save-disc PATH    write drive A's disc here when done\n");
   fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
   fprintf(out, "  --no-double         one image line per raster line, squashed\n");
 }
@@ -140,6 +149,19 @@ static bool parse_options(int argc, char **argv, int from, options_t *options) {
       options->text = value;
     } else if (strcmp(argument, "--save") == 0) {
       options->save_path = value;
+    } else if (strcmp(argument, "--disc") == 0) {
+      options->disc_paths[0] = value;
+    } else if (strcmp(argument, "--disc-b") == 0) {
+      options->disc_paths[1] = value;
+    } else if (strcmp(argument, "--save-disc") == 0) {
+      options->save_disc_path = value;
+    } else if (strcmp(argument, "--wait") == 0) {
+      char *end = NULL;
+      options->frames_after = strtol(value, &end, 10);
+      if (end == value || *end != '\0' || options->frames_after < 0) {
+        fprintf(stderr, "--wait wants a number of frames, not %s\n", value);
+        return false;
+      }
     } else if (strcmp(argument, "--frames") == 0) {
       char *end = NULL;
       options->frames = strtol(value, &end, 10);
@@ -308,8 +330,13 @@ static uint8_t *render_writes(const options_t *options, uint32_t *width_out, uin
   return pixels;
 }
 
-/* Read a whole file into a fresh buffer; the caller frees it. */
-static uint8_t *read_file(const char *path, size_t *size_out) {
+/* Room past a disc image for every track the medium can hold to be
+   formatted once more, a revolution's worth each. */
+#define FORMAT_ROOM ((size_t)FLOPPY_MAX_CYLINDERS * FLOPPY_MAX_SIDES * FLOPPY_BYTES_PER_REVOLUTION)
+
+/* Read a whole file into a fresh buffer with `room` spare bytes after it;
+   the caller frees it. */
+static uint8_t *read_file_with_room(const char *path, size_t *size_out, size_t room) {
   FILE *handle = fopen(path, "rb");
   if (handle == NULL) {
     fprintf(stderr, "cannot open %s\n", path);
@@ -323,7 +350,7 @@ static uint8_t *read_file(const char *path, size_t *size_out) {
     fclose(handle);
     return NULL;
   }
-  uint8_t *contents = malloc((size_t)size);
+  uint8_t *contents = malloc((size_t)size + room);
   if (contents == NULL || fread(contents, 1, (size_t)size, handle) != (size_t)size) {
     fprintf(stderr, "cannot read %s\n", path);
     free(contents);
@@ -333,6 +360,10 @@ static uint8_t *read_file(const char *path, size_t *size_out) {
   fclose(handle);
   *size_out = (size_t)size;
   return contents;
+}
+
+static uint8_t *read_file(const char *path, size_t *size_out) {
+  return read_file_with_room(path, size_out, 0);
 }
 
 static bool write_file(const char *path, const uint8_t *contents, size_t size) {
@@ -471,7 +502,10 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
       .text = NULL,
       .snapshot_path = NULL,
       .save_path = NULL,
+      .disc_paths = {NULL, NULL},
+      .save_disc_path = NULL,
       .frames = DEFAULT_FRAMES,
+      .frames_after = 0,
       .full_raster = false,
       .double_lines = true,
       .fifty_hz = true,
@@ -488,9 +522,20 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   if (!parse_options(argc, argv, first_option, &options)) {
     return 1;
   }
+  if (options.save_disc_path != NULL && options.disc_paths[0] == NULL) {
+    fprintf(stderr, "--save-disc needs a disc in drive A to write\n");
+    return 1;
+  }
 
   static uint8_t rom[0x8000];
   if (!load_rom(options.rom_directory, options.machine->rom_file, rom, sizeof rom)) {
+    return 1;
+  }
+  /* The disc interface brings its own ROM, as upper ROM 7. */
+  bool disc_interface = options.machine->disc_interface || options.disc_paths[0] != NULL ||
+                        options.disc_paths[1] != NULL;
+  static uint8_t amsdos[0x4000];
+  if (disc_interface && !load_rom(options.rom_directory, "amsdos.rom", amsdos, sizeof amsdos)) {
     return 1;
   }
 
@@ -515,10 +560,35 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   /* The operating system fills the lower 16K, BASIC the upper as ROM 0. */
   cpc_init(cpc, ram, options.machine->ram_size, rom);
   cpc_set_upper_rom(cpc, 0, rom + 0x4000);
+  if (disc_interface) {
+    cpc_fit_disc_interface(cpc, true);
+    cpc_set_upper_rom(cpc, 7, amsdos);
+  }
   cpc_connect_monitor(cpc, framebuffer);
   cpc_set_links(cpc, options.fifty_hz, CPC_MANUFACTURER_AMSTRAD);
 
   int status = 0;
+  /* The discs. An image is read into a buffer of its own that the medium
+     borrows for the run, and written back only where asked. */
+  uint8_t *images[2] = {NULL, NULL};
+  static floppy_t discs[2]; /* the machine borrows them; 190K apiece */
+  for (uint8_t drive = 0; drive < 2 && status == 0; drive++) {
+    if (options.disc_paths[drive] == NULL) {
+      continue;
+    }
+    size_t size = 0;
+    images[drive] = read_file_with_room(options.disc_paths[drive], &size, FORMAT_ROOM);
+    const char *problem = NULL;
+    if (images[drive] == NULL) {
+      status = 1;
+    } else if (!dsk_read(&discs[drive], images[drive], size, &problem)) {
+      fprintf(stderr, "%s: %s\n", options.disc_paths[drive], problem);
+      status = 1;
+    } else {
+      floppy_give_room(&discs[drive], size + FORMAT_ROOM);
+      cpc_insert_disc(cpc, drive, &discs[drive]);
+    }
+  }
   if (options.snapshot_path != NULL) {
     size_t size = 0;
     uint8_t *contents = read_file(options.snapshot_path, &size);
@@ -539,11 +609,34 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   if (status == 0 && options.text != NULL && !type_text(cpc, options.text)) {
     status = 1;
   }
+  if (status == 0) {
+    run_frames(cpc, options.frames_after);
+  }
   if (status == 0 && options.save_path != NULL) {
     cpc_finish_instruction(cpc);
     if (!save_snapshot(cpc, options.save_path)) {
       status = 1;
     }
+  }
+  if (status == 0 && options.save_disc_path != NULL) {
+    size_t needed = dsk_write(&discs[0], NULL, 0);
+    uint8_t *out = needed == 0 ? NULL : malloc(needed);
+    if (needed == 0) {
+      fprintf(stderr, "the disc in drive A holds a track the image format cannot describe\n");
+      status = 1;
+    } else if (out == NULL) {
+      fprintf(stderr, "cannot hold the image\n");
+      status = 1;
+    } else {
+      dsk_write(&discs[0], out, needed);
+      if (!write_file(options.save_disc_path, out, needed)) {
+        status = 1;
+      } else {
+        printf("%s: disc to %s%s\n", options.machine->name, options.save_disc_path,
+               discs[0].modified ? "" : " (unchanged)");
+      }
+    }
+    free(out);
   }
   if (status == 0 && options.writes_path != NULL) {
     uint32_t width = 0;
@@ -563,14 +656,16 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
     if (pixels == NULL || !png_write(options.screenshot_path, pixels, width, height)) {
       status = 1;
     } else {
-      printf("%s: %ld frames, %ux%u to %s\n", options.machine->name, options.frames, width, height,
-             options.screenshot_path);
+      printf("%s: %ld frames, %ux%u to %s\n", options.machine->name,
+             options.frames + options.frames_after, width, height, options.screenshot_path);
     }
     free(pixels);
   } else if (status == 0) {
-    printf("%s: %ld frames\n", options.machine->name, options.frames);
+    printf("%s: %ld frames\n", options.machine->name, options.frames + options.frames_after);
   }
 
+  free(images[1]);
+  free(images[0]);
   free(displayed);
   free(writes);
   free(cpc);

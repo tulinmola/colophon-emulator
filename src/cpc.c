@@ -110,13 +110,24 @@ static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
     ppi_write(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03), data);
     run_psg(cpc);
   }
+  if (cpc->disc_interface && (address & 0x0480) == 0) {
+    /* A10 and A7 low reach the disc interface; A8 low is the motor port,
+       A8 high the controller, whose data register takes a write whichever
+       way A0 lies ("Floppy disc controller and Floppy disc drives"). */
+    if (address & 0x0100) {
+      upd765_write(&cpc->fdc, (upd765_selection)(address & 0x01), data);
+    } else {
+      drive_set_motor(&cpc->drives[0], (data & 0x01) != 0);
+      drive_set_motor(&cpc->drives[1], (data & 0x01) != 0);
+    }
+  }
 }
 
 /* The bus floats at &FF by convention, and the last device to drive it wins.
    On hardware the Gate Array would execute the floating byte as a command
    ("The Gate Array"); &FF dispatches to the write-only PAL, so even that is
    silence. */
-static uint8_t io_read(cpc_t *cpc, uint16_t address) {
+static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
   uint8_t data = 0xFF;
   if ((address & 0x4000) == 0) {
     /* The CRTC is given no direction line here, so a read of a write port
@@ -131,6 +142,16 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address) {
     run_psg(cpc);
     data = ppi_read(&cpc->ppi, (ppi_selection)((address >> 8) & 0x03));
   }
+  if (cpc->disc_interface && (address & 0x0580) == 0x0100) {
+    /* The controller's status register with A0 low, its data register
+       with A0 high; the motor port reads as nothing. The chip takes a read
+       when RD falls and holds its answer while the Gate Array stretches
+       the cycle: a second read would hand over the next byte. */
+    if (first_tick) {
+      cpc->fdc_bus = upd765_read(&cpc->fdc, (upd765_selection)(address & 0x01));
+    }
+    data = cpc->fdc_bus;
+  }
   return data;
 }
 
@@ -142,6 +163,11 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
   ppi_init(&cpc->ppi);
   psg_init(&cpc->psg);
   keyboard_init(&cpc->keyboard);
+  drive_init(&cpc->drives[0], 1);
+  drive_init(&cpc->drives[1], 2);
+  upd765_init(&cpc->fdc);
+  upd765_attach(&cpc->fdc, 0, &cpc->drives[0]);
+  upd765_attach(&cpc->fdc, 1, &cpc->drives[1]);
   cpc->fifty_hz = true;
   cpc->manufacturer = CPC_MANUFACTURER_AMSTRAD;
   cpc->ram = ram;
@@ -157,6 +183,12 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
 void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom) {
   cpc->upper_roms[number] = rom;
   cpc_remap(cpc);
+}
+
+void cpc_fit_disc_interface(cpc_t *cpc, bool fitted) { cpc->disc_interface = fitted; }
+
+void cpc_insert_disc(cpc_t *cpc, uint8_t drive, floppy_t *floppy) {
+  drive_insert(&cpc->drives[drive & 0x01], floppy);
 }
 
 void cpc_connect_monitor(cpc_t *cpc, uint8_t *framebuffer) {
@@ -194,6 +226,11 @@ uint64_t cpc_tick(cpc_t *cpc) {
                      cpc->ram[address | 1], samples);
     monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
                     gate_array_csync(&cpc->gate_array));
+    /* The controller counts in microseconds, which is the character
+       clock, and turns the drives. */
+    if (cpc->disc_interface) {
+      upd765_tick(&cpc->fdc);
+    }
   }
 
   /* The Gate Array's INT line runs to the CPU; the machine holds it until
@@ -211,6 +248,10 @@ uint64_t cpc_tick(cpc_t *cpc) {
     bus &= ~Z80_WAIT;
   }
 
+  /* The Gate Array's WAIT holds an I/O cycle over several ticks with its
+     pins up throughout. A device is written once, when WR first falls;
+     one that changes on being read is read once too, when RD does. */
+  uint64_t before = cpc->pins;
   uint64_t pins = z80_tick(&cpc->cpu, bus);
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
     /* Interrupt acknowledge: the Gate Array drops INT and kills R52's bit
@@ -225,9 +266,12 @@ uint64_t cpc_tick(cpc_t *cpc) {
     uint16_t address = z80_address(pins);
     cpc->write_page[address >> 14][address & 0x3FFF] = z80_data(pins);
   } else if ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
-    io_write(cpc, z80_address(pins), z80_data(pins));
+    if ((before & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
+      io_write(cpc, z80_address(pins), z80_data(pins));
+    }
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
-    pins = z80_set_data(pins, io_read(cpc, z80_address(pins)));
+    bool first_tick = (before & (Z80_IORQ | Z80_RD)) != (Z80_IORQ | Z80_RD);
+    pins = z80_set_data(pins, io_read(cpc, z80_address(pins), first_tick));
   }
   cpc->pins = pins;
   return pins;

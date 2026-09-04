@@ -284,15 +284,22 @@ static void recorded_status_becomes_what_was_found(void) {
   TEST_CHECK(floppy_sector(&floppy, 0, 0, 3)->no_data_field);
 }
 
-static void a_size_code_counts_three_bits(void) {
+/* Eight and above mean 32K, which is how the chip counts (Owen's extensions,
+   and Arnold's table measured on one); the image definition's older rule
+   that only three bits counted would read the first as 128 bytes. */
+static void a_size_code_of_eight_or_more_means_32k(void) {
   begin_image(true, 1, 1);
   begin_track(0, 0, 2);
   add_sector(0, 0, 0xC1, 8, 0, 0, 128, 0x01);
-  add_sector(0, 0, 0xC2, 0xFF, 0, 0, (size_t)128 * 128, 0x02);
+  add_sector(0, 0, 0xC2, 0xFF, 0, 0, 128, 0x02);
+  add_sector(0, 0, 0xC3, 7, 0, 0, 128, 0x03);
   end_track(true);
   TEST_CHECK(read_it());
-  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->announced, 128);   /* 8 reads as 0 */
-  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->announced, 16384); /* &FF reads as 7 */
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->announced, 32768);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->announced, 32768);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 2)->announced, 16384);
+  TEST_EQUAL(floppy_sector_length(0), 128);
+  TEST_EQUAL(floppy_sector_length(6), 8192);
 }
 
 static void trailing_bytes_after_the_last_track_are_allowed(void) {
@@ -504,9 +511,11 @@ static void the_medium_refuses_what_it_cannot_hold(void) {
   TEST_CHECK(!floppy_track_formatted(&floppy, 0, 0));
   floppy_mount(&floppy, small, sizeof small);
 
-  TEST_CHECK(!floppy_add_track(&floppy, FLOPPY_MAX_CYLINDERS, 0));
-  TEST_CHECK(!floppy_add_track(&floppy, 0, FLOPPY_MAX_SIDES));
-  TEST_CHECK(floppy_add_track(&floppy, 0, 0));
+  TEST_CHECK(!floppy_add_track(&floppy, FLOPPY_MAX_CYLINDERS, 0, 0, 0, 0x52, 0xE5));
+  TEST_CHECK(!floppy_add_track(&floppy, 0, FLOPPY_MAX_SIDES, 0, 0, 0x52, 0xE5));
+  TEST_CHECK(
+      !floppy_add_track(&floppy, 0, 0, 0, sizeof small + 1, 0x52, 0xE5)); /* room past the image */
+  TEST_CHECK(floppy_add_track(&floppy, 0, 0, 0, sizeof small, 0x52, 0xE5));
 
   floppy_sector_t sector = {.r = 0xC1, .n = 2, .announced = 512, .recorded = 512, .copies = 1};
   TEST_CHECK(!floppy_add_sector(&floppy, 1, 0, &sector)); /* no track there */
@@ -535,8 +544,495 @@ static void the_medium_refuses_what_it_cannot_hold(void) {
   /* Nothing with data in it can be added to an unmounted medium, which is
      what keeps a sector and a missing image from ever meeting. */
   floppy_init(&floppy);
-  TEST_CHECK(floppy_add_track(&floppy, 0, 0));
+  TEST_CHECK(floppy_add_track(&floppy, 0, 0, 0, 0, 0x52, 0xE5));
   TEST_CHECK(!floppy_add_sector(&floppy, 0, 0, &sector));
+}
+
+/* Where the sectors lie once laid out as a formatter would have placed
+   them: the preamble, then each sector after the one before it and its
+   gap; a revolution of 6250 bytes. */
+static void sectors_are_laid_out_as_a_formatter_would(void) {
+  build_plain_extended();
+  image[0x100 + 0x16] = 0x52; /* the gap the DATA format leaves */
+  TEST_CHECK(read_it());
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->position, FLOPPY_TRACK_PREAMBLE);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->position,
+             FLOPPY_TRACK_PREAMBLE + FLOPPY_SECTOR_OVERHEAD + 512 + 0x52);
+  TEST_EQUAL(floppy_track_length(&floppy, 0, 0), FLOPPY_BYTES_PER_REVOLUTION);
+  TEST_EQUAL(floppy_sector_beginning_at(&floppy, 0, 0, FLOPPY_TRACK_PREAMBLE), 0);
+  TEST_EQUAL(floppy_sector_beginning_at(&floppy, 0, 0, FLOPPY_TRACK_PREAMBLE + 1), -1);
+  /* An unformatted track still has a length: the disc turns regardless. */
+  TEST_EQUAL(floppy_track_length(&floppy, 5, 0), FLOPPY_BYTES_PER_REVOLUTION);
+}
+
+/* Gaps the revolution cannot fit are shortened evenly, and sectors it
+   cannot fit at all stretch it. */
+static void a_gap_the_revolution_cannot_hold_is_shortened(void) {
+  begin_image(true, 2, 1);
+  begin_track(0, 0, 2);
+  image[track_at + 0x16] = 0x52;
+  for (int index = 0; index < 10; index++) {
+    add_sector(0, 0, (uint8_t)(0xC1 + index), 2, 0, 0, 512, 0x00);
+  }
+  end_track(true);
+  begin_track(1, 0, 2);
+  image[track_at + 0x16] = 0x52;
+  for (int index = 0; index < 12; index++) {
+    add_sector(1, 0, (uint8_t)(0xC1 + index), 2, 0, 0, 512, 0x00);
+  }
+  end_track(true);
+  TEST_CHECK(read_it());
+  /* Ten sectors leave 6250 - 146 - 10 * 574 = 364 bytes for nine gaps. */
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->position, 146 + 574 + 40);
+  TEST_EQUAL(floppy_track_length(&floppy, 0, 0), 6250);
+  /* Twelve do not fit even touching: the track is as long as they are. */
+  TEST_EQUAL(floppy_sector(&floppy, 1, 0, 1)->position, 146 + 574);
+  TEST_EQUAL(floppy_track_length(&floppy, 1, 0), 146 + 12 * 574);
+}
+
+/* Every byte of a track answers: the preamble, the sync and marks around
+   each field, the identities, the checks the controller family computes,
+   the data, and the gap. The check values were computed outside this
+   code, by a Python CRC-16 with initial value &FFFF and polynomial &1021
+   run over the three mark bytes, the address mark and the field, and that
+   routine gives &29B1 for "123456789", the standard's own test vector. */
+static void the_track_reads_as_a_place(void) {
+  build_plain_extended();
+  image[0x100 + 0x16] = 0x52;
+  TEST_CHECK(read_it());
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 0, 0), 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 80, 0), 0x00);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 92, 0), 0xC2);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 95, 0), 0xFC);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 145, 0), 0x4E);
+  uint32_t at = FLOPPY_TRACK_PREAMBLE;
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at, 0), 0x00);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + 12, 0), 0xA1);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + 15, 0), 0xFE);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_ID_FIELD, 0), 0x00);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_ID_FIELD + 2, 0), 0xC1);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_ID_FIELD + 3, 0), 0x02);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + 20, 0), 0xDC); /* CRC of A1 A1 A1 FE 00 00 C1 02 */
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + 21, 0), 0x3B);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_ID_KNOWN, 0), 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + 44, 0), 0x00);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + 56, 0), 0xA1);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + 59, 0), 0xFB);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_DATA_FIELD, 0), 0x10);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_DATA_FIELD + 511, 0), 0x10);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_DATA_FIELD + 512, 0),
+             0x01); /* CRC of the field */
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_DATA_FIELD + 513, 0), 0x40);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, at + FLOPPY_DATA_FIELD + 514, 0), 0x4E);
+  /* The second sector, then the gap to the index, then round again. */
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 802 + FLOPPY_DATA_FIELD, 0), 0x20);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 6249, 0), 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 6250, 0), 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 6250 + 92, 0), 0xC2);
+  /* An unformatted track is gap from end to end. */
+  TEST_EQUAL(floppy_byte(&floppy, 7, 0, 92, 0), 0x4E);
+}
+
+/* A failed check answers with a check that fails; a deleted mark is the
+   deleted one; an unstable field reads differently each revolution. */
+static void what_was_found_is_what_the_track_answers(void) {
+  begin_image(true, 1, 1);
+  begin_track(0, 0, 2);
+  add_sector(0, 0, 0xC1, 2, 0x20, 0x00, 512, 0x10);  /* identity check failed */
+  add_sector(0, 0, 0xC2, 2, 0x00, 0x40, 512, 0x10);  /* deleted */
+  add_sector(0, 0, 0xC3, 2, 0x20, 0x20, 512, 0x10);  /* data check failed */
+  add_sector(0, 0, 0xC4, 2, 0x00, 0x00, 1024, 0x01); /* two readings */
+  memset(image + image_length - 512, 0x02, 512);
+  end_track(true);
+  TEST_CHECK(read_it());
+  const floppy_sector_t *bad_identity = floppy_sector(&floppy, 0, 0, 0);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, bad_identity->position + 20, 0), (uint8_t)~0xDC);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, bad_identity->position + 21, 0), (uint8_t)~0x3B);
+  const floppy_sector_t *deleted = floppy_sector(&floppy, 0, 0, 1);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, deleted->position + 59, 0), 0xF8);
+  const floppy_sector_t *bad_data = floppy_sector(&floppy, 0, 0, 2);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, bad_data->position + FLOPPY_DATA_FIELD + 512, 0),
+             (uint8_t)~0x01);
+  const floppy_sector_t *unstable = floppy_sector(&floppy, 0, 0, 3);
+  TEST_EQUAL(unstable->copies, 2);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, unstable->position + FLOPPY_DATA_FIELD, 0), 0x01);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, unstable->position + FLOPPY_DATA_FIELD, 1), 0x02);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, unstable->position + FLOPPY_DATA_FIELD, 2), 0x01);
+}
+
+/* A field shorter than announced ends where the dumper clipped it, and a
+   head reading on finds its check, the gap, and the next sector's sync —
+   which is what a controller told to read the announced length gets. */
+static void reading_past_a_short_field_finds_the_next_sector(void) {
+  begin_image(true, 1, 1);
+  begin_track(0, 0, 2);
+  image[track_at + 0x16] = 0x52;
+  add_sector(0, 0, 0xC1, 2, 0, 0, 256, 0x10);
+  add_sector(0, 0, 0xC2, 2, 0, 0, 512, 0x20);
+  end_track(true);
+  TEST_CHECK(read_it());
+  uint32_t data = FLOPPY_TRACK_PREAMBLE + FLOPPY_DATA_FIELD;
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 255, 0), 0x10);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 256, 0), 0x33); /* CRC over 256 bytes */
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 257, 0), 0xCF);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 258, 0), 0x4E);
+  uint32_t next = FLOPPY_TRACK_PREAMBLE + FLOPPY_SECTOR_OVERHEAD + 256 + 0x52;
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->position, next);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, next - 1, 0), 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, next, 0), 0x00);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, next + FLOPPY_ID_FIELD + 2, 0), 0xC2);
+}
+
+static void writes_land_in_the_data_field_and_nowhere_else(void) {
+  build_plain_extended();
+  TEST_CHECK(read_it());
+  TEST_CHECK(!floppy.modified);
+  uint32_t data = FLOPPY_TRACK_PREAMBLE + FLOPPY_DATA_FIELD;
+  TEST_CHECK(floppy_write_byte(&floppy, 0, 0, data + 3, 0xAA));
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 3, 0), 0xAA);
+  TEST_EQUAL(image[0x200 + 3], 0xAA); /* in the image itself, in place */
+  TEST_CHECK(floppy.modified);
+  TEST_CHECK(!floppy_write_byte(&floppy, 0, 0, data - 1, 0xBB));   /* the data mark */
+  TEST_CHECK(!floppy_write_byte(&floppy, 0, 0, data + 512, 0xBB)); /* the check */
+  TEST_CHECK(!floppy_write_byte(&floppy, 0, 0, 10, 0xBB));         /* the preamble */
+  TEST_CHECK(!floppy_write_byte(&floppy, 3, 0, data, 0xBB));       /* no track */
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data - 1, 0), 0xFB);
+  floppy.write_protected = true;
+  TEST_CHECK(!floppy_write_byte(&floppy, 0, 0, data + 4, 0xCC));
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 4, 0), 0x10);
+}
+
+/* A data field written whole is sound: it reads the same every revolution,
+   its check passes, and it carries the mark it was written with. */
+static void a_data_field_written_whole_is_sound(void) {
+  begin_image(true, 1, 1);
+  begin_track(0, 0, 2);
+  add_sector(0, 0, 0xC1, 2, 0x20, 0x20, 1024, 0x01); /* two readings, check failed */
+  end_track(true);
+  TEST_CHECK(read_it());
+  const floppy_sector_t *sector = floppy_sector(&floppy, 0, 0, 0);
+  TEST_EQUAL(sector->copies, 2);
+  TEST_CHECK(sector->data_crc_error);
+  floppy_data_written(&floppy, 0, 0, 0, true);
+  TEST_EQUAL(sector->copies, 1);
+  TEST_CHECK(!sector->data_crc_error);
+  TEST_CHECK(sector->deleted);
+  TEST_CHECK(floppy.modified);
+}
+
+/* A track formats into the room its image gives it and no further. */
+static void a_track_formats_into_the_room_it_has(void) {
+  build_plain_extended();
+  TEST_CHECK(read_it());
+  static const uint8_t identities[3][4] = {{0, 0, 0x41, 2}, {0, 0, 0x42, 2}, {0, 0, 0x43, 2}};
+  TEST_CHECK(floppy_format_track(&floppy, 0, 0, identities, 2, 2, 0x4E, 0xE5));
+  TEST_EQUAL(floppy_sector_count(&floppy, 0, 0), 2);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->r, 0x41);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->r, 0x42);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->position,
+             FLOPPY_TRACK_PREAMBLE + FLOPPY_SECTOR_OVERHEAD + 512 + 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, FLOPPY_TRACK_PREAMBLE + FLOPPY_DATA_FIELD, 0), 0xE5);
+  TEST_EQUAL(image[0x200], 0xE5);
+  TEST_EQUAL(image[0x200 + 1023], 0xE5);
+  TEST_CHECK(floppy.modified);
+  /* Three of them need 1536 bytes of a 1024-byte track: refused, unchanged. */
+  TEST_CHECK(!floppy_format_track(&floppy, 0, 0, identities, 3, 2, 0x4E, 0xE5));
+  TEST_EQUAL(floppy_sector_count(&floppy, 0, 0), 2);
+  TEST_CHECK(!floppy_format_track(&floppy, 0, 0, identities, 2, 3, 0x4E, 0xE5));
+  TEST_CHECK(
+      !floppy_format_track(&floppy, 5, 0, identities, 1, 2, 0x4E, 0xE5)); /* no room at all */
+  /* An empty track is a track. */
+  TEST_CHECK(floppy_format_track(&floppy, 0, 0, identities, 0, 2, 0x4E, 0xE5));
+  TEST_EQUAL(floppy_sector_count(&floppy, 0, 0), 0);
+  floppy.write_protected = true;
+  TEST_CHECK(!floppy_format_track(&floppy, 0, 0, identities, 1, 2, 0x4E, 0xE5));
+}
+
+/* An image may say where its sectors lay; one that says the impossible is
+   laid out as usual. */
+static void an_image_may_record_where_the_sectors_lay(void) {
+  build_plain_extended();
+  static const uint8_t offsets[] = {
+      'O',  'f',  'f',  's',  'e',  't',  '-',  'I',  'n',  'f',  'o',
+      '\r', '\n', 0,    0,    0x9C, 0x18, 0xC8, 0x00, 0x84, 0x03, /* 6300 long; sectors at 200 and
+                                                                     900 */
+      0x9C, 0x18, 0xC8, 0x00, 0xA0, 0x8F, /* the second sector past the end */
+  };
+  memcpy(image + image_length, offsets, sizeof offsets);
+  image_length += sizeof offsets;
+  TEST_CHECK(read_it());
+  TEST_EQUAL(floppy_track_length(&floppy, 0, 0), 6300);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->position, 200);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->position, 900);
+  TEST_EQUAL(floppy_track_length(&floppy, 1, 0), FLOPPY_BYTES_PER_REVOLUTION);
+  TEST_EQUAL(floppy_sector(&floppy, 1, 0, 0)->position, FLOPPY_TRACK_PREAMBLE);
+  /* The bytes lie where the image says. */
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 200 + FLOPPY_DATA_FIELD, 0), 0x10);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, 900 + FLOPPY_DATA_FIELD, 0), 0x20);
+}
+
+/* A track declared at a rate or in a mode this family cannot decode is,
+   to its heads, unformatted. */
+static void a_track_recorded_another_way_is_unformatted(void) {
+  build_plain_extended();
+  image[0x100 + 0x12] = 2; /* high density */
+  TEST_CHECK(read_it());
+  TEST_CHECK(!floppy_track_formatted(&floppy, 0, 0));
+  TEST_CHECK(floppy_track_formatted(&floppy, 1, 0));
+  build_plain_extended();
+  image[0x100 + 0x12] = 1;
+  image[0x100 + 0x13] = 2; /* double density, MFM: the only thing it reads */
+  TEST_CHECK(read_it());
+  TEST_CHECK(floppy_track_formatted(&floppy, 0, 0));
+  build_plain_extended();
+  image[0x100 + 0x13] = 1; /* FM */
+  TEST_CHECK(read_it());
+  TEST_CHECK(!floppy_track_formatted(&floppy, 0, 0));
+}
+
+static bool same_sector(const floppy_sector_t *a, const floppy_sector_t *b) {
+  return a->c == b->c && a->h == b->h && a->r == b->r && a->n == b->n && a->deleted == b->deleted &&
+         a->identity_crc_error == b->identity_crc_error && a->data_crc_error == b->data_crc_error &&
+         a->no_data_field == b->no_data_field && a->announced == b->announced &&
+         a->recorded == b->recorded && a->copies == b->copies && a->position == b->position;
+}
+
+/* An image written back and read again is the same disc: every track,
+   every sector, every reading, and where each lay. And written a second
+   time it is the same bytes, so the writer has one answer. */
+static void an_image_written_back_reads_as_the_same_disc(void) {
+  static uint8_t written[64 * 1024];
+  static uint8_t again[64 * 1024];
+  static floppy_t second;
+  begin_image(true, 3, 1);
+  begin_track(0, 0, 2);
+  image[track_at + 0x16] = 0x52;
+  image[track_at + 0x17] = 0xE5;
+  add_sector(0, 0, 0xC1, 2, 0x00, 0x00, 512, 0x10);
+  add_sector(0, 0, 0xC2, 2, 0x00, 0x40, 512, 0x11);    /* deleted */
+  add_sector(0, 0, 0xC3, 2, 0x20, 0x20, 1536, 0x12);   /* three readings, check failed */
+  add_sector(0, 0, 0xC4, 2, 0x20, 0x00, 512, 0x13);    /* identity check failed */
+  add_sector(0, 0, 0xC5, 2, 0x04, 0x00, 0, 0x00);      /* nothing behind it */
+  add_sector(0, 0, 0xC6, 6, 0x00, 0x00, 0x1800, 0x14); /* an 8K sector, clipped */
+  end_track(true);
+  /* Cylinder 1 unformatted. */
+  begin_track(2, 0, 1);
+  add_sector(2, 0, 0x01, 1, 0x00, 0x00, 256, 0x15);
+  end_track(true);
+  TEST_CHECK(read_it());
+
+  size_t needed = dsk_write(&floppy, NULL, 0);
+  TEST_CHECK(needed > 0 && needed <= sizeof written);
+  TEST_EQUAL(dsk_write(&floppy, written, needed - 1), needed); /* measured, not written */
+  TEST_EQUAL(dsk_write(&floppy, written, sizeof written), needed);
+  TEST_CHECK(memcmp(written, "EXTENDED CPC DSK File\r\nDisk-Info\r\n", 34) == 0);
+
+  const char *second_problem = NULL;
+  TEST_CHECK(dsk_read(&second, written, needed, &second_problem));
+  TEST_EQUAL(second.cylinders, floppy.cylinders);
+  TEST_EQUAL(second.sides, floppy.sides);
+  for (uint8_t cylinder = 0; cylinder < 3; cylinder++) {
+    TEST_EQUAL(floppy_track_formatted(&second, cylinder, 0),
+               floppy_track_formatted(&floppy, cylinder, 0));
+    TEST_EQUAL(floppy_track_length(&second, cylinder, 0),
+               floppy_track_length(&floppy, cylinder, 0));
+    TEST_EQUAL(floppy_sector_count(&second, cylinder, 0),
+               floppy_sector_count(&floppy, cylinder, 0));
+    for (uint8_t index = 0; index < floppy_sector_count(&floppy, cylinder, 0); index++) {
+      const floppy_sector_t *was = floppy_sector(&floppy, cylinder, 0, index);
+      const floppy_sector_t *is = floppy_sector(&second, cylinder, 0, index);
+      TEST_CHECK(same_sector(was, is));
+      for (uint32_t copy = 0; copy < was->copies; copy++) {
+        uint8_t theirs[0x1800];
+        uint8_t ours[0x1800];
+        uint32_t got = floppy_read(&floppy, cylinder, 0, index, copy, 0, ours, sizeof ours);
+        TEST_EQUAL(floppy_read(&second, cylinder, 0, index, copy, 0, theirs, sizeof theirs), got);
+        TEST_CHECK(memcmp(ours, theirs, got) == 0);
+      }
+    }
+  }
+  TEST_EQUAL(second.tracks[0][0].gap, 0x52);
+  TEST_EQUAL(second.tracks[0][0].filler, 0xE5);
+
+  TEST_EQUAL(dsk_write(&second, again, sizeof again), needed);
+  TEST_CHECK(memcmp(written, again, needed) == 0);
+}
+
+/* The offsets block counts every track block the image holds, readable or
+   not, and a block that stops short leaves the rest laid out as usual. */
+static void offsets_count_every_track_block(void) {
+  begin_image(true, 3, 1);
+  for (uint8_t cylinder = 0; cylinder < 3; cylinder++) {
+    begin_track(cylinder, 0, 2);
+    add_sector(cylinder, 0, 0xC1, 2, 0, 0, 512, 0x10);
+    add_sector(cylinder, 0, 0xC2, 2, 0, 0, 512, 0x20);
+    end_track(true);
+  }
+  image[0x100 + 0x12] = 2; /* the first track is high density: unreadable */
+  static const uint8_t offsets[] = {
+      'O',  'f',  'f',  's',  'e',  't',  '-',  'I',  'n',  'f',  'o',
+      '\r', '\n', 0,    0,    0x9C, 0x18, 0xC8, 0x00, 0x84, 0x03, /* the unreadable one, with two
+                                                                     sectors */
+      0x9C, 0x18, 0x2C, 0x01, 0xE8, 0x03,                         /* cylinder 1: 300 and 1000 */
+      0x9C, 0x18, /* cylinder 2's block, cut short */
+  };
+  memcpy(image + image_length, offsets, sizeof offsets);
+  image_length += sizeof offsets;
+  TEST_CHECK(read_it());
+  TEST_CHECK(!floppy_track_formatted(&floppy, 0, 0));
+  TEST_EQUAL(floppy_sector(&floppy, 1, 0, 0)->position, 300);
+  TEST_EQUAL(floppy_sector(&floppy, 1, 0, 1)->position, 1000);
+  TEST_EQUAL(floppy_track_length(&floppy, 1, 0), 6300);
+  TEST_EQUAL(floppy_sector(&floppy, 2, 0, 0)->position, FLOPPY_TRACK_PREAMBLE);
+  TEST_EQUAL(floppy_track_length(&floppy, 2, 0), FLOPPY_BYTES_PER_REVOLUTION);
+}
+
+/* Offsets that do not climb are not believed. */
+static void offsets_that_do_not_climb_are_not_believed(void) {
+  build_plain_extended();
+  static const uint8_t offsets[] = {
+      'O',  'f',  'f',  's',  'e',  't',  '-',  'I',  'n',  'f',  'o',
+      '\r', '\n', 0,    0,    0x9C, 0x18, 0xB8, 0x0B, 0xC8, 0x00, /* 3000 then 200 */
+      0x9C, 0x18, 0xC8, 0x00, 0xC8, 0x00,                         /* 200 twice */
+  };
+  memcpy(image + image_length, offsets, sizeof offsets);
+  image_length += sizeof offsets;
+  TEST_CHECK(read_it());
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->position, FLOPPY_TRACK_PREAMBLE);
+  TEST_EQUAL(floppy_sector(&floppy, 1, 0, 0)->position, FLOPPY_TRACK_PREAMBLE);
+  TEST_EQUAL(floppy_track_length(&floppy, 0, 0), FLOPPY_BYTES_PER_REVOLUTION);
+}
+
+/* An unreadable track keeps its block through a write of the image, and
+   an original-layout image, a track with no sectors and a disc with no
+   track at all come back as they went. */
+static void what_a_writer_cannot_read_it_still_keeps(void) {
+  static uint8_t written[64 * 1024];
+  static floppy_t second;
+  const char *second_problem = NULL;
+
+  build_plain_extended();
+  image[0x100 + 0x12] = 2;
+  TEST_CHECK(read_it());
+  size_t needed = dsk_write(&floppy, written, sizeof written);
+  TEST_CHECK(needed > 0);
+  TEST_CHECK(dsk_read(&second, written, needed, &second_problem));
+  TEST_EQUAL(second.cylinders, 2);
+  TEST_CHECK(!floppy_track_formatted(&second, 0, 0));
+  TEST_CHECK(second.tracks[0][0].unreadable);
+  TEST_EQUAL(floppy_sector(&second, 1, 0, 1)->r, 0xC2);
+  /* The block itself came through: its own header still says HD. */
+  TEST_EQUAL(written[0x100 + 0x12], 2);
+
+  begin_image(false, 1, 1);
+  set_uniform_track_length(256 + 1024);
+  begin_track(0, 0, 2);
+  add_sector(0, 0, 0xC1, 2, 0, 0, 512, 0x10);
+  add_sector(0, 0, 0xC2, 2, 0, 0, 512, 0x20);
+  end_track(false);
+  TEST_CHECK(read_it());
+  needed = dsk_write(&floppy, written, sizeof written);
+  TEST_CHECK(dsk_read(&second, written, needed, &second_problem));
+  TEST_EQUAL(floppy_sector_count(&second, 0, 0), 2);
+  TEST_EQUAL(floppy_sector(&second, 0, 0, 1)->recorded, 512);
+
+  begin_image(true, 1, 1);
+  begin_track(0, 0, 2);
+  end_track(true);
+  TEST_CHECK(read_it());
+  needed = dsk_write(&floppy, written, sizeof written);
+  TEST_EQUAL(needed, 256 + 256 + 15 + 2);
+  TEST_CHECK(dsk_read(&second, written, needed, &second_problem));
+  TEST_CHECK(floppy_track_formatted(&second, 0, 0));
+  TEST_EQUAL(floppy_sector_count(&second, 0, 0), 0);
+
+  begin_image(true, 2, 1);
+  TEST_CHECK(read_it()); /* every track unformatted */
+  needed = dsk_write(&floppy, written, sizeof written);
+  TEST_CHECK(dsk_read(&second, written, needed, &second_problem));
+  TEST_CHECK(!floppy_track_formatted(&second, 0, 0));
+}
+
+/* A track the table's byte cannot measure, or the offsets block's words
+   cannot place, is not written. */
+static void a_track_too_big_to_describe_is_not_written(void) {
+  static uint8_t huge[3 * 32768 + 256];
+  floppy_mount(&floppy, huge, sizeof huge);
+  TEST_CHECK(floppy_add_track(&floppy, 0, 0, 0, sizeof huge, 0x52, 0xE5));
+  floppy_sector_t sector = {.r = 1, .n = 8, .announced = 32768, .recorded = 32768, .copies = 1};
+  for (int index = 0; index < 3; index++) {
+    sector.image_offset = (uint32_t)index * 32768;
+    TEST_CHECK(floppy_add_sector(&floppy, 0, 0, &sector));
+  }
+  floppy_layout_track(&floppy, 0, 0);
+  TEST_EQUAL(dsk_write(&floppy, NULL, 0), 0);
+}
+
+/* A formatter's length is the field's, whatever the identity announces,
+   and the layout follows the field. */
+static void a_format_lays_out_the_length_it_wrote(void) {
+  build_plain_extended();
+  TEST_CHECK(read_it());
+  static const uint8_t identities[2][4] = {{0, 0, 0x41, 1}, {0, 0, 0x42, 3}};
+  TEST_CHECK(floppy_format_track(&floppy, 0, 0, identities, 2, 2, 0x52, 0xE5));
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->announced, 256);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->extent, 512);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->announced, 1024);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->extent, 512);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->position,
+             FLOPPY_TRACK_PREAMBLE + FLOPPY_SECTOR_OVERHEAD + 512 + 0x52);
+  /* The check lies after the whole field, and covers it. */
+  uint32_t data = FLOPPY_TRACK_PREAMBLE + FLOPPY_DATA_FIELD;
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 511, 0), 0xE5);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, data + 514, 0), 0x4E);
+}
+
+/* An identity with nothing behind it is gap from its check on, and an
+   unstable field written whole reads the same every revolution. */
+static void nothing_behind_an_identity_reads_as_gap(void) {
+  begin_image(true, 1, 1);
+  begin_track(0, 0, 2);
+  add_sector(0, 0, 0xC1, 2, 0x04, 0x00, 0, 0x00);    /* nothing behind it */
+  add_sector(0, 0, 0xC2, 2, 0x00, 0x00, 1024, 0x01); /* two readings */
+  memset(image + image_length - 512, 0x02, 512);
+  end_track(true);
+  TEST_CHECK(read_it());
+  uint32_t first = floppy_sector(&floppy, 0, 0, 0)->position;
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, first + FLOPPY_ID_KNOWN, 0), 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, first + FLOPPY_DATA_FIELD - 1, 0), 0x4E);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, first + FLOPPY_DATA_FIELD, 0), 0x4E);
+  uint32_t second = floppy_sector(&floppy, 0, 0, 1)->position;
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, second + FLOPPY_DATA_FIELD, 1), 0x02);
+  TEST_CHECK(floppy_write_byte(&floppy, 0, 0, second + FLOPPY_DATA_FIELD, 0x77));
+  floppy_data_written(&floppy, 0, 0, 1, false);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, second + FLOPPY_DATA_FIELD, 0), 0x77);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, second + FLOPPY_DATA_FIELD, 1), 0x77);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 1)->copies, 1);
+}
+
+/* A track formatted larger than the room it had takes fresh room past the
+   image, when the host gave any, and comes through a write of the image. */
+static void a_format_may_take_room_past_the_image(void) {
+  static uint8_t written[64 * 1024];
+  static floppy_t second;
+  build_plain_extended();
+  TEST_CHECK(read_it());
+  static const uint8_t identities[3][4] = {{0, 0, 0x41, 3}, {0, 0, 0x42, 3}, {0, 0, 0x43, 3}};
+  TEST_CHECK(!floppy_format_track(&floppy, 0, 0, identities, 3, 3, 0x4E, 0xE5));
+  size_t before = floppy.image_length;
+  floppy_give_room(&floppy, before + 3072);
+  TEST_CHECK(floppy_format_track(&floppy, 0, 0, identities, 3, 3, 0x4E, 0xE5));
+  TEST_EQUAL(floppy.image_length, before + 3072);
+  TEST_EQUAL(floppy_sector(&floppy, 0, 0, 0)->image_offset, before);
+  TEST_EQUAL(floppy_byte(&floppy, 0, 0, FLOPPY_TRACK_PREAMBLE + FLOPPY_DATA_FIELD + 1023, 0), 0xE5);
+  /* The room is spent: a fourth format of the size finds none. */
+  TEST_CHECK(!floppy_format_track(&floppy, 1, 0, identities, 3, 3, 0x4E, 0xE5));
+  size_t needed = dsk_write(&floppy, written, sizeof written);
+  const char *second_problem = NULL;
+  TEST_CHECK(dsk_read(&second, written, needed, &second_problem));
+  TEST_EQUAL(floppy_sector_count(&second, 0, 0), 3);
+  TEST_EQUAL(floppy_sector(&second, 0, 0, 2)->recorded, 1024);
+  TEST_EQUAL(floppy_sector_count(&second, 1, 0), 2);
 }
 
 int main(void) {
@@ -549,7 +1045,7 @@ int main(void) {
   TEST_RUN(a_track_may_announce_one_number_twice);
   TEST_RUN(an_identity_that_lies_is_kept);
   TEST_RUN(recorded_status_becomes_what_was_found);
-  TEST_RUN(a_size_code_counts_three_bits);
+  TEST_RUN(a_size_code_of_eight_or_more_means_32k);
   TEST_RUN(trailing_bytes_after_the_last_track_are_allowed);
   TEST_RUN(an_image_that_is_not_one_is_refused);
   TEST_RUN(a_geometry_no_disc_has_is_refused);
@@ -564,5 +1060,23 @@ int main(void) {
   TEST_RUN(identifying_needs_a_whole_header);
   TEST_RUN(a_refused_image_leaves_nothing_mounted);
   TEST_RUN(the_medium_refuses_what_it_cannot_hold);
+  TEST_RUN(sectors_are_laid_out_as_a_formatter_would);
+  TEST_RUN(a_gap_the_revolution_cannot_hold_is_shortened);
+  TEST_RUN(the_track_reads_as_a_place);
+  TEST_RUN(what_was_found_is_what_the_track_answers);
+  TEST_RUN(reading_past_a_short_field_finds_the_next_sector);
+  TEST_RUN(writes_land_in_the_data_field_and_nowhere_else);
+  TEST_RUN(a_data_field_written_whole_is_sound);
+  TEST_RUN(a_track_formats_into_the_room_it_has);
+  TEST_RUN(an_image_may_record_where_the_sectors_lay);
+  TEST_RUN(a_track_recorded_another_way_is_unformatted);
+  TEST_RUN(an_image_written_back_reads_as_the_same_disc);
+  TEST_RUN(offsets_count_every_track_block);
+  TEST_RUN(offsets_that_do_not_climb_are_not_believed);
+  TEST_RUN(what_a_writer_cannot_read_it_still_keeps);
+  TEST_RUN(a_track_too_big_to_describe_is_not_written);
+  TEST_RUN(a_format_lays_out_the_length_it_wrote);
+  TEST_RUN(nothing_behind_an_identity_reads_as_gap);
+  TEST_RUN(a_format_may_take_room_past_the_image);
   return TEST_REPORT("floppy");
 }

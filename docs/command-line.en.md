@@ -1,12 +1,12 @@
 ---
 title: The command line
-description: Booting a machine, typing at it, and carrying away a picture, a snapshot, or a map of everything it wrote.
+description: Booting a machine, giving it a disc, typing at it, and carrying away a picture, a snapshot, or a map of everything it wrote.
 order: 3
 ---
 
 The command line is the plainest host there is: it builds a machine, runs it for a fixed number of frames, types whatever it was told to, and writes out what it was asked for. Nothing consults a clock, so the same command writes the same bytes every time.
 
-A C compiler and `make` are the whole toolchain. `make` builds, `make roms` fetches the firmware once, and the binary lands in `build/emulator`.
+A C compiler and `make` are the whole toolchain. `make` builds, `make roms` fetches the firmware once — the AMSDOS ROM among it, which the disc interface brings — and the binary lands in `build/emulator`.
 
 ## The two commands
 
@@ -25,6 +25,8 @@ build/emulator boot --type 'MODE 0\n' --save state.sna
 build/emulator run state.sna --type 'BORDER 6\n' --screenshot resumed.png
 build/emulator boot --full-raster --screenshot raster.png
 build/emulator boot --type 'PRINT 2+2\n' --writes heat.png
+build/emulator boot --disc shaker27.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
+build/emulator boot --disc shaker27.dsk --type 'RUN"SHAKE27A\n' --wait 400 --screenshot shaker.png
 ```
 
 ## The options
@@ -35,16 +37,22 @@ build/emulator boot --type 'PRINT 2+2\n' --writes heat.png
 | `--roms DIRECTORY` | Where the ROM images are. The default is `roms`. |
 | `--frames N` | Frames to run before typing. The default is 78. |
 | `--type TEXT` | Type this once the machine has booted. |
+| `--wait N` | Frames to run after typing, for a machine that has been given something to do. The default is 0. |
 | `--sixty-hz` | Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |
 | `--writes PATH` | Write a map of memory writes here as a PNG. |
 | `--save PATH` | Write the machine here as an SNA snapshot. |
+| `--disc PATH` | Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
+| `--disc-b PATH` | And this one in drive B. |
+| `--save-disc PATH` | Write drive A's disc here when the run is done, in the extended layout. Nothing is ever written back to the image that was given. |
 | `--full-raster` | The whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. |
 | `--no-double` | One image line per raster line, squashed. |
 
 `emulator --help` prints the same list, and is the copy that cannot fall behind the code.
 
 `--type` takes five escapes: `\n` for Return, `\t` for Tab, `\e` for Escape, `\b` for Del, and `\\` for a backslash itself. A character the UK keyboard cannot produce is refused rather than dropped.
+
+A disc is read whole into memory, with room after it for every track to be formatted once more, and the medium borrows the buffer for the run. What the machine writes lands in that copy, and reaches a file only through `--save-disc`; the image named by `--disc` is never touched.
 
 Typing is done by holding keys down, not by injecting characters. The firmware scans the keyboard once a frame off the 50Hz tick, so a key must be held for at least one scan to be seen and released for at least one more to be seen let go — which works out at nine characters a second of emulated time, and means what reaches BASIC went through the matrix, the 8255 and the sound chip exactly as a typist's keystroke would.
 

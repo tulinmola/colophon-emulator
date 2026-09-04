@@ -76,9 +76,9 @@ A host that sets the registers behind the memory map from outside — restoring 
 
 ## What is a chip and what is a machine
 
-A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `crtc.c`, `ppi.c`, `psg.c`, `keyboard.c` and `monitor.c` do not contain the word. A comment may name a machine to justify a decision, and two in `z80.c` do — why the processor implements the NMOS parity bug, and why it leaves the general case of interrupt mode 0 alone — but that is the comment explaining a choice, not the code making one.
+A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `crtc.c`, `ppi.c`, `psg.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word. A comment may name a machine to justify a decision, and two in `z80.c` do — why the processor implements the NMOS parity bug, and why it leaves the general case of interrupt mode 0 alone — but that is the comment explaining a choice, not the code making one.
 
-The machine wiring gets its own file, and it is the only one that knows these chips are soldered into a CPC: the memory map, the I/O decode, the board's video address wiring, and the clock that divides between the chips. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it.
+The machine wiring gets its own file, and it is the only one that knows these chips are soldered into a CPC: the memory map, the I/O decode, the board's video address wiring, the motor line that runs from a port of its own to the drives, and the clock that divides between the chips. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it. Nor is the disc: the controller is the µPD765 the Spectrum +3 also used, the drive answers the Shugart lines any such controller reads, and the medium is the shape any of them finds, so all three would go into a second machine as they are.
 
 The practical result is that a second machine built around the same parts inherits them unchanged.
 
