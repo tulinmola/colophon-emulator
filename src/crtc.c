@@ -34,15 +34,13 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
 uint64_t crtc_tick(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
 
-  /* Whether this line is the frame's last is decided while C0 is 0 or 1.
-     After that the chip stops asking, so a register written later in the
-     line can still make the state true but can no longer take it back
-     (ch. 10.3.1.2, 12.2). */
-  bool at_limits = crtc->c4 == r[4] && crtc->c9 == r[9] && !crtc->in_vertical_adjustment;
+  /* Whether this line is the frame's last is decided while C0 is 0 or 1,
+     and this type "no longer repeats this test on the other values of
+     C0>1" (ch. 12.2, 10.3.1.2), so a register written later in the line
+     can neither take the state back nor set it. Re-evaluating it on an R4
+     or R9 update is type 2's rule (ch. 12.4.1). */
   if (crtc->c0 < 2) {
-    crtc->last_line = at_limits;
-  } else if (at_limits) {
-    crtc->last_line = true;
+    crtc->last_line = crtc->c4 == r[4] && crtc->c9 == r[9] && !crtc->in_vertical_adjustment;
   }
 
   /* An R5 seen before C0 reaches 3 spends the line on a vertical adjustment

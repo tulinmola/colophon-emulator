@@ -283,16 +283,17 @@ static void the_last_line_holds_once_it_is_decided(void) {
   TEST_EQUAL(crtc.c9, 0);
 }
 
-static void a_late_write_can_still_end_the_frame(void) {
-  /* The other direction of the same rule: a write after C0=1 that brings
-     C4 and R4 together does set the state (ch. 10.3.1.2). */
+static void a_late_write_cannot_end_the_frame(void) {
+  /* The other direction of the same rule: the test is not repeated once C0
+     is past 1, so a write that brings C4 and R4 together later in the line
+     leaves the row counter to go on climbing (ch. 12.2). */
   program_standard();
   TEST_CHECK(run_to_row(5));
   run_scanlines(7);
   run_characters(10);
   write_register(4, 5);
   run_scanlines(1);
-  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c4, 6);
 }
 
 static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
@@ -440,7 +441,7 @@ int main(void) {
   TEST_RUN(c4_runs_to_its_own_top_when_r4_drops_below_it);
   TEST_RUN(the_vertical_adjustment_brings_c4_back_from_past_r4);
   TEST_RUN(the_last_line_holds_once_it_is_decided);
-  TEST_RUN(a_late_write_can_still_end_the_frame);
+  TEST_RUN(a_late_write_cannot_end_the_frame);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);

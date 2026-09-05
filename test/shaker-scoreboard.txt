@@ -2,7 +2,7 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-31 self-graded lines, 24 of them wrong.
+31 self-graded lines, 23 of them wrong.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture, a legend, or a table whose rows
@@ -45,7 +45,7 @@ B (7)       CRTC 0 BUG OVF C4                                                   
 B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded
 B (O)       CRTC 1-A OR 1-B?                                                                 another CRTC type's
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded
-B (F0)      BOUNGA!                                                                          recorded, ungraded, cut off at the cap
+B (F0)      BOUNGA!                                                                          recorded, ungraded
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
 B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
@@ -118,12 +118,12 @@ E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME          
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   recorded, ungraded, cut off at the cap
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
-E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        11 graded, 8 wrong
+E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        11 graded, 7 wrong
       >>>>>> DELAY TO VSYNC:#002A (EXP:#002A)
     ! >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
     ! >>>>>> DELAY TO VSYNC:#0030 (EXP:#00B7)  WRONG
       >>>>>> DELAY TO VSYNC:#0032 (EXP:#0032)
-    ! >>>>>> DELAY TO VSYNC:#0000 (EXP:#00C0)  WRONG
+      >>>>>> DELAY TO VSYNC:#00C0 (EXP:#00C0)
     ! >>>>>> DELAY TO VSYNC:#0003 (EXP:#007F)  WRONG
       >>>>>> DELAY TO VSYNC:#001B (EXP:#001B)
     ! >>>>>> DELAY TO VSYNC:#001F (EXP:#007F)  WRONG
