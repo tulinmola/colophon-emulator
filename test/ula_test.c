@@ -92,8 +92,8 @@ static void the_interrupt_stands_directly_above_the_first_pixel(void) {
 static void the_first_displayed_byte_is_14336_tstates_after_the_interrupt(void) {
   ula_init(&ula);
   uint16_t display = 0, attribute = 0;
-  long first = -1;
-  for (long tick = 0; tick < ULA_TICKS_PER_FRAME; tick++) {
+  int first = -1;
+  for (int tick = 0; tick < ULA_TICKS_PER_FRAME; tick++) {
     ula_seek(&ula, (uint32_t)tick);
     if (ula_fetch(&ula, &display, &attribute)) {
       first = tick;
@@ -128,7 +128,7 @@ static void a_byte_paints_eight_pixels_most_significant_first(void) {
   int column = ULA_RETRACE_TICKS + ULA_LEFT_BORDER_TICKS;
   uint8_t got[8];
   for (int tick = 0; tick < 4; tick++) {
-    samples_at(line, column + tick, 0xA0, 0x07, &got[tick * 2]);
+    samples_at(line, column + tick, 0xA0, 0x07, &got[(size_t)tick * 2]);
   }
   /* 0xA0 is 1010 0000: ink, paper, ink, paper, then four of paper. */
   const uint8_t want[8] = {7, 0, 7, 0, 0, 0, 0, 0};
@@ -207,8 +207,8 @@ static void the_frame_sync_holds_across_eight_whole_lines(void) {
 
 static void the_first_contended_tstate_of_a_frame_is_14335(void) {
   ula_init(&ula);
-  long first = -1;
-  for (long tick = 0; tick < ULA_TICKS_PER_FRAME; tick++) {
+  int first = -1;
+  for (int tick = 0; tick < ULA_TICKS_PER_FRAME; tick++) {
     ula_seek(&ula, (uint32_t)tick);
     if (ula_contention(&ula) != 0) {
       first = tick;
