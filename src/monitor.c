@@ -41,7 +41,7 @@ void monitor_receive(monitor_t *monitor, const uint8_t *samples, uint8_t count, 
     /* A line's sync has ended, and only now is its width known. The beam is
        placed as if the line had been timed from the pulse's middle, which is
        what carries a shortened pulse into a picture shifted right by half of
-       what was taken off (Compendium ch. 14.3). A pulse too long for a line
+       what was taken off (Compendium ch. 14.4). A pulse too long for a line
        is the frame's, and the beam is left where it stands. */
     monitor->beam_x = (uint16_t)(monitor->line_sync_centre + monitor->sync_held / 2);
   }

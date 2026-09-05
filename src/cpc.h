@@ -68,7 +68,7 @@
 /* Half of the Gate Array's own 4µs line sync, which is where the middle of
    that pulse lands once the beam is timed from it. A pulse the Gate Array
    cut short walks its middle left and the picture right, half a microsecond
-   for each one taken off (Compendium ch. 14.3). */
+   for each one taken off (Compendium ch. 14.3, 14.4). */
 #define CPC_LINE_SYNC_CENTRE 32
 
 /* One frame of the screen the firmware programs: 312 lines of 64 characters

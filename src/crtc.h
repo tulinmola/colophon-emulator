@@ -25,8 +25,8 @@
  * Longshot (CC BY-NC-ND).
  *
  * Sources:
- * - "The Amstrad CPC CRTC Compendium" v1.10 (Longshot / Logon System),
- *   https://shaker.logonsystem.eu/ACCC1.10-EN.pdf — the counter names we
+ * - "The Amstrad CPC CRTC Compendium" v1.11 (Longshot / Logon System),
+ *   https://shaker.logonsystem.eu/ACCC1.11-EN.pdf — the counter names we
  *   adopt as it asks (ch. 3.1), the frame construction (ch. 6), the type-0
  *   register file and access ports (ch. 4.3), VMA/VMA' and their reload
  *   rules (ch. 20).

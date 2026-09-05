@@ -17,8 +17,8 @@
  *   https://cpctech.cpcwiki.de/docs/instrtim.html — "The following table
  *   gives the complete execution time for all CPU instructions. These
  *   timings have been measured."
- * - "The Amstrad CPC CRTC Compendium" v1.10 (Longshot / Logon System),
- *   https://shaker.logonsystem.eu/ACCC1.10-EN.pdf ch. 26, "Duration of
+ * - "The Amstrad CPC CRTC Compendium" v1.11 (Longshot / Logon System),
+ *   https://shaker.logonsystem.eu/ACCC1.11-EN.pdf ch. 26, "Duration of
  *   instr. on the CPC".
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by

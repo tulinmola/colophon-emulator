@@ -23,8 +23,8 @@
  * Longshot (CC BY-NC-ND).
  *
  * Sources:
- * - "The Amstrad CPC CRTC Compendium" v1.10 (Longshot / Logon System),
- *   https://shaker.logonsystem.eu/ACCC1.10-EN.pdf ch. 27 — the interrupt
+ * - "The Amstrad CPC CRTC Compendium" v1.11 (Longshot / Logon System),
+ *   https://shaker.logonsystem.eu/ACCC1.11-EN.pdf ch. 27 — the interrupt
  *   generator measured on hardware: the R52 counter and its name, the INT
  *   line maintained until acknowledged, bit 5 killed at acknowledge, and
  *   the rule two HSYNCs after VSYNC: an interrupt only if bit 5 is set.
@@ -153,9 +153,10 @@ static inline bool gate_array_character_clock(const gate_array_t *gate_array) {
  * on the fourth. This is what rounds every machine cycle up to a whole
  * microsecond and costs the CPU a quarter of its nominal speed.
  *
- * The chip knows nothing about which cycle the CPU is in: it "continually
- * generates 3 Tw followed by a no-Tw cycle" (Compendium ch. 4.4.4), and the
- * CPU meets that pattern wherever its own sampling happens to fall. An
+ * The chip knows nothing about which cycle the CPU is in: its designers'
+ * trick "has been to continually generate 3 Tw followed by a 'no Tw'
+ * cycle" (Compendium ch. 4.4.4), and the CPU meets that pattern wherever
+ * its own sampling happens to fall. An
  * instruction whose T-states do not divide by four leaves the next one to
  * be stretched at its opcode fetch, which is how everything ends up
  * "linearized" onto the microsecond. */

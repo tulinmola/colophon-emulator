@@ -61,7 +61,7 @@ static void a_short_sync_starts_the_next_line(void) {
 static void a_shortened_sync_moves_the_picture_right(void) {
   /* The line is timed from the middle of its sync, so a pulse cut short
      walks its middle earlier and the picture later by half as much
-     (Compendium ch. 14.3). Two samples off this pulse move the picture one
+     (Compendium ch. 14.4). Two samples off this pulse move the picture one
      sample right — the half-character a program buys itself when R12/R13
      can only step whole ones. The width is known only once the pulse ends,
      so the beam is placed on the run after it, which is the run that
