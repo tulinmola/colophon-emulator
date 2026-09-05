@@ -1106,7 +1106,10 @@ static void the_scoreboard_matches_the_one_on_record(void) {
     }
     line++;
     if (from_written != NULL && from_record != NULL && strcmp(written_line, recorded_line) == 0) {
-      if (is_a_group_line(recorded_line)) {
+      /* The group a line falls under is the last one named above it, so it
+         stops being read once the line to report has been found: the walk
+         goes on to the end of the file to count the rest. */
+      if (first_difference == 0 && is_a_group_line(recorded_line)) {
         snprintf(under, sizeof under, "%s", recorded_line);
         trim_trailing_newline(under);
       }
