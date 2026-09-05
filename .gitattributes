@@ -1,0 +1,3 @@
+# The Shaker tier compares this file byte for byte with what it writes, and it
+# writes LF. After a CRLF checkout every line differs and a diff shows nothing.
+test/shaker-scoreboard.txt text eol=lf

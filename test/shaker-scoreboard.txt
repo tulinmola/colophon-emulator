@@ -1,0 +1,122 @@
+What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
+module by module and in the order each module's own menu prints.
+
+64 groups run, 22 left to another CRTC type.
+21 self-graded lines, WRONG in 17 of them.
+
+A group stands as "recorded, ungraded" when it drew a screen of its own but
+said what it had to say in a picture or a legend rather than in words this
+reader can score. It was run and kept, not skipped. A line marked ! is a test
+Longshot's own module says this machine fails.
+
+The copy of this file in the test sources is the one on record, and a sweep
+fails on the first line where the two differ. The screens behind these
+standings are in the module records written beside the sweep's own copy.
+
+A (1)       UPDATE VRAM VS CRTC (79 TST)                                                     recorded, ungraded
+A (2)       SKEW DISP ON R0 RUPTURE (4 TST)                                                  recorded, ungraded
+A (3)       CRTC 2 RVMB (22 TST)                                                             another CRTC type's
+A (4)       UPDATE CRTC R0 TIMING (17 TST)                                                   recorded, ungraded
+A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded
+A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded
+A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded, cut off at the cap
+A (8)       GATE ARRAY PIXELISATION                                                          recorded, ungraded
+A (9)       GATE ARRAY INKERISATION (3 TST)                                                  recorded, ungraded
+A (E)       GATE ARRAY MODERISATION                                                          recorded, ungraded
+A (R)       MODE UPD >HSYNC DELAY< (2.1.0)(3 TST)                                            recorded, ungraded
+A (CAPS)    INTERACTIVE TEST MODE X TO Y (16 INTERACTIVE TST)                                recorded, ungraded
+A (TAB)     HSYNC START POSITION (4 INTERACTIVE TST)                                         recorded, ungraded
+A (T)       R2 UPD DURING & AFTER HSYNC (6 TST)                                              recorded, ungraded
+A (Y)       R3 UPD DURING HSYNC (8 TST)                                                      recorded, ungraded
+A (U)       R4 & R9 CHECKING (54 TST)                                                        recorded, ungraded
+A (I)       VSYNC CONDITIONS (413 TST)                                                       recorded, ungraded
+A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded
+A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded
+A (COPY)    CRTC 2 OFFSET                                                                    another CRTC type's
+B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (06)              recorded, ungraded
+B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                               showed only the menu
+B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
+B (4)       CRTC 2 FIND C0 MIN                                                               another CRTC type's
+B (5)       CRTC 2 RLAL                                                                      another CRTC type's
+B (6)       CRTC 1 BUG OUTI R0                                                               another CRTC type's
+B (7)       CRTC 0 BUG OVF C4                                                                recorded, ungraded
+B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded
+B (O)       CRTC 1-A OR 1-B?                                                                 another CRTC type's
+B (RETURN)  R5 STORIES                                                                       recorded, ungraded
+B (F0)      BOUNGA!                                                                          recorded, ungraded, cut off at the cap
+B (CAPS)    RVNI LTD                                                                         recorded, ungraded
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
+B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
+B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
+B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
+B (T)       R3 JIT INTERACTIVE MODE ANALYZER                                                 recorded, ungraded
+B (S)       CRTC 1 : BE00 CHECK                                                              another CRTC type's
+B (CTRL)    R5 SCANNER /                                                                     recorded, ungraded, cut off at the cap
+B (COPY)    R5 T2                                                                            recorded, ungraded
+B (TAB)     R5 BENCH (INTERACTIVE)                                                           recorded, ungraded
+B (0)       VERTICAL SCROLL SUB-PIXEL 1/8,1/16,1/32,1/64,1/128                               recorded, ungraded, cut off at the cap
+C (1)       CRTC 1   : RFD & PARITY STORY                                                    another CRTC type's
+C (2)       CRTC 1   : R8 IVM ON ODD C9                                                      another CRTC type's
+C (3)       CRTC 1   : PARITY SWITCH STATUS                                                  another CRTC type's
+C (4)       CRTC 1   : IVM ON/OFF                                                            another CRTC type's
+C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   recorded, ungraded
+C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's
+C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded
+C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                another CRTC type's
+C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
+C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
+C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded
+C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              recorded, ungraded
+C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
+C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           1 graded, 1 wrong
+    ! RESULT:#8700 WRONG (EXP:#4E40)
+C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             8 graded, 8 wrong
+    ! R9=6,R4=6, R6=9, PARITY=E, R7=3 FROM C4=2, CPU=#0540 WRONG (EXP:#0320)
+    ! R9=6,R4=6, R6=9, PARITY=E, R7=6 FROM C4=2, CPU=#0A80 WRONG (EXP:#0620)
+    ! R9=6,R4=6, R6=9, PARITY=E, R7=0 FROM C4=2, CPU=#0C40 WRONG (EXP:#0720)
+    ! R9=6,R4=6, R6=9, PARITY=E, R7=1 FROM C4=2, CPU=#0260 WRONG (EXP:#0820)
+    ! R9=6,R4=6, R6=5, PARITY=E, R7=3 FROM C4=2, CPU=#0540 WRONG (EXP:#0320)
+    ! R9=6,R4=6, R6=5, PARITY=E, R7=6 FROM C4=2, CPU=#0A80 WRONG (EXP:#0620)
+    ! R9=6,R4=6, R6=5, PARITY=E, R7=0 FROM C4=2, CPU=#0C40 WRONG (EXP:#0740)
+    ! R9=6,R4=6, R6=5, PARITY=E, R7=1 FROM C4=2, CPU=#0260 WRONG (EXP:#0840)
+C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
+C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  recorded, ungraded
+D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's
+D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               recorded, ungraded
+D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   1 graded, 0 wrong
+      R3h=0/R4=R7=0/ON LINE 9, R4=R7=7F: VSYNC OFF DELAY=#0032 (EXP:#32)
+D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded
+D (H)       HSYNC GATE ARRAY                                                                 recorded, ungraded
+D (1)       CSYNC4 VS 2xCSYNC2                                                               recorded, ungraded
+D (2)       R2.JIT >> NO CSYNC UPD                                                           recorded, ungraded
+D (3)       2xCSYNC RELATIVE                                                                 recorded, ungraded
+D (4)       CSYNC MULTIPLES                                                                  recorded, ungraded
+D (5)       WIP (SOME R3.JIT)                                                                recorded, ungraded
+D (6)       HARDWARE SCROLL 1 PIXEL MODE 1/0 (NO BUFFERING)                                  recorded, ungraded, cut off at the cap
+D (7)       R2 OSCILLATION STORY                                                             recorded, ungraded
+D (8)       NO HSYNC FOR XX LINES                                                            recorded, ungraded
+D (9)       CRTC 1 : RFD ROUND 2                                                             another CRTC type's
+D (E)       CRTC 1 : OFS UPD IN ADD MANAGEMENT                                               another CRTC type's
+D (CAPS)    CRTC 1-OUTI R0 AUTOPSY                                                           another CRTC type's
+D (P)       CRTC 2 : VMA' BUG                                                                another CRTC type's
+D (S)       SPLITBORDER POS                                                                  recorded, ungraded
+D (COPY)    RESET CPC                                                                        recorded, ungraded
+E (1)       R5 STORIES 2ND ROUND                                                             recorded, ungraded
+E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
+E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   recorded, ungraded, cut off at the cap
+E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
+E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
+E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        11 graded, 8 wrong
+      >>>>>> DELAY TO VSYNC:#002A (EXP:#002A)
+    ! >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
+    ! >>>>>> DELAY TO VSYNC:#0030 (EXP:#00B7)  WRONG
+      >>>>>> DELAY TO VSYNC:#0032 (EXP:#0032)
+    ! >>>>>> DELAY TO VSYNC:#0000 (EXP:#00C0)  WRONG
+    ! >>>>>> DELAY TO VSYNC:#0003 (EXP:#007F)  WRONG
+      >>>>>> DELAY TO VSYNC:#001B (EXP:#001B)
+    ! >>>>>> DELAY TO VSYNC:#001F (EXP:#007F)  WRONG
+    ! >>>>>> DELAY TO VSYNC:#003F (EXP:#009F)  WRONG
+    ! >>>>>> DELAY TO VSYNC:#04DF (EXP:#053F)  WRONG
+    ! >>>>>> DELAY TO VSYNC:#04BF (EXP:#0000)  WRONG
+E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   another CRTC type's
+E (COPY)    RESET CPC                                                                        recorded, ungraded

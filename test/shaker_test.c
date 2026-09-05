@@ -32,6 +32,7 @@
  *   type that its tests are written against. Technical information sourced
  *   from the "Amstrad CPC CRTC Compendium" by Longshot (CC BY-NC-ND).
  */
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,11 +67,24 @@
 #define FRAMES_TO_LOAD_MODULE 400
 #define FRAMES_KEY_HELD 5
 
-/* How long a group is watched, and how often: four seconds of the machine's
-   own time, sampled ten times a second. A frame is 312 lines of 64
-   characters, so fifty of them make a second. */
+/* A group is watched until it stops telling us anything new: a group of
+   eight tests has finished inside a second of the machine's own time, and
+   one of four hundred is still printing after ten, so a fixed watch is
+   either too short for one or wasted on the other. A frame is 312 lines of
+   64 characters, so fifty of them make a second.
+
+   The quiet the watch waits for is longer than any a module has been seen
+   to keep. Module B's interrupt-delay group thinks for a hundred frames
+   before printing anything at all, and module A's HSYNC group turns its
+   byte over on the same beat, so a threshold near either would end the
+   watch in the middle of the test — and a group cut off says nothing about
+   being cut off, which is why the standing records it separately.
+
+   The cap is for the groups that never stop, which are the ones drawing
+   something that moves. */
 #define SAMPLE_STEP_FRAMES 5
-#define SAMPLES_PER_GROUP 40
+#define MAX_SAMPLES_WITHOUT_NEWS 40
+#define MAX_SAMPLES_PER_GROUP 300
 
 #define MAX_GROUPS 32
 #define MAX_CAPTURES 12
@@ -100,11 +114,17 @@ static floppy_t saved_disc;
 
 static char screen[ROWS][COLUMNS + 1];
 static char previous_screen[ROWS][COLUMNS + 1];
+/* The menu as it stood before a key was pressed. A group that never put
+   anything else on the screen either did nothing or was watched too briefly
+   to catch it, and the standing has to be able to say so: without it, a
+   group cut short reads exactly like a group that ran and finished. */
+static char menu_screen[ROWS][COLUMNS + 1];
 static int grid_left = NOMINAL_LEFT;
 static int grid_top = NOMINAL_TOP;
 static const char *rom_directory = "roms";
 static const char *disc_directory = "test/data/discs";
 static const char *report_directory = "build/shaker";
+static const char *scoreboard_on_record = "test/shaker-scoreboard.txt";
 
 typedef struct {
   char key[MAX_KEY_LENGTH + 1];
@@ -115,6 +135,43 @@ typedef struct {
 
 static group groups[MAX_GROUPS];
 static int group_count;
+
+/* The module records hold everything a run saw, including how the picture
+   looked getting there — a screen count moves when a frame lands a sample
+   earlier, and a record that moves for that reason cannot be compared. The
+   scoreboard holds only what Shaker said, and it is gathered here before
+   any of it is written so that the count can stand at the head of the file,
+   where a reader wants it. */
+#define MAX_SCOREBOARD 65536
+static char scoreboard[MAX_SCOREBOARD];
+static size_t scoreboard_length;
+static bool scoreboard_overflowed;
+static int total_groups_run;
+static int total_groups_skipped;
+static int total_verdicts;
+static int total_verdicts_wrong;
+
+static void add_to_scoreboard(const char *format, ...) {
+  va_list arguments;
+  va_start(arguments, format);
+  size_t room = sizeof scoreboard - scoreboard_length;
+  int written = vsnprintf(scoreboard + scoreboard_length, room, format, arguments);
+  va_end(arguments);
+  if (written < 0 || (size_t)written >= room) {
+    scoreboard_overflowed = true;
+    return;
+  }
+  scoreboard_length += (size_t)written;
+}
+
+/* The key is padded to the width of the longest a menu names and the label
+   to the width of the widest the reader can hold, so that the standings
+   stand in a column a human reads down. */
+static void write_scoreboard_line(const char *module, const group *entry, const char *standing) {
+  char named[MAX_KEY_LENGTH + 8];
+  snprintf(named, sizeof named, "%.1s (%.*s)", module, MAX_KEY_LENGTH, entry->key);
+  add_to_scoreboard("%-11s %-*s %s\n", named, COLUMNS, entry->label, standing);
+}
 
 static bool load_file(const char *directory, const char *file, uint8_t *into, size_t capacity,
                       size_t *length, const char *remedy) {
@@ -165,20 +222,22 @@ static void type_text(const char *text) {
 }
 
 /* The menus offer keys that carry no character, which is why
-   keyboard_key_for_character cannot reach them. */
+   keyboard_key_for_character cannot reach them. Every key a menu names is
+   either one character or one of these. */
+static const struct {
+  const char *name;
+  keyboard_key key;
+} named_keys[] = {
+    {"COPY", KEYBOARD_COPY},     {"CAPS", KEYBOARD_CAPS_LOCK}, {"TAB", KEYBOARD_TAB},
+    {"RETURN", KEYBOARD_RETURN}, {"CTRL", KEYBOARD_CONTROL},   {"F0", KEYBOARD_FUNCTION_0},
+    {"SPACE", KEYBOARD_SPACE},
+};
+
 static keyboard_key key_named(const char *name, bool *shifted) {
-  static const struct {
-    const char *name;
-    keyboard_key key;
-  } named[] = {
-      {"COPY", KEYBOARD_COPY},     {"CAPS", KEYBOARD_CAPS_LOCK}, {"TAB", KEYBOARD_TAB},
-      {"RETURN", KEYBOARD_RETURN}, {"CTRL", KEYBOARD_CONTROL},   {"F0", KEYBOARD_FUNCTION_0},
-      {"SPACE", KEYBOARD_SPACE},
-  };
   *shifted = false;
-  for (size_t index = 0; index < sizeof named / sizeof named[0]; index++) {
-    if (strcmp(named[index].name, name) == 0) {
-      return named[index].key;
+  for (size_t index = 0; index < sizeof named_keys / sizeof named_keys[0]; index++) {
+    if (strcmp(named_keys[index].name, name) == 0) {
+      return named_keys[index].key;
     }
   }
   if (name[1] != '\0') {
@@ -447,6 +506,13 @@ static bool write_raster(const char *path) {
   return png_write(path, pixels, CPC_FRAMEBUFFER_WIDTH, CPC_FRAMEBUFFER_HEIGHT);
 }
 
+static void trim_trailing_newline(char *text) {
+  size_t length = strlen(text);
+  while (length > 0 && (text[length - 1] == '\n' || text[length - 1] == '\r')) {
+    text[--length] = '\0';
+  }
+}
+
 static void trim_trailing_spaces(char *text) {
   size_t length = strlen(text);
   while (length > 0 && text[length - 1] == ' ') {
@@ -505,27 +571,38 @@ static int declared_test_count(const char *label) {
   return 0;
 }
 
-/* A menu key is uppercase letters and digits between brackets and nothing
-   else, which is what tells "(COPY)" from the "(4 TST)" and "(R0=3)" that
-   labels also carry. */
+/* A menu key between its brackets is one character, or one of the names
+   above. Nothing else is one, which is what tells a key from the "(4 TST)"
+   and "(R0=3)" a label also carries — and from the "(06)" module B prints
+   in its first line, where the menu reads "(xx)" and the module fills in
+   the value R9 stands at. */
 static bool key_at(const char *line, size_t *length) {
   if (*line != '(') {
     return false;
   }
-  size_t index = 1;
-  while (line[index] != '\0' && line[index] != ')') {
-    bool allowed =
-        (line[index] >= 'A' && line[index] <= 'Z') || (line[index] >= '0' && line[index] <= '9');
-    if (!allowed) {
-      return false;
-    }
-    index++;
-  }
-  if (line[index] != ')' || index < 2 || index > MAX_KEY_LENGTH + 1) {
+  const char *close = strchr(line, ')');
+  if (close == NULL) {
     return false;
   }
-  *length = index;
-  return true;
+  size_t between = (size_t)(close - line) - 1;
+  if (between > MAX_KEY_LENGTH) {
+    return false;
+  }
+  if (between == 1) {
+    if ((line[1] >= 'A' && line[1] <= 'Z') || (line[1] >= '0' && line[1] <= '9')) {
+      *length = between + 1;
+      return true;
+    }
+    return false;
+  }
+  for (size_t index = 0; index < sizeof named_keys / sizeof named_keys[0]; index++) {
+    const char *name = named_keys[index].name;
+    if (strlen(name) == between && strncmp(line + 1, name, between) == 0) {
+      *length = between + 1;
+      return true;
+    }
+  }
+  return false;
 }
 
 static void add_group(const char *key, size_t key_length, const char *label, size_t label_length) {
@@ -658,7 +735,8 @@ static bool appears_in_previous_screen(const char *line) {
    carrying a glyph the table could not name is refused outright — the word
    WRONG can be lost to a bad read where the brackets survive, and a
    half-read failure must never be counted as agreement. */
-static void collect_verdicts(void) {
+static int collect_verdicts(void) {
+  int added = 0;
   for (int row = 0; row < ROWS; row++) {
     char line[COLUMNS + 1];
     const char *from = screen[row];
@@ -696,21 +774,24 @@ static void collect_verdicts(void) {
     }
     if (verdict_count == MAX_VERDICTS) {
       verdicts_dropped++;
+      added++;
       continue;
     }
     memcpy(verdicts[verdict_count++], line, strlen(line) + 1);
+    added++;
   }
+  return added;
 }
 
 /* Most of these groups say what they have to say in the picture rather than
    in words, so a screen kept by name keeps its beam path too. When the
    record is full the newest replaces the last kept, because a test that
    works through a list puts its result at the end. */
-static void capture_screen(const char *module, const char *key, long frame, int percentage_named) {
+static bool capture_screen(const char *module, const char *key, long frame, int percentage_named) {
   for (int index = 0; index < capture_count; index++) {
     if (memcmp(captures[index].text, screen, sizeof screen) == 0) {
       captures[index].seen++;
-      return;
+      return false;
     }
   }
   capture *taken = NULL;
@@ -726,7 +807,7 @@ static void capture_screen(const char *module, const char *key, long frame, int 
   taken->seen = 1;
   taken->raster_file[0] = '\0';
   if (!keep_rasters) {
-    return;
+    return true;
   }
   char path[4096];
   snprintf(taken->raster_file, sizeof taken->raster_file, "%.4s-%.7s-%ld.png", module, key, frame);
@@ -734,6 +815,7 @@ static void capture_screen(const char *module, const char *key, long frame, int 
   if (!write_raster(path)) {
     taken->raster_file[0] = '\0';
   }
+  return true;
 }
 
 static void print_capture(FILE *report, const capture *taken) {
@@ -776,16 +858,30 @@ static void run_group(const char *module, const group *entry, FILE *report) {
   if (key == KEYBOARD_NO_KEY) {
     fprintf(report, "\n(%s) %s\n  this keyboard has no key named %s\n", entry->key, entry->label,
             entry->key);
+    write_scoreboard_line(module, entry, "no key of that name");
     return;
   }
   press(key, shifted);
 
   long frame = 0;
-  for (int sample = 0; sample < SAMPLES_PER_GROUP; sample++) {
+  int samples_without_news = 0;
+  int samples = 0;
+  while (samples < MAX_SAMPLES_PER_GROUP && samples_without_news < MAX_SAMPLES_WITHOUT_NEWS) {
     run_frames(SAMPLE_STEP_FRAMES);
     frame += SAMPLE_STEP_FRAMES;
-    capture_screen(module, entry->key, frame, read_screen());
-    collect_verdicts();
+    samples++;
+    bool news = capture_screen(module, entry->key, frame, read_screen());
+    if (collect_verdicts() > 0) {
+      news = true;
+    }
+    samples_without_news = news ? 0 : samples_without_news + 1;
+  }
+  bool still_going = samples_without_news < MAX_SAMPLES_WITHOUT_NEWS;
+  bool drew_its_own_screen = false;
+  for (int index = 0; index < capture_count; index++) {
+    if (memcmp(captures[index].text, menu_screen, sizeof menu_screen) != 0) {
+      drew_its_own_screen = true;
+    }
   }
 
   fprintf(report, "\n(%s) %s\n", entry->key, entry->label);
@@ -793,20 +889,20 @@ static void run_group(const char *module, const group *entry, FILE *report) {
     fprintf(report, "  the label declares %d test%s\n", entry->declared_tests,
             entry->declared_tests == 1 ? "" : "s");
   }
-  fprintf(report, "  %d distinct screen%s in %ld frames", capture_count,
-          capture_count == 1 ? "" : "s", frame);
+  fprintf(report, "  %d distinct screen%s in %ld frames%s", capture_count,
+          capture_count == 1 ? "" : "s", frame, still_going ? ", and still going" : "");
   if (captures_dropped > 0) {
     fprintf(report, ", and %d more this record had no room for", captures_dropped);
   }
   fprintf(report, "\n");
 
-  if (verdict_count > 0) {
-    int wrong = 0;
-    for (int index = 0; index < verdict_count; index++) {
-      if (strstr(verdicts[index], "WRONG") != NULL) {
-        wrong++;
-      }
+  int wrong = 0;
+  for (int index = 0; index < verdict_count; index++) {
+    if (strstr(verdicts[index], "WRONG") != NULL) {
+      wrong++;
     }
+  }
+  if (verdict_count > 0) {
     fprintf(report, "  %d self-graded line%s, WRONG in %d of them%s\n", verdict_count,
             verdict_count == 1 ? "" : "s", wrong,
             verdicts_dropped > 0 ? ", and more than this record holds" : "");
@@ -815,6 +911,33 @@ static void run_group(const char *module, const group *entry, FILE *report) {
               verdicts[index]);
     }
   }
+
+  /* The standing carries the two things that do not move when a frame
+     lands a sample earlier: what Shaker said, and whether it had finished
+     saying it. */
+  char standing[96];
+  size_t at = 0;
+  if (verdict_count > 0) {
+    at += (size_t)snprintf(standing + at, sizeof standing - at, "%d graded, %d wrong",
+                           verdict_count, wrong);
+  } else if (drew_its_own_screen) {
+    at += (size_t)snprintf(standing + at, sizeof standing - at, "recorded, ungraded");
+  } else {
+    at += (size_t)snprintf(standing + at, sizeof standing - at, "showed only the menu");
+  }
+  if (verdicts_dropped > 0) {
+    at += (size_t)snprintf(standing + at, sizeof standing - at, ", and more than the record holds");
+  }
+  if (still_going) {
+    snprintf(standing + at, sizeof standing - at, ", cut off at the cap");
+  }
+  write_scoreboard_line(module, entry, standing);
+  for (int index = 0; index < verdict_count; index++) {
+    add_to_scoreboard("    %s %s\n", strstr(verdicts[index], "WRONG") != NULL ? "!" : " ",
+                      verdicts[index]);
+  }
+  total_verdicts += verdict_count;
+  total_verdicts_wrong += wrong;
   for (int index = 0; index < capture_count; index++) {
     print_capture(report, &captures[index]);
   }
@@ -842,6 +965,7 @@ static void run_module(const char *module, const char *only_group) {
     TEST_FAIL("module %s: the menu offers nothing this reader recognises", module);
     return;
   }
+  memcpy(menu_screen, screen, sizeof menu_screen);
   save_machine();
   TEST_CHECK(cpc.fdc.drives[0] == &cpc.drives[0]);
 
@@ -876,10 +1000,13 @@ static void run_module(const char *module, const char *only_group) {
     }
     if (!entry->applies_to_this_crtc_type) {
       fprintf(report, "\n(%s) %s\n  another CRTC type's test; not run\n", entry->key, entry->label);
+      write_scoreboard_line(module, entry, "another CRTC type's");
+      total_groups_skipped++;
       skipped++;
       continue;
     }
     run_group(module, entry, report);
+    total_groups_run++;
     ran++;
   }
   if (fclose(report) != 0) {
@@ -934,6 +1061,80 @@ static void module_e_is_recorded(void) {
   }
 }
 
+/* A group's line, so that a difference can be reported under the group it
+   belongs to rather than by a line number alone: eleven verdicts under one
+   heading all look alike out of context. */
+static bool is_a_group_line(const char *line) {
+  return line[0] >= 'A' && line[0] <= 'E' && line[1] == ' ' && line[2] == '(';
+}
+
+/* A difference here is not a fault to be fixed but a reading to be judged,
+   so every line that moved is counted, the first is named under its group,
+   and the choice of what to keep is left to the human. */
+static void the_scoreboard_matches_the_one_on_record(void) {
+  if (only_module != NULL || only_group != NULL) {
+    return;
+  }
+  char written_path[4096];
+  snprintf(written_path, sizeof written_path, "%s/scoreboard.txt", report_directory);
+  FILE *written = fopen(written_path, "r");
+  if (written == NULL) {
+    TEST_FAIL("no scoreboard was written to %s", written_path);
+    return;
+  }
+  FILE *on_record = fopen(scoreboard_on_record, "r");
+  if (on_record == NULL) {
+    fclose(written);
+    TEST_FAIL("no scoreboard on record at %s, which is read from the directory the tests are\n"
+              "    run in. If there truly is none, copy %s there and read it before you commit it.",
+              scoreboard_on_record, written_path);
+    return;
+  }
+  char written_line[512] = "";
+  char recorded_line[512] = "";
+  char under[COLUMNS + 32] = "the head of the file";
+  char first_on_record[512] = "";
+  char first_now[512] = "";
+  int line = 0;
+  int first_difference = 0;
+  int differences = 0;
+  while (true) {
+    char *from_written = fgets(written_line, sizeof written_line, written);
+    char *from_record = fgets(recorded_line, sizeof recorded_line, on_record);
+    if (from_written == NULL && from_record == NULL) {
+      break;
+    }
+    line++;
+    if (from_written != NULL && from_record != NULL && strcmp(written_line, recorded_line) == 0) {
+      if (is_a_group_line(recorded_line)) {
+        snprintf(under, sizeof under, "%s", recorded_line);
+        trim_trailing_newline(under);
+      }
+      continue;
+    }
+    differences++;
+    if (first_difference != 0) {
+      continue;
+    }
+    first_difference = line;
+    snprintf(first_on_record, sizeof first_on_record, "%s",
+             from_record == NULL ? "(the record ends here)" : recorded_line);
+    snprintf(first_now, sizeof first_now, "%s",
+             from_written == NULL ? "(the new one ends here)" : written_line);
+    trim_trailing_newline(first_on_record);
+    trim_trailing_newline(first_now);
+  }
+  fclose(on_record);
+  fclose(written);
+  if (differences == 0) {
+    return;
+  }
+  TEST_FAIL("%d line%s of the scoreboard moved; the first is line %d, under %s\n"
+            "    on record: %s\n    now:       %s\n    all of it: diff %s %s",
+            differences, differences == 1 ? "" : "s", first_difference, under, first_on_record,
+            first_now, scoreboard_on_record, written_path);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -945,20 +1146,64 @@ int main(int argc, char **argv) {
     report_directory = argv[3];
   }
   if (argc > 4 && argv[4][0] != '\0') {
-    only_module = argv[4];
+    scoreboard_on_record = argv[4];
   }
   if (argc > 5 && argv[5][0] != '\0') {
-    only_group = argv[5];
+    only_module = argv[5];
+  }
+  if (argc > 6 && argv[6][0] != '\0') {
+    only_group = argv[6];
     keep_rasters = true;
   }
   if (only_group != NULL && only_module == NULL) {
     printf("shaker: a group needs the module it belongs to — pass MODULE too\n");
     return 1;
   }
+
   TEST_RUN(module_a_is_recorded);
   TEST_RUN(module_b_is_recorded);
   TEST_RUN(module_c_is_recorded);
   TEST_RUN(module_d_is_recorded);
   TEST_RUN(module_e_is_recorded);
+
+  /* A run of one module or one group has walked part of the menu, and a
+     part is not something the record can be set against. It writes its
+     module records and stops there, so that the file the comparison reads
+     is always a whole sweep. */
+  if (only_module != NULL || only_group != NULL) {
+    return TEST_REPORT("shaker");
+  }
+
+  char scoreboard_path[4096];
+  snprintf(scoreboard_path, sizeof scoreboard_path, "%s/scoreboard.txt", report_directory);
+  FILE *file = fopen(scoreboard_path, "w");
+  if (file == NULL) {
+    printf("shaker: cannot write %s\n", scoreboard_path);
+    return 1;
+  }
+  fprintf(file, "What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,\n");
+  fprintf(file, "module by module and in the order each module's own menu prints.\n\n");
+  fprintf(file, "%d groups run, %d left to another CRTC type.\n", total_groups_run,
+          total_groups_skipped);
+  fprintf(file, "%d self-graded lines, WRONG in %d of them.\n\n", total_verdicts,
+          total_verdicts_wrong);
+  fprintf(file, "A group stands as \"recorded, ungraded\" when it drew a screen of its own but\n");
+  fprintf(file, "said what it had to say in a picture or a legend rather than in words this\n");
+  fprintf(file, "reader can score. It was run and kept, not skipped. A line marked ! is a test\n");
+  fprintf(file, "Longshot's own module says this machine fails.\n\n");
+  fprintf(file, "The copy of this file in the test sources is the one on record, and a sweep\n");
+  fprintf(file, "fails on the first line where the two differ. The screens behind these\n");
+  fprintf(file, "standings are in the module records written beside the sweep's own copy.\n\n");
+  if (fwrite(scoreboard, 1, scoreboard_length, file) != scoreboard_length) {
+    fclose(file);
+    printf("shaker: %s was not written whole\n", scoreboard_path);
+    return 1;
+  }
+  if (fclose(file) != 0 || scoreboard_overflowed) {
+    printf("shaker: %s was not written whole\n", scoreboard_path);
+    return 1;
+  }
+
+  TEST_RUN(the_scoreboard_matches_the_one_on_record);
   return TEST_REPORT("shaker");
 }

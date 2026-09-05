@@ -166,14 +166,16 @@ test-firmware: $(BUILD)/firmware_test
 	@sh tools/fetch-discs.sh
 	@$(BUILD)/firmware_test roms test/data/discs
 
-# Shaker: Longshot's CRTC acid tests, run and recorded. The instrument, not
-# yet the verdict — it walks each module's own menu and writes down what the
-# machine displays, so that a group earns a rule from its own output.
+# Shaker: Longshot's CRTC acid tests, walked module by module, and what they
+# said set against the copy on record in test/. Passing means nothing moved,
+# and not that the machine is right: most groups state their verdict in a
+# picture, and a group is graded only once its convention has been read off
+# its own output.
 test-shaker: $(BUILD)/shaker_test
 	@sh tools/fetch-roms.sh
 	@sh tools/fetch-discs.sh
 	@mkdir -p $(BUILD)/shaker
-	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker "$(MODULE)" "$(GROUP)"
+	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker test/shaker-scoreboard.txt "$(MODULE)" "$(GROUP)"
 
 # The conformance tier: the complete SingleStepTests corpus, fetched on first
 # use. Run it before committing anything that touches the CPU.
