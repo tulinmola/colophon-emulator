@@ -149,6 +149,7 @@ static size_t scoreboard_length;
 static bool scoreboard_overflowed;
 static int total_groups_run;
 static int total_groups_skipped;
+static int total_groups_graded;
 static int total_verdicts;
 static int total_verdicts_wrong;
 
@@ -1043,6 +1044,9 @@ static void run_group(const char *module, const group *entry, FILE *report) {
   }
   total_verdicts += verdict_count;
   total_verdicts_wrong += wrong;
+  if (verdict_count > 0) {
+    total_groups_graded++;
+  }
   for (int index = 0; index < capture_count; index++) {
     print_capture(report, &captures[index]);
   }
@@ -1293,8 +1297,16 @@ int main(int argc, char **argv) {
   fprintf(file, "module by module and in the order each module's own menu prints.\n\n");
   fprintf(file, "%d groups run, %d left to another CRTC type.\n", total_groups_run,
           total_groups_skipped);
-  fprintf(file, "%d self-graded lines, %d of them wrong.\n\n", total_verdicts,
-          total_verdicts_wrong);
+  /* The denominator is the lines this reader can score and not the groups
+     run: most groups state their verdict in a picture. */
+  int agreeing = total_verdicts - total_verdicts_wrong;
+  int percentage = total_verdicts == 0 ? 0 : (agreeing * 100 + total_verdicts / 2) / total_verdicts;
+  fprintf(file, "%d of them printed self-graded lines, %d in all: %d agree with Longshot's\n",
+          total_groups_graded, total_verdicts, agreeing);
+  fprintf(file, "silicon and %d do not. That is %d%% of what this reader can score, and no\n",
+          total_verdicts_wrong, percentage);
+  fprintf(file, "measure at all of the other %d groups.\n\n",
+          total_groups_run - total_groups_graded);
   fprintf(file, "A group stands as \"recorded, ungraded\" when it drew a screen of its own but\n");
   fprintf(file, "said what it had to say in a picture, a legend, or a table whose rows\n");
   fprintf(file, "carry more than one test, rather than in words this reader can score. It\n");
@@ -1313,6 +1325,10 @@ int main(int argc, char **argv) {
     printf("shaker: %s was not written whole\n", scoreboard_path);
     return 1;
   }
+
+  printf("  scoreboard: %d of %d self-graded lines agree with silicon, %d%%, in %d of the "
+         "%d groups run\n",
+         agreeing, total_verdicts, percentage, total_groups_graded, total_groups_run);
 
   TEST_RUN(the_scoreboard_matches_the_one_on_record);
   return TEST_REPORT("shaker");

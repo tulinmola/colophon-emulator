@@ -49,12 +49,13 @@ static void run_characters(int count) {
   }
 }
 
-/* Whole scanlines from wherever C0 stands, which is a line start in every
-   test that has not moved R0. */
+/* Whole scanlines from wherever C0 stands. C0 names the character just
+   drawn, so a run leaves the alignment it found. */
 static void run_scanlines(int count) { run_characters(count * SCANLINE); }
 
-/* Stop on the first character of the row named, however long the chip takes
-   to get there; 4000 scanlines is a dozen frames and a failed loop. */
+/* Stop having drawn the first character of the row named, however long the
+   chip takes to get there; 4000 scanlines is a dozen frames and a failed
+   loop. */
 static bool run_to_row(uint8_t row) {
   for (int character = 0; character < 4000 * SCANLINE; character++) {
     if (crtc.c4 == row && crtc.c9 == 0 && crtc.c0 == 0) {
@@ -67,6 +68,13 @@ static bool run_to_row(uint8_t row) {
 
 /* Scanlines from one frame start to the next. */
 static long frame_scanlines(void) {
+  /* The counters name the character just drawn, and at power-on they name
+     none — which is why the frame's first character cannot be told from the
+     state before it by C0, C4 and C9 alone. Runs to that character, then
+     counts the ticks back round to it. */
+  while (!crtc.has_drawn_a_character || crtc.c0 != 0 || crtc.c4 != 0 || crtc.c9 != 0) {
+    crtc_tick(&crtc);
+  }
   long ticks = 0;
   do {
     crtc_tick(&crtc);
@@ -205,8 +213,8 @@ static void c9_runs_to_its_own_top_when_r9_drops_below_it(void) {
      row 256 scanlines long is a frame that never ends. */
   program_standard();
   run_scanlines(3);
-  TEST_EQUAL(crtc.c9, 3);
-  run_characters(10); /* past C0=2, where the last line is decided */
+  TEST_EQUAL(crtc.c9, 2); /* the scanline just drawn, the third of the row */
+  run_characters(10);     /* past C0=2, where the last line is decided */
   write_register(9, 1);
 
   uint8_t highest = 0;

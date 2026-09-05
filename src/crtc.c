@@ -31,109 +31,10 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
   crtc->c4 = next;
 }
 
-uint64_t crtc_tick(crtc_t *crtc) {
+/* C3h counts VSYNC scanlines on its 4 bits, so a width of 0 runs the full 16
+   (ch. 6.1.2). */
+static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
-
-  /* Whether this line is the frame's last is decided while C0 is 0 or 1,
-     and this type "no longer repeats this test on the other values of
-     C0>1" (ch. 12.2, 10.3.1.2), so a register written later in the line
-     can neither take the state back nor set it. Re-evaluating it on an R4
-     or R9 update is type 2's rule (ch. 12.4.1). */
-  if (crtc->c0 < 2) {
-    crtc->last_line = crtc->c4 == r[4] && crtc->c9 == r[9] && !crtc->in_vertical_adjustment;
-  }
-
-  /* An R5 seen before C0 reaches 3 spends the line on a vertical adjustment
-     instead of ending the frame, which is why the two states are exclusive.
-     C4 standing past R4 does not disqualify the line: the overflow rule is
-     written "excluding vertical adjustment", and an adjustment that finishes
-     returns C4 to 0 from wherever it had climbed (ch. 11.2.2, 12.1, 12.2).
-     This is the way back for a program that moved R4 under its own counter,
-     and the reason a split screen resynchronises instead of drifting. */
-  if (crtc->c0 < 3 && r[5] != 0 && crtc->c4 >= r[4] && crtc->c9 == r[9]) {
-    crtc->in_vertical_adjustment = true;
-    crtc->last_line = false;
-  }
-
-  /* A scanline begins: VMA reloads from the VMA' latch. On the frame's
-     first character both take R12/R13 — type 0 reloads when C4, C9 and C0
-     stand at zero (Compendium ch. 20.3.1). */
-  if (crtc->c0 == 0) {
-    if (crtc->c4 == 0 && crtc->c9 == 0) {
-      crtc->vma_ = (uint16_t)(((r[12] << 8) | r[13]) & 0x3FFF);
-    }
-    crtc->vma = crtc->vma_;
-  }
-
-  /* The row latch: VMA' captures VMA when C0 reaches R1 on the row's last
-     scanline, and the next row starts R1 characters further on (ch.
-     20.3.3). */
-  if (crtc->c0 == r[1] && crtc->c9 == r[9]) {
-    crtc->vma_ = crtc->vma;
-  }
-
-  /* HSYNC begins on the character where C0 meets R2 (ch. 6.1.2). A width of
-     zero is no HSYNC at all on this type — the 16 the other types read there
-     is what a program uses to tell them apart (ch. 14.1, 14.5, 28.1.5). */
-  if (crtc->c0 == r[2] && !crtc->hsync && (r[3] & 0x0F) != 0) {
-    crtc->hsync = true;
-    crtc->c3l = 0;
-  }
-
-  /* VSYNC begins on the character where C4 meets R7, which is why writing
-     R7 the value C4 already holds starts one where it stands. The block
-     keeps that same equality from starting a second (ch. 16.3, 16.4.1). */
-  if (crtc->c4 == r[7] && !crtc->vsync && !crtc->vsync_blocked) {
-    crtc->vsync = true;
-    crtc->vsync_blocked = true;
-    crtc->c3h = 0;
-  }
-
-  /* DISPLAY ENABLE, as two latches the equalities throw rather than two
-     comparisons standing (ch. 6.1.3, 17.1, 18.1). R1's opens where the line
-     begins and shuts where C0 meets R1; when R1 is 0 both fall on the same
-     character and the opening wins (ch. 18.3.1). R6's shuts where C4 meets
-     R6 and nothing but a new frame opens it, and while it is shut R1 has no
-     say (ch. 18.2.1, 18.2.2). The first line of a frame is exempt, which is
-     what leaves an R6 of 0 cancellable there (ch. 18.3.2). */
-  bool first_line = crtc->c4 == 0 && crtc->c9 == 0;
-  if (crtc->c0 == r[1]) {
-    crtc->border_r1 = true;
-  }
-  if (crtc->c0 == 0 && crtc->c0_reached_r0) {
-    crtc->border_r1 = false;
-  }
-  if (first_line && crtc->c0 == 0) {
-    crtc->border_r6 = false;
-  } else if (crtc->c4 == r[6] && !first_line) {
-    crtc->border_r6 = true;
-  }
-  bool display = !crtc->border_r1 && !crtc->border_r6;
-  uint64_t pins = (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)(crtc->c9 & 0x1F) << 24) |
-                  (display ? CRTC_DISPTMG : 0) | (crtc->hsync ? CRTC_HSYNC : 0) |
-                  (crtc->vsync ? CRTC_VSYNC : 0);
-
-  /* Advance to the next character. */
-  crtc->vma = (crtc->vma + 1) & 0x3FFF;
-  if (crtc->hsync) {
-    crtc->c3l = (crtc->c3l + 1) & 0x0F;
-    if (crtc->c3l == (r[3] & 0x0F)) {
-      crtc->hsync = false;
-    }
-  }
-  if (crtc->c0 != r[0]) {
-    crtc->c0++;
-    if (crtc->c0 == 0) {
-      /* R0 was moved under C0 and the counter came back the long way. */
-      crtc->c0_reached_r0 = false;
-    }
-    return pins;
-  }
-  crtc->c0 = 0;
-  crtc->c0_reached_r0 = true;
-
-  /* A scanline ended. C3h counts VSYNC scanlines on its 4 bits, so a width
-     of 0 runs the full 16 (ch. 6.1.2). */
   if (crtc->vsync) {
     crtc->c3h = (crtc->c3h + 1) & 0x0F;
     if (crtc->c3h == (r[3] >> 4)) {
@@ -161,7 +62,145 @@ uint64_t crtc_tick(crtc_t *crtc) {
   } else {
     crtc->c9 = (uint8_t)((crtc->c9 + 1) & C9_BITS);
   }
-  return pins;
+}
+
+/* C0 names the character being drawn and holds it for the whole of that
+   microsecond, which is the position the Compendium gives a register write
+   (ch. 13.2.1). Nothing reads it there yet.
+
+   The first tick draws rather than advances, because a chip that has drawn
+   nothing has no character to leave behind. That cannot be a sentinel in
+   C0: R0 takes all 256 values C0 does, and 255 is one a program can write,
+   so a sentinel there would read as the end of a 256-character line. */
+static void enter_character(crtc_t *crtc) {
+  if (!crtc->has_drawn_a_character) {
+    crtc->has_drawn_a_character = true;
+    return;
+  }
+  const uint8_t *r = crtc->registers;
+  crtc->vma = (crtc->vma + 1) & 0x3FFF;
+  if (crtc->hsync) {
+    crtc->c3l = (crtc->c3l + 1) & 0x0F;
+    if (crtc->c3l == (r[3] & 0x0F)) {
+      crtc->hsync = false;
+    }
+  }
+  if (crtc->c0 != r[0]) {
+    crtc->c0++;
+    if (crtc->c0 == 0) {
+      /* R0 was moved under C0 and the counter came back the long way. */
+      crtc->c0_reached_r0 = false;
+    }
+    return;
+  }
+  crtc->c0 = 0;
+  crtc->c0_reached_r0 = true;
+  enter_scanline(crtc);
+}
+
+/* Decided while C0 is 0 or 1, and this type "no longer repeats this test on
+   the other values of C0>1" (ch. 12.2, 10.3.1.2), so a register written
+   later in the line can neither take the state back nor set it.
+   Re-evaluating it on an R4 or R9 update is type 2's rule (ch. 12.4.1). */
+static void decide_last_line(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  if (crtc->c0 < 2) {
+    crtc->last_line = crtc->c4 == r[4] && crtc->c9 == r[9] && !crtc->in_vertical_adjustment;
+  }
+}
+
+/* An R5 seen before C0 reaches 3 spends the line on a vertical adjustment
+   instead of ending the frame, which is why the two states are exclusive.
+   C4 standing past R4 does not disqualify the line: the overflow rule is
+   written "excluding vertical adjustment", and an adjustment that finishes
+   returns C4 to 0 from wherever it had climbed (ch. 11.2.2, 12.1, 12.2).
+   This is the way back for a program that moved R4 under its own counter,
+   and the reason a split screen resynchronises instead of drifting. */
+static void begin_vertical_adjustment(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  if (crtc->c0 < 3 && r[5] != 0 && crtc->c4 >= r[4] && crtc->c9 == r[9]) {
+    crtc->in_vertical_adjustment = true;
+    crtc->last_line = false;
+  }
+}
+
+/* VMA reloads from the VMA' latch where a scanline begins, and on the
+   frame's first character both take R12/R13 — type 0 reloads when C4, C9
+   and C0 stand at zero (ch. 20.3.1). VMA' then captures VMA where C0
+   reaches R1 on the row's last scanline, so the next row starts R1
+   characters further on (ch. 20.3.3). */
+static void move_video_pointer(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  if (crtc->c0 == 0) {
+    if (crtc->c4 == 0 && crtc->c9 == 0) {
+      crtc->vma_ = (uint16_t)(((r[12] << 8) | r[13]) & 0x3FFF);
+    }
+    crtc->vma = crtc->vma_;
+  }
+  if (crtc->c0 == r[1] && crtc->c9 == r[9]) {
+    crtc->vma_ = crtc->vma;
+  }
+}
+
+/* HSYNC begins on the character where C0 meets R2 (ch. 6.1.2). A width of
+   zero is no HSYNC at all on this type — the 16 the other types read there
+   is what a program uses to tell them apart (ch. 14.1, 14.5, 28.1.5). VSYNC
+   begins where C4 meets R7, which is why writing R7 the value C4 already
+   holds starts one where it stands; the block keeps that same equality from
+   starting a second (ch. 16.3, 16.4.1). Each width is counted off where the
+   counter it rides advances, so the ends are in enter_character and
+   enter_scanline rather than here. */
+static void begin_syncs(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  if (crtc->c0 == r[2] && !crtc->hsync && (r[3] & 0x0F) != 0) {
+    crtc->hsync = true;
+    crtc->c3l = 0;
+  }
+  if (crtc->c4 == r[7] && !crtc->vsync && !crtc->vsync_blocked) {
+    crtc->vsync = true;
+    crtc->vsync_blocked = true;
+    crtc->c3h = 0;
+  }
+}
+
+/* DISPLAY ENABLE is two latches the equalities throw rather than two
+   comparisons standing (ch. 6.1.3, 17.1, 18.1). R1's opens where the line
+   begins and shuts where C0 meets R1; when R1 is 0 both fall on the same
+   character and the opening wins (ch. 18.3.1). R6's shuts where C4 meets R6
+   and nothing but a new frame opens it, and while it is shut R1 has no say
+   (ch. 18.2.1, 18.2.2). The first line of a frame is exempt, which is what
+   leaves an R6 of 0 cancellable there (ch. 18.3.2). */
+static void throw_display_latches(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  bool first_line = crtc->c4 == 0 && crtc->c9 == 0;
+  if (crtc->c0 == r[1]) {
+    crtc->display_r1 = true;
+  }
+  if (crtc->c0 == 0 && crtc->c0_reached_r0) {
+    crtc->display_r1 = false;
+  }
+  if (first_line && crtc->c0 == 0) {
+    crtc->display_r6 = false;
+  } else if (crtc->c4 == r[6] && !first_line) {
+    crtc->display_r6 = true;
+  }
+}
+
+static uint64_t pins_of(const crtc_t *crtc) {
+  bool display = !crtc->display_r1 && !crtc->display_r6;
+  return (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)(crtc->c9 & 0x1F) << 24) |
+         (display ? CRTC_DISPTMG : 0) | (crtc->hsync ? CRTC_HSYNC : 0) |
+         (crtc->vsync ? CRTC_VSYNC : 0);
+}
+
+uint64_t crtc_tick(crtc_t *crtc) {
+  enter_character(crtc);
+  decide_last_line(crtc);
+  begin_vertical_adjustment(crtc);
+  move_video_pointer(crtc);
+  begin_syncs(crtc);
+  throw_display_latches(crtc);
+  return pins_of(crtc);
 }
 
 uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {

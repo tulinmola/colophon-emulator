@@ -2,7 +2,9 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-31 self-graded lines, 23 of them wrong.
+6 of them printed self-graded lines, 31 in all: 8 agree with Longshot's
+silicon and 23 do not. That is 26% of what this reader can score, and no
+measure at all of the other 58 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture, a legend, or a table whose rows
@@ -21,7 +23,7 @@ A (3)       CRTC 2 RVMB (22 TST)                                                
 A (4)       UPDATE CRTC R0 TIMING (17 TST)                                                   recorded, ungraded
 A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded
 A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded
-A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded, cut off at the cap
+A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded
 A (8)       GATE ARRAY PIXELISATION                                                          recorded, ungraded
 A (9)       GATE ARRAY INKERISATION (3 TST)                                                  recorded, ungraded
 A (E)       GATE ARRAY MODERISATION                                                          recorded, ungraded
@@ -47,7 +49,7 @@ B (O)       CRTC 1-A OR 1-B?                                                    
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded
 B (F0)      BOUNGA!                                                                          recorded, ungraded
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
-B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, cut off at the cap
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
 B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
 B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
@@ -115,7 +117,7 @@ E (1)       R5 STORIES 2ND ROUND                                                
     ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R5=0, CPU TO C4=0:#0081 (exp:#0001)
     ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0081 (exp:#0001)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
-E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   recorded, ungraded, cut off at the cap
+E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   recorded, ungraded
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
 E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        11 graded, 7 wrong

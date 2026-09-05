@@ -12,10 +12,14 @@
  * (HD6845S/UM6845) performs it — its register widths, its readable set, its
  * VMA/VMA' reload rules, the counter widths a program can overrun, the last
  * line decided while C0 is 0 or 1, the vertical adjustment spent on C9, and
- * the block that stops one VSYNC condition serving twice. Not yet: interlace
- * and skew (R8 is stored, unread), cursor, lightpen, the first three
- * microseconds of a line (ch. 13.2), and the per-type divergences — each
- * arrives when Shaker can judge it. Two of the border's rules need a finer
+ * the block that stops one VSYNC condition serving twice. C0 names the
+ * character being drawn and holds it for that whole microsecond, which is
+ * what a positional register write needs; the last line and the vertical
+ * adjustment already read it. Not yet: interlace and skew (R8 is stored,
+ * unread), cursor, lightpen, the per-type divergences, and what ch. 13.2.1
+ * gives a line's first three microseconds — the states C0 0, 1 and 2
+ * schedule for a later character, and the VSYNC arming of ch. 13.2.2. Every
+ * comparison here is made where it stands. Two of the border's rules need a finer
  * pin than this one: the byte of border at C0=R0 when R1 exceeds it (ch.
  * 17.6.2) and the byte-by-byte alternation an R6 of 0 makes on a frame's
  * first line (ch. 18.3.2) both toggle DISPLAY ENABLE inside a character,
@@ -68,7 +72,8 @@ typedef struct {
   /* Counters, named as the Compendium names them (ch. 3.1). Each is
      narrower than the byte holding it, and a program can leave one above
      its limit; the widths are what bring it back (ch. 10.3.1.1, 12.1). */
-  uint8_t c0;  /* horizontal character counter, 8 bits */
+  uint8_t c0;  /* horizontal character counter, 8 bits; after a tick it names
+                  the character that tick drew */
   uint8_t c9;  /* scanline within the character row, 5 bits; drives RA. Type
                   0 has no C5 and spends C9 on the vertical adjustment too
                   (ch. 11.2.2) */
@@ -83,6 +88,11 @@ typedef struct {
      (ch. 10.3.1.2). */
   bool last_line;
   bool in_vertical_adjustment;
+  /* A chip that has drawn nothing has no character to leave behind, so the
+     first tick draws one instead of advancing past one. Zero is the
+     power-on state, which is what leaves the first tick drawing a line's
+     first character rather than its second. */
+  bool has_drawn_a_character;
   /* One C4/R7 equality raises one VSYNC: the comparison must change, by C4
      moving or R7 being written, before it raises another (ch. 16.3). */
   bool vsync_blocked;
@@ -90,8 +100,8 @@ typedef struct {
   /* DISPLAY ENABLE is two latches rather than two comparisons (ch. 6.1.3,
      18.2.1). The R1 one opens at the head of every line; the R6 one, once
      shut, is shut for the frame, and it outranks the other. */
-  bool border_r1;
-  bool border_r6;
+  bool display_r1;
+  bool display_r6;
   /* The line ran its length. Only the C0 that returns to 0 from R0 opens the
      display again — one that got there by overflowing 255 does not (ch.
      17.1). */
@@ -109,7 +119,7 @@ typedef struct {
 } crtc_t;
 
 /* Power-on. Real silicon leaves the register file undefined; zeroes here,
- * for determinism. */
+ * for determinism, which leaves the chip before a line's first character. */
 void crtc_init(crtc_t *crtc);
 
 /* Advance one character clock. Returns the output pins. */
