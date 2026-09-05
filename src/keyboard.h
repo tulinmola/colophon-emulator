@@ -37,8 +37,10 @@ typedef uint8_t keyboard_key;
 #define KEYBOARD_KEY(line, bit) ((keyboard_key)((line) * 8 + (bit)))
 #define KEYBOARD_NO_KEY ((keyboard_key)0xFF)
 
-/* The keys a text-typing caller needs by name; the rest it finds through
-   keyboard_key_for_character. */
+/* The keys a caller needs by name; the rest it finds through
+   keyboard_key_for_character, which cannot reach the last three — two of
+   them print nothing at all, and the third repeats a key it already
+   returns. */
 #define KEYBOARD_RETURN KEYBOARD_KEY(2, 2)
 #define KEYBOARD_SHIFT KEYBOARD_KEY(2, 5)
 #define KEYBOARD_CONTROL KEYBOARD_KEY(2, 7)
@@ -46,6 +48,9 @@ typedef uint8_t keyboard_key;
 #define KEYBOARD_TAB KEYBOARD_KEY(8, 4)
 #define KEYBOARD_ESCAPE KEYBOARD_KEY(8, 2)
 #define KEYBOARD_DELETE KEYBOARD_KEY(9, 7)
+#define KEYBOARD_COPY KEYBOARD_KEY(1, 1)
+#define KEYBOARD_CAPS_LOCK KEYBOARD_KEY(8, 6)
+#define KEYBOARD_FUNCTION_0 KEYBOARD_KEY(1, 7)
 
 typedef struct {
   /* One byte per line, a set bit meaning released. */

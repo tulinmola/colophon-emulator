@@ -29,17 +29,25 @@ FLOPPY_TEST_C = test/floppy_test.c
 DRIVE_TEST_C = test/drive_test.c
 UPD765_TEST_C = test/upd765_test.c
 FIRMWARE_TEST_C = test/firmware_test.c
+SHAKER_TEST_C = test/shaker_test.c
 SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
 EXERCISER_C = test/z80_exerciser_test.c
 CORE_C = $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(PPI_C) $(PSG_C) $(KEYBOARD_C) $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(MACHINE_C) $(SNAPSHOT_C)
 PNG_C = cli/png.c
 CLI_C = cli/main.c
-SRC_ALL = $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/ppi.h src/psg.h src/keyboard.h src/cpc.h src/snapshot.h src/floppy.h src/dsk.h src/drive.h src/upd765.h $(PNG_C) $(CLI_C) cli/png.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/test.h
+SRC_ALL = $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/ppi.h src/psg.h src/keyboard.h src/cpc.h src/snapshot.h src/floppy.h src/dsk.h src/drive.h src/upd765.h $(PNG_C) $(CLI_C) cli/png.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SHAKER_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/test.h
 
 SINGLE_STEP_DATA = test/data/SingleStepTests/z80/v1
 EXERCISER_DATA = test/data/ZEXALL
 # Groups of the exerciser to run by default; 0 runs all 67, which takes a while.
 EXERCISER_GROUPS ?= 12
+
+# Which of Shaker's modules to walk, and which group of one. MODULE=E runs
+# that module alone; MODULE=E GROUP=6 runs one group of it and keeps the
+# beam path of every screen it draws, which is a megabyte apiece. A group
+# needs the module it belongs to.
+MODULE ?=
+GROUP ?=
 
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
@@ -87,6 +95,10 @@ $(BUILD)/cpc_test: $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h
 $(BUILD)/firmware_test: $(CORE_C) src/cpc.h $(FIRMWARE_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(FIRMWARE_TEST_C) -o $@
+
+$(BUILD)/shaker_test: $(CORE_C) $(PNG_C) src/cpc.h cli/png.h $(SHAKER_TEST_C) test/test.h
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Icli -Itest $(CORE_C) $(PNG_C) $(SHAKER_TEST_C) -o $@
 
 $(BUILD)/timing_test: $(CORE_C) src/cpc.h $(TIMING_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
@@ -154,6 +166,15 @@ test-firmware: $(BUILD)/firmware_test
 	@sh tools/fetch-discs.sh
 	@$(BUILD)/firmware_test roms test/data/discs
 
+# Shaker: Longshot's CRTC acid tests, run and recorded. The instrument, not
+# yet the verdict — it walks each module's own menu and writes down what the
+# machine displays, so that a group earns a rule from its own output.
+test-shaker: $(BUILD)/shaker_test
+	@sh tools/fetch-roms.sh
+	@sh tools/fetch-discs.sh
+	@mkdir -p $(BUILD)/shaker
+	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker "$(MODULE)" "$(GROUP)"
+
 # The conformance tier: the complete SingleStepTests corpus, fetched on first
 # use. Run it before committing anything that touches the CPU.
 test-single-step: $(BUILD)/z80_single_step_test
@@ -167,7 +188,7 @@ test-exerciser: $(BUILD)/z80_exerciser_test
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexdoc.com $(EXERCISER_GROUPS)
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexall.com $(EXERCISER_GROUPS)
 
-test-all: test test-firmware test-single-step test-exerciser
+test-all: test test-firmware test-shaker test-single-step test-exerciser
 
 format:
 	$(CLANG_FORMAT) -i $(SRC_ALL)
@@ -176,9 +197,9 @@ format-check:
 	$(CLANG_FORMAT) --dry-run --Werror $(SRC_ALL)
 
 lint:
-	$(CLANG_TIDY) $(CORE_C) $(PNG_C) $(CLI_C) $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) -- $(CFLAGS) -Isrc -Icli -Itest
+	$(CLANG_TIDY) $(CORE_C) $(PNG_C) $(CLI_C) $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SHAKER_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) -- $(CFLAGS) -Isrc -Icli -Itest
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all roms discs test test-firmware test-single-step test-exerciser test-all format format-check lint clean
+.PHONY: all roms discs test test-firmware test-shaker test-single-step test-exerciser test-all format format-check lint clean
