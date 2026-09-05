@@ -2,12 +2,14 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-21 self-graded lines, WRONG in 17 of them.
+31 self-graded lines, 24 of them wrong.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
-said what it had to say in a picture or a legend rather than in words this
-reader can score. It was run and kept, not skipped. A line marked ! is a test
-Longshot's own module says this machine fails.
+said what it had to say in a picture, a legend, or a table whose rows
+carry more than one test, rather than in words this reader can score. It
+was run and kept, not skipped. A line marked ! is a test this machine
+failed: either the module said so, or the machine's value differs from the
+one Longshot's silicon produced.
 
 The copy of this file in the test sources is the one on record, and a sweep
 fails on the first line where the two differ. The screens behind these
@@ -66,7 +68,10 @@ C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                   
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
 C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded
-C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              recorded, ungraded
+C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              3 graded, 0 wrong
+      R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
+      R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
+      R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
 C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           1 graded, 1 wrong
     ! RESULT:#8700 WRONG (EXP:#4E40)
@@ -101,7 +106,14 @@ D (CAPS)    CRTC 1-OUTI R0 AUTOPSY                                              
 D (P)       CRTC 2 : VMA' BUG                                                                another CRTC type's
 D (S)       SPLITBORDER POS                                                                  recorded, ungraded
 D (COPY)    RESET CPC                                                                        recorded, ungraded
-E (1)       R5 STORIES 2ND ROUND                                                             recorded, ungraded
+E (1)       R5 STORIES 2ND ROUND                                                             7 graded, 7 wrong
+    ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)
+    ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#01, R5=0, CPU TO C4=0:#0084 (exp:#0004)
+    ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#02, R5=0, CPU TO C4=0:#0084 (exp:#0004)
+    ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#03, R5=0, CPU TO C4=0:#0084 (exp:#0004)
+    ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R5=0, CPU TO C4=0:#0081 (exp:#0001)
+    ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R5=0, CPU TO C4=0:#0081 (exp:#0001)
+    ! R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0081 (exp:#0001)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   recorded, ungraded, cut off at the cap
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's

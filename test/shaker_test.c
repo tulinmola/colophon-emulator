@@ -11,10 +11,10 @@
  * each module's own menu, presses every key that belongs to this machine's
  * CRTC type, and records what comes back: the screen read as text through
  * the character table the ROM carries, and the beam's path as a PNG. What
- * it cannot do is decide which of those screens is a pass, because Shaker
- * says so differently in each group — some print a value beside the value
- * they expected, some print a legend and leave the verdict to the picture,
- * and some ask the reader to watch a line flash. A group earns a rule here
+ * it cannot yet do is decide every screen, because Shaker says so
+ * differently in each group — some print a value beside the value they
+ * expected, some print a legend and leave the verdict to the picture, and
+ * some ask the reader to watch a line flash. A group earns a rule here
  * the day its convention is read off its own output; until then it earns a
  * record.
  *
@@ -32,6 +32,7 @@
  *   type that its tests are written against. Technical information sourced
  *   from the "Amstrad CPC CRTC Compendium" by Longshot (CC BY-NC-ND).
  */
+#include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -679,31 +680,134 @@ static int captures_dropped;
    name. */
 static bool keep_rasters;
 
-/* Some groups grade themselves. Where they do, the line carries the value
-   the machine produced, then in brackets the value real silicon produced,
-   and the word WRONG when the two disagree:
+/* Some groups grade themselves. Where they do, the value the machine
+   produced stands last before a bracket and the value real silicon
+   produced stands inside it. Longshot writes that four ways:
 
        >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
+       RESULT:#8700 WRONG (EXP:#4E40)
+       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)
+       R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
 
-   That is Longshot's convention, read off the modules' own output. The
-   value before the bracket is what tells a grading from a legend naming
+   Two of them never write WRONG at all, so the values decide and the word
+   only corroborates. They are compared as numbers because #0032 and #32
+   are one measurement written two ways.
+
+   A value before the bracket is what tells a grading from a legend naming
    the value a test is about to check, which carries no measurement of its
-   own. Only this convention is counted; a group that states its verdict
-   another way is recorded and left ungraded. */
+   own. */
 #define MAX_VERDICTS 192
-static char verdicts[MAX_VERDICTS][COLUMNS + 1];
+typedef struct {
+  char text[COLUMNS + 1];
+  bool failed;
+} verdict;
+
+static verdict verdicts[MAX_VERDICTS];
 static int verdict_count;
 static int verdicts_dropped;
 
-static bool is_verdict(const char *line) {
-  const char *expected = strstr(line, "(EXP");
-  if (expected == NULL) {
+/* Longshot prints a measurement in four hex digits at most, and one more is
+   allowed here. A longer run is something else: the modules print
+   #0D0E0F10, four values run together, which is not one measurement. The
+   digits are read one at a time rather than handed to strtoul, which takes
+   a 0x prefix straight past any count of them and saturates — and two
+   values that saturate agree with each other. */
+#define MAX_VALUE_DIGITS 5
+
+static bool hex_value_at(const char *at, unsigned long *value) {
+  if (*at != '#') {
     return false;
   }
-  for (const char *at = line; at < expected; at++) {
-    if (*at == '#') {
+  unsigned long parsed = 0;
+  int digits = 0;
+  while (isxdigit((unsigned char)at[1 + digits])) {
+    char digit = at[1 + digits];
+    parsed = parsed * 16 +
+             (unsigned long)(digit <= '9' ? digit - '0' : tolower((unsigned char)digit) - 'a' + 10);
+    if (++digits > MAX_VALUE_DIGITS) {
+      return false;
+    }
+  }
+  if (digits == 0) {
+    return false;
+  }
+  *value = parsed;
+  return true;
+}
+
+static bool matches_ignoring_case(const char *at, const char *lowercase, size_t length) {
+  for (size_t index = 0; index < length; index++) {
+    if (tolower((unsigned char)at[index]) != lowercase[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* The colon is what keeps module B's (R) out, and it is the only thing
+   that does: that group writes `(Exp #C4)` with neither a colon nor the
+   word, and its screen is a two-column table whose rows carry two tests
+   each, so no reader taking a row for a test can grade it and hold still.
+   The same rule declines module D's (I), which writes `(Exp#00)` around a
+   real pair. That is under-grading, and it stands until that group's own
+   convention is read off its output. */
+static bool names_the_expected_value(const char *opening, const char *closing) {
+  for (const char *at = opening; at + 3 < closing; at++) {
+    if (!matches_ignoring_case(at, "exp", 3)) {
+      continue;
+    }
+    if (at[3] == ':') {
       return true;
     }
+    if (closing - at >= 8 && matches_ignoring_case(at + 3, "ected", 5)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool last_hex_value_before(const char *from, const char *to, unsigned long *value) {
+  bool found = false;
+  for (const char *at = from; at < to; at++) {
+    unsigned long parsed;
+    if (hex_value_at(at, &parsed)) {
+      *value = parsed;
+      found = true;
+    }
+  }
+  return found;
+}
+
+static bool first_hex_value_between(const char *from, const char *to, unsigned long *value) {
+  for (const char *at = from; at < to; at++) {
+    if (hex_value_at(at, value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool read_verdict(const char *line, bool *failed) {
+  for (const char *opening = strchr(line, '('); opening != NULL;
+       opening = strchr(opening + 1, '(')) {
+    const char *closing = strchr(opening, ')');
+    if (closing == NULL) {
+      return false;
+    }
+    if (!names_the_expected_value(opening, closing)) {
+      continue;
+    }
+    /* A bracket naming silicon's value but carrying no number is not a
+       grading this reader knows, and reading past it would pair a later
+       bracket with a number standing inside this one. */
+    unsigned long produced;
+    unsigned long expected;
+    if (!last_hex_value_before(line, opening, &produced) ||
+        !first_hex_value_between(opening, closing, &expected)) {
+      return false;
+    }
+    *failed = produced != expected || strstr(line, "WRONG") != NULL;
+    return true;
   }
   return false;
 }
@@ -757,7 +861,8 @@ static int collect_verdicts(void) {
     memcpy(line, from, length);
     line[length] = '\0';
     trim_trailing_spaces(line);
-    if (!is_verdict(line) || strchr(line, '?') != NULL) {
+    bool failed = false;
+    if (!read_verdict(line, &failed) || strchr(line, '?') != NULL) {
       continue;
     }
     if (!appears_in_previous_screen(line)) {
@@ -765,7 +870,7 @@ static int collect_verdicts(void) {
     }
     bool known = false;
     for (int index = 0; index < verdict_count; index++) {
-      if (strcmp(verdicts[index], line) == 0) {
+      if (strcmp(verdicts[index].text, line) == 0) {
         known = true;
       }
     }
@@ -777,7 +882,9 @@ static int collect_verdicts(void) {
       added++;
       continue;
     }
-    memcpy(verdicts[verdict_count++], line, strlen(line) + 1);
+    memcpy(verdicts[verdict_count].text, line, strlen(line) + 1);
+    verdicts[verdict_count].failed = failed;
+    verdict_count++;
     added++;
   }
   return added;
@@ -898,17 +1005,16 @@ static void run_group(const char *module, const group *entry, FILE *report) {
 
   int wrong = 0;
   for (int index = 0; index < verdict_count; index++) {
-    if (strstr(verdicts[index], "WRONG") != NULL) {
+    if (verdicts[index].failed) {
       wrong++;
     }
   }
   if (verdict_count > 0) {
-    fprintf(report, "  %d self-graded line%s, WRONG in %d of them%s\n", verdict_count,
+    fprintf(report, "  %d self-graded line%s, %d of them wrong%s\n", verdict_count,
             verdict_count == 1 ? "" : "s", wrong,
             verdicts_dropped > 0 ? ", and more than this record holds" : "");
     for (int index = 0; index < verdict_count; index++) {
-      fprintf(report, "  %s %s\n", strstr(verdicts[index], "WRONG") != NULL ? "!" : " ",
-              verdicts[index]);
+      fprintf(report, "  %s %s\n", verdicts[index].failed ? "!" : " ", verdicts[index].text);
     }
   }
 
@@ -933,8 +1039,7 @@ static void run_group(const char *module, const group *entry, FILE *report) {
   }
   write_scoreboard_line(module, entry, standing);
   for (int index = 0; index < verdict_count; index++) {
-    add_to_scoreboard("    %s %s\n", strstr(verdicts[index], "WRONG") != NULL ? "!" : " ",
-                      verdicts[index]);
+    add_to_scoreboard("    %s %s\n", verdicts[index].failed ? "!" : " ", verdicts[index].text);
   }
   total_verdicts += verdict_count;
   total_verdicts_wrong += wrong;
@@ -1188,12 +1293,14 @@ int main(int argc, char **argv) {
   fprintf(file, "module by module and in the order each module's own menu prints.\n\n");
   fprintf(file, "%d groups run, %d left to another CRTC type.\n", total_groups_run,
           total_groups_skipped);
-  fprintf(file, "%d self-graded lines, WRONG in %d of them.\n\n", total_verdicts,
+  fprintf(file, "%d self-graded lines, %d of them wrong.\n\n", total_verdicts,
           total_verdicts_wrong);
   fprintf(file, "A group stands as \"recorded, ungraded\" when it drew a screen of its own but\n");
-  fprintf(file, "said what it had to say in a picture or a legend rather than in words this\n");
-  fprintf(file, "reader can score. It was run and kept, not skipped. A line marked ! is a test\n");
-  fprintf(file, "Longshot's own module says this machine fails.\n\n");
+  fprintf(file, "said what it had to say in a picture, a legend, or a table whose rows\n");
+  fprintf(file, "carry more than one test, rather than in words this reader can score. It\n");
+  fprintf(file, "was run and kept, not skipped. A line marked ! is a test this machine\n");
+  fprintf(file, "failed: either the module said so, or the machine's value differs from the\n");
+  fprintf(file, "one Longshot's silicon produced.\n\n");
   fprintf(file, "The copy of this file in the test sources is the one on record, and a sweep\n");
   fprintf(file, "fails on the first line where the two differ. The screens behind these\n");
   fprintf(file, "standings are in the module records written beside the sweep's own copy.\n\n");
