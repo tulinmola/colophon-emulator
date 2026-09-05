@@ -16,10 +16,7 @@
  * timing for this machine is measured from.
  *
  * A sample is four bits — brightness, then green, red and blue — which is
- * the attribute byte's own colour encoding widened by one bit. What those
- * bits are worth in volts on the cable is not here: no measurement of the
- * levels was in hand when this was written, so a host that must show real
- * colour still has to choose them.
+ * the attribute byte's own colour encoding widened by one bit.
  *
  * Implemented: the frame, the interrupt, the screen fetch and its address
  * scramble, the serialiser, FLASH, the border, composite sync, and the
@@ -160,5 +157,21 @@ void ula_tick(ula_t *ula);
  * `row` is a pixel row, 0 to 191; `column` a character column, 0 to 31. */
 uint16_t ula_display_address(int row, int column);
 uint16_t ula_attribute_address(int row, int column);
+
+/* What a sample is worth on the cable, as 0xRRGGBB.
+ *
+ * These levels are chosen and not measured, which is the one thing here a
+ * reader should not take on trust. The chip drives one line per gun and one
+ * more for brightness, so the shape of the answer is fixed — two levels a
+ * gun, and eight colours twice over — but nothing found while this was
+ * written gave the voltages those lines actually reach, neither the service
+ * manual, whose analogue section is not reproduced, nor the reverse
+ * engineering of the board. The pair below is the one the field has settled
+ * on. A measurement off real hardware would replace it, and the picture
+ * would shift a little when it did.
+ *
+ * Bright black is still black: codes 0 and 8 are the same colour, because
+ * brightness lifts a gun that is already off nowhere. */
+uint32_t ula_rgb(uint8_t sample);
 
 #endif

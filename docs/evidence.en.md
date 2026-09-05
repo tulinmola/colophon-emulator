@@ -32,7 +32,7 @@ It deliberately restates nothing an external suite already proves. The one place
 
 ## The machine tier
 
-This one boots the real thing. It runs each of the three machines from reset, reads the screen back as text and checks it says what Amstrad and Locomotive Software wrote, then types `PRINT 2+2` at the prompt and insists BASIC answers `4`.
+This one boots the real thing. It runs each of the four machines from reset, reads the screen back as text and checks it says what Amstrad, Locomotive Software and Sinclair wrote, then types `PRINT 2+2` at the prompt and insists BASIC answers `4`. The Spectrum's screen is read twice over, once out of the display file and once out of the framebuffer the beam painted, so the serialiser and the sync separator are in the path that is checked and not merely the memory beneath them.
 
 That one line is the strictest test here. The key matrix, the 8255's direction flipping, the sound chip, the fifty-times-a-second scan and the interrupt that drives it must all be right at once, and none of it is graded by us — the firmware is the judge, and it was written in 1984 by people who had the hardware.
 

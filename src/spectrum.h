@@ -87,6 +87,24 @@
 #define SPECTRUM_ENTER SPECTRUM_KEY(6, 0)
 #define SPECTRUM_SPACE SPECTRUM_KEY(7, 0)
 
+/* Which shift a character needs, if any. Forty keys carry upwards of two
+   hundred meanings between them, and which one arrives depends on the mode
+   the firmware is in as well as the shift held — so this names the key and
+   the shift, and what the machine makes of the pair is the firmware's
+   business. Most of all: at the K cursor a letter is a keyword, so `p`
+   typed at the start of a line is PRINT and not a letter at all. */
+typedef enum {
+  SPECTRUM_NO_SHIFT = 0,
+  SPECTRUM_WITH_CAPS_SHIFT,
+  SPECTRUM_WITH_SYMBOL_SHIFT,
+} spectrum_shift;
+
+/* The key carrying a character, and the shift held to reach it. Returns
+ * KEYBOARD_NO_KEY for a character no key carries — the pound sign has a key
+ * and no ASCII, and the tokens printed on the letter keys (<=, THEN, AT)
+ * are not characters at all. */
+keyboard_key spectrum_key_for_character(char character, spectrum_shift *shift);
+
 typedef struct {
   z80_t cpu;
   uint64_t pins; /* the bus between ticks */

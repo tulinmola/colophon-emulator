@@ -3,6 +3,7 @@
  */
 #include "spectrum.h"
 
+#include <stddef.h>
 #include <string.h>
 
 /* Nothing answers above the RAM that is fitted, and the bus floats there. */
@@ -137,6 +138,64 @@ void spectrum_finish_instruction(spectrum_t *spectrum) {
   for (int guard = 0; guard < 256 && !z80_instruction_complete(&spectrum->cpu); guard++) {
     spectrum_tick(spectrum);
   }
+}
+
+/* What each key carries: the letter or digit printed on it, the same in
+   capitals under CAPS SHIFT, and the red legend under SYMBOL SHIFT. Keys
+   whose legend is a token rather than a character — <=, THEN, AT — and the
+   pound sign, which no ASCII holds, are left blank in that last column.
+   Positions and legends from "Sinclair ZX Specifications" (Martin Korth),
+   https://www.problemkaputt.de/zxdocs.htm, Spectrum Keyboard Assignment. */
+typedef struct {
+  keyboard_key key;
+  char plain;
+  char capital;
+  char symbol;
+} legend;
+
+static const legend legends[] = {
+    {SPECTRUM_KEY(0, 1), 'z', 'Z', ':'},   {SPECTRUM_KEY(0, 2), 'x', 'X', '\0'},
+    {SPECTRUM_KEY(0, 3), 'c', 'C', '?'},   {SPECTRUM_KEY(0, 4), 'v', 'V', '/'},
+    {SPECTRUM_KEY(1, 0), 'a', 'A', '\0'},  {SPECTRUM_KEY(1, 1), 's', 'S', '\0'},
+    {SPECTRUM_KEY(1, 2), 'd', 'D', '\0'},  {SPECTRUM_KEY(1, 3), 'f', 'F', '\0'},
+    {SPECTRUM_KEY(1, 4), 'g', 'G', '\0'},  {SPECTRUM_KEY(2, 0), 'q', 'Q', '\0'},
+    {SPECTRUM_KEY(2, 1), 'w', 'W', '\0'},  {SPECTRUM_KEY(2, 2), 'e', 'E', '\0'},
+    {SPECTRUM_KEY(2, 3), 'r', 'R', '<'},   {SPECTRUM_KEY(2, 4), 't', 'T', '>'},
+    {SPECTRUM_KEY(3, 0), '1', '\0', '!'},  {SPECTRUM_KEY(3, 1), '2', '\0', '@'},
+    {SPECTRUM_KEY(3, 2), '3', '\0', '#'},  {SPECTRUM_KEY(3, 3), '4', '\0', '$'},
+    {SPECTRUM_KEY(3, 4), '5', '\0', '%'},  {SPECTRUM_KEY(4, 0), '0', '\0', '_'},
+    {SPECTRUM_KEY(4, 1), '9', '\0', ')'},  {SPECTRUM_KEY(4, 2), '8', '\0', '('},
+    {SPECTRUM_KEY(4, 3), '7', '\0', '\''}, {SPECTRUM_KEY(4, 4), '6', '\0', '&'},
+    {SPECTRUM_KEY(5, 0), 'p', 'P', '"'},   {SPECTRUM_KEY(5, 1), 'o', 'O', ';'},
+    {SPECTRUM_KEY(5, 2), 'i', 'I', '\0'},  {SPECTRUM_KEY(5, 3), 'u', 'U', '\0'},
+    {SPECTRUM_KEY(5, 4), 'y', 'Y', '\0'},  {SPECTRUM_KEY(6, 1), 'l', 'L', '='},
+    {SPECTRUM_KEY(6, 2), 'k', 'K', '+'},   {SPECTRUM_KEY(6, 3), 'j', 'J', '-'},
+    {SPECTRUM_KEY(6, 4), 'h', 'H', '^'},   {SPECTRUM_KEY(7, 0), ' ', '\0', '\0'},
+    {SPECTRUM_KEY(7, 2), 'm', 'M', '.'},   {SPECTRUM_KEY(7, 3), 'n', 'N', ','},
+    {SPECTRUM_KEY(7, 4), 'b', 'B', '*'},
+};
+
+keyboard_key spectrum_key_for_character(char character, spectrum_shift *shift) {
+  size_t count = sizeof legends / sizeof legends[0];
+  for (size_t index = 0; index < count; index++) {
+    if (legends[index].plain == character) {
+      *shift = SPECTRUM_NO_SHIFT;
+      return legends[index].key;
+    }
+  }
+  for (size_t index = 0; index < count; index++) {
+    if (legends[index].capital == character && character != '\0') {
+      *shift = SPECTRUM_WITH_CAPS_SHIFT;
+      return legends[index].key;
+    }
+  }
+  for (size_t index = 0; index < count; index++) {
+    if (legends[index].symbol == character && character != '\0') {
+      *shift = SPECTRUM_WITH_SYMBOL_SHIFT;
+      return legends[index].key;
+    }
+  }
+  return KEYBOARD_NO_KEY;
 }
 
 uint8_t spectrum_peek(const spectrum_t *spectrum, uint16_t address) {

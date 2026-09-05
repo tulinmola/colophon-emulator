@@ -11,32 +11,36 @@ A C compiler and `make` are the whole toolchain. `make` builds, `make roms` fetc
 ## The two commands
 
 ```sh
-build/emulator boot [options]
-build/emulator run SNAPSHOT.sna [options]
+build/emulator boot --machine NAME [options]
+build/emulator run SNAPSHOT.sna --machine NAME [options]
 ```
 
 `boot` starts a machine from reset. `run` picks one up from a snapshot, fitting the ROMs first so that the snapshot lands in a machine of the right shape. Both then run their frames, type, and write.
 
+Which machine must always be said. There is no default and there is not going to be one: the emulator holds several machines and none of them is the ordinary case, so a command that does not name one is a question rather than an instruction. Asked without it, the tool lists what it has.
+
 ```sh
-build/emulator boot --screenshot ready.png
-build/emulator boot --machine cpc464 --screenshot ready.png
-build/emulator boot --type 'PRINT 2+2\n' --screenshot sum.png
-build/emulator boot --type 'MODE 0\n' --save state.sna
-build/emulator run state.sna --type 'BORDER 6\n' --screenshot resumed.png
-build/emulator boot --full-raster --screenshot raster.png
-build/emulator boot --type 'PRINT 2+2\n' --writes heat.png
-build/emulator boot --disc shaker27.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
-build/emulator boot --disc shaker27.dsk --type 'RUN"SHAKE27A\n' --wait 400 --screenshot shaker.png
+build/emulator boot --machine cpc6128 --screenshot ready.png
+build/emulator boot --machine cpc464 --type 'PRINT 2+2\n' --screenshot sum.png
+build/emulator boot --machine cpc6128 --type 'MODE 0\n' --save state.sna
+build/emulator run state.sna --machine cpc6128 --type 'BORDER 6\n' --screenshot resumed.png
+build/emulator boot --machine cpc6128 --full-raster --screenshot raster.png
+build/emulator boot --machine cpc6128 --type 'PRINT 2+2\n' --writes heat.png
+build/emulator boot --machine cpc6128 --disc shaker27.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
+build/emulator boot --machine spectrum48 --screenshot sinclair.png
+build/emulator boot --machine spectrum48 --type 'p2+2\n' --wait 10 --screenshot sum.png
 ```
+
+That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry upwards of two hundred meanings between them, and at the start of a line a letter is a keyword — so `p` is PRINT. `--type` holds keys down; what they mean is the firmware's business.
 
 ## The options
 
 | Option | Effect |
 | --- | --- |
-| `--machine NAME` | Which machine to build: `cpc6128`, `cpc664` or `cpc464`. The default is `cpc6128`. |
+| `--machine NAME` | Which machine to build: `cpc6128`, `cpc664`, `cpc464` or `spectrum48`. Required. |
 | `--roms DIRECTORY` | Where the ROM images are. The default is `roms`. |
 | `--frames N` | Frames to run before typing. The default is 78. |
-| `--type TEXT` | Type this once the machine has booted. |
+| `--type TEXT` | Type this once the machine has booted. Keys are held down, not characters injected, so what arrives is whatever the firmware makes of the keypress — on a Spectrum, where forty keys carry two hundred meanings, `p` at the start of a line is the PRINT keyword and not a letter. |
 | `--wait N` | Frames to run after typing, for a machine that has been given something to do. The default is 0. |
 | `--sixty-hz` | Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |

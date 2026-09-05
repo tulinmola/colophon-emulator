@@ -125,6 +125,14 @@ void ula_write(ula_t *ula, uint8_t data) {
   ula->speaker = (data & 0x10) != 0;
 }
 
+uint32_t ula_rgb(uint8_t sample) {
+  uint8_t level = (sample & 0x08) ? 0xFF : 0xD7;
+  uint32_t red = (sample & 0x02) ? level : 0;
+  uint32_t green = (sample & 0x04) ? level : 0;
+  uint32_t blue = (sample & 0x01) ? level : 0;
+  return (red << 16) | (green << 8) | blue;
+}
+
 void ula_tick(ula_t *ula) {
   if (++ula->frame_tick == ULA_TICKS_PER_FRAME) {
     ula->frame_tick = 0;

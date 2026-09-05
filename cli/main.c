@@ -16,32 +16,116 @@
 #include "dsk.h"
 #include "png.h"
 #include "snapshot.h"
+#include "spectrum.h"
 
 /* One machine per name the --machine option accepts. A name earns its place
    here the day the machine behind it boots to its prompt, not before. */
+#define CPC_DEFAULT_FRAMES 78
+
+/* A Spectrum shows its copyright message by frame 50 and its cursor by 65,
+   but does not take a keystroke until 85 — measured by typing PRINT 2+2 one
+   frame later each time and reading the answer back off the screen. Before
+   that the first key is dropped and the rest arrive as nonsense. This is
+   half again as long, which leaves room and still costs under three seconds
+   of the machine's own time. */
+#define SPECTRUM_DEFAULT_FRAMES 128
+
+/* The window a machine's raster is cropped to: the picture with a border
+   around it, and the frame flyback left out. On a CPC the display sits at
+   samples 272-911 of 1024 and lines 70-269 of 312, so this is 64 samples of
+   border either side and a little over 30 lines above and below. */
+#define CPC_CROP_LEFT 208
+#define CPC_CROP_TOP 34
+#define CPC_CROP_WIDTH 768
+#define CPC_CROP_HEIGHT 272
+
+/* The Spectrum's picture sits at samples 144-399 of 448 and, once the frame
+   sync has taken its eight lines, at raster lines 56-247 of 312. This is the
+   whole 24 T-states of border the ULA draws either side, and enough lines
+   above and below to leave the window four across for three down. */
+#define SPECTRUM_CROP_LEFT 96
+#define SPECTRUM_CROP_TOP 20
+#define SPECTRUM_CROP_WIDTH 352
+#define SPECTRUM_CROP_HEIGHT 264
+
+typedef enum {
+  MACHINE_CPC,
+  MACHINE_SPECTRUM,
+} machine_kind;
+
 typedef struct {
+  machine_kind kind;
   const char *name;
   const char *rom_file;
   uint32_t ram_size;
   bool disc_interface; /* built in; a 464 gets one plugged in with a disc */
   const char *description;
+
+  /* The raster this machine's monitor paints, the window a picture is cut
+     from it, and what one sample of it is worth on the cable. A host cannot
+     ask the core any of this: the core hands over colour codes and leaves
+     the reading of them to whoever plugged the monitor in. */
+  uint32_t raster_width;
+  uint32_t raster_height;
+  uint32_t crop_left;
+  uint32_t crop_top;
+  uint32_t crop_width;
+  uint32_t crop_height;
+  uint32_t (*sample_rgb)(uint8_t sample);
+  /* Frames to run before typing. Measured per machine: a keystroke sent
+     before the firmware is reading the keyboard is not queued, it is lost,
+     and what follows it lands in the wrong order. */
+  long default_frames;
+  /* A CPC's raster is sixteen samples to the microsecond and 312 lines, so
+     its picture is far wider than it is tall until every line is drawn
+     twice. A Spectrum's is already near enough square. */
+  bool double_lines;
 } machine_t;
 
+/* The picture each machine paints, named by field so that adding one to the
+   struct cannot silently shift another out of place. */
+#define CPC_RASTER                                                                                 \
+  .raster_width = CPC_FRAMEBUFFER_WIDTH, .raster_height = CPC_FRAMEBUFFER_HEIGHT,                  \
+  .crop_left = CPC_CROP_LEFT, .crop_top = CPC_CROP_TOP, .crop_width = CPC_CROP_WIDTH,              \
+  .crop_height = CPC_CROP_HEIGHT, .sample_rgb = gate_array_rgb,                                    \
+  .default_frames = CPC_DEFAULT_FRAMES, .double_lines = true
+#define SPECTRUM_RASTER                                                                            \
+  .raster_width = SPECTRUM_FRAMEBUFFER_WIDTH, .raster_height = SPECTRUM_FRAMEBUFFER_HEIGHT,        \
+  .crop_left = SPECTRUM_CROP_LEFT, .crop_top = SPECTRUM_CROP_TOP,                                  \
+  .crop_width = SPECTRUM_CROP_WIDTH, .crop_height = SPECTRUM_CROP_HEIGHT, .sample_rgb = ula_rgb,   \
+  .default_frames = SPECTRUM_DEFAULT_FRAMES, .double_lines = false
+
 static const machine_t machines[] = {
-    {"cpc6128", "cpc6128.rom", 0x20000, true, "Amstrad CPC 6128, 128K, BASIC 1.1"},
-    {"cpc664", "cpc664.rom", 0x10000, true, "Amstrad CPC 664, 64K, BASIC 1.1"},
-    {"cpc464", "cpc464.rom", 0x10000, false, "Amstrad CPC 464, 64K, BASIC 1.0"},
+    {.kind = MACHINE_CPC,
+     .name = "cpc6128",
+     .rom_file = "cpc6128.rom",
+     .ram_size = 0x20000,
+     .disc_interface = true,
+     .description = "Amstrad CPC 6128, 128K, BASIC 1.1",
+     CPC_RASTER},
+    {.kind = MACHINE_CPC,
+     .name = "cpc664",
+     .rom_file = "cpc664.rom",
+     .ram_size = 0x10000,
+     .disc_interface = true,
+     .description = "Amstrad CPC 664, 64K, BASIC 1.1",
+     CPC_RASTER},
+    {.kind = MACHINE_CPC,
+     .name = "cpc464",
+     .rom_file = "cpc464.rom",
+     .ram_size = 0x10000,
+     .disc_interface = false,
+     .description = "Amstrad CPC 464, 64K, BASIC 1.0",
+     CPC_RASTER},
+    {.kind = MACHINE_SPECTRUM,
+     .name = "spectrum48",
+     .rom_file = "spectrum48.rom",
+     .ram_size = SPECTRUM_RAM_48K,
+     .disc_interface = false,
+     .description = "Sinclair ZX Spectrum 48K",
+     SPECTRUM_RASTER},
 };
 static const size_t machine_count = sizeof machines / sizeof machines[0];
-
-/* The window the monitor's raster is cropped to: the picture with a border
-   around it, and the frame flyback left out. The display sits at samples
-   272-911 of 1024 and lines 70-269 of 312, so this is 64 samples of border
-   either side and a little over 30 lines above and below. */
-#define CROP_LEFT 208
-#define CROP_TOP 34
-#define CROP_WIDTH 768
-#define CROP_HEIGHT 272
 
 /* The 6128's boot screen stops changing at frame 42, measured by counting
    the text's pixels frame by frame; the other two settle sooner. Twice that
@@ -49,12 +133,11 @@ static const size_t machine_count = sizeof machines / sizeof machines[0];
    Wait states moved this only from 39: the firmware's boot waits on the
    300Hz ticker far more than it computes, so a CPU a quarter slower barely
    shows. */
-#define DEFAULT_FRAMES 78
 
-/* The firmware scans the keyboard once a frame, off the 50Hz tick, so a key
-   must be held for at least one scan to be seen and released for at least
-   one more to be seen let go. Three frames each way is comfortable and
-   still types nine characters a second of emulated time. */
+/* Both firmwares scan the keyboard off their 50Hz interrupt, so a key must
+   be held for at least one scan to be seen and released for at least one
+   more to be seen let go. Three frames each way is comfortable on either
+   machine and still types nine characters a second of emulated time. */
 #define FRAMES_KEY_HELD 3
 #define FRAMES_KEY_RELEASED 3
 
@@ -81,13 +164,13 @@ static void print_usage(FILE *out) {
   fprintf(out, "  boot starts a machine from reset; run picks one up from a\n");
   fprintf(out, "  snapshot. Both then run for a number of frames, type what\n");
   fprintf(out, "  they are told to, and write out what they are asked for.\n\n");
-  fprintf(out, "  --machine NAME      which machine to build (default cpc6128)\n");
+  fprintf(out, "  --machine NAME      which machine to build; there is no default\n");
   for (size_t index = 0; index < machine_count; index++) {
     fprintf(out, "                        %-10s %s\n", machines[index].name,
             machines[index].description);
   }
   fprintf(out, "  --roms DIRECTORY    where the ROM images are (default roms)\n");
-  fprintf(out, "  --frames N          frames to run before typing (default %d)\n", DEFAULT_FRAMES);
+  fprintf(out, "  --frames N          frames to run before typing (each machine its own)\n");
   fprintf(out, "  --type TEXT         type this once the machine has booted\n");
   fprintf(out, "                        \\n Return  \\t Tab  \\e Esc  \\b Del  \\\\ backslash\n");
   fprintf(out, "  --wait N            frames to run after typing (default 0)\n");
@@ -98,6 +181,7 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --disc PATH         put this DSK image in drive A\n");
   fprintf(out, "  --disc-b PATH       and this one in drive B\n");
   fprintf(out, "  --save-disc PATH    write drive A's disc here when done\n");
+  fprintf(out, "                      the six above, and run, are a CPC's alone\n");
   fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
   fprintf(out, "  --no-double         one image line per raster line, squashed\n");
 }
@@ -202,11 +286,12 @@ static bool load_rom(const char *directory, const char *file, uint8_t *rom, size
 /* Crop the raster and turn hardware colour codes into pixels. */
 static uint8_t *render(const uint8_t *framebuffer, const options_t *options, uint32_t *width_out,
                        uint32_t *height_out) {
-  uint32_t left = options->full_raster ? 0 : CROP_LEFT;
-  uint32_t top = options->full_raster ? 0 : CROP_TOP;
-  uint32_t width = options->full_raster ? CPC_FRAMEBUFFER_WIDTH : CROP_WIDTH;
-  uint32_t lines = options->full_raster ? CPC_FRAMEBUFFER_HEIGHT : CROP_HEIGHT;
-  uint32_t repeat = options->double_lines ? 2 : 1;
+  const machine_t *machine = options->machine;
+  uint32_t left = options->full_raster ? 0 : machine->crop_left;
+  uint32_t top = options->full_raster ? 0 : machine->crop_top;
+  uint32_t width = options->full_raster ? machine->raster_width : machine->crop_width;
+  uint32_t lines = options->full_raster ? machine->raster_height : machine->crop_height;
+  uint32_t repeat = options->double_lines && machine->double_lines ? 2 : 1;
   uint32_t height = lines * repeat;
 
   uint8_t *pixels = malloc((size_t)width * height * 3);
@@ -216,10 +301,10 @@ static uint8_t *render(const uint8_t *framebuffer, const options_t *options, uin
   }
   uint8_t *out = pixels;
   for (uint32_t line = 0; line < lines; line++) {
-    const uint8_t *row = framebuffer + (size_t)(top + line) * CPC_FRAMEBUFFER_WIDTH + left;
+    const uint8_t *row = framebuffer + (size_t)(top + line) * machine->raster_width + left;
     for (uint32_t again = 0; again < repeat; again++) {
       for (uint32_t column = 0; column < width; column++) {
-        uint32_t rgb = gate_array_rgb(row[column]);
+        uint32_t rgb = machine->sample_rgb(row[column]);
         *out++ = (uint8_t)(rgb >> 16);
         *out++ = (uint8_t)(rgb >> 8);
         *out++ = (uint8_t)rgb;
@@ -234,7 +319,7 @@ static uint8_t *render(const uint8_t *framebuffer, const options_t *options, uin
 /* Writes per byte of RAM, or NULL when nobody asked for the map. The
    machine is told nothing about this: cpc_tick already returns the bus, and
    every write the CPU makes crosses it. */
-static uint32_t *writes;
+static uint32_t *cpc_writes;
 
 /* Which byte of RAM the beam painted at each sample of the raster, held as
    the address plus one so that zero means the beam showed no byte there —
@@ -245,7 +330,7 @@ static uint32_t *writes;
    depends on the whole CRTC configuration, and a program that reprograms it
    mid-frame has no single answer; watching the addresses the chip actually
    emits costs the same and stays true through a split screen. */
-static uint32_t *displayed;
+static uint32_t *cpc_displayed;
 
 /* Base-2 logarithm in 8.8 fixed point: the position of the highest set bit,
    refined by the eight beneath it. Integer-only, so nothing links libm. */
@@ -293,18 +378,20 @@ static uint32_t heat_colour(uint32_t count, uint32_t peak) {
    taken over the bytes that reached the screen alone — the firmware's stack
    is written a hundred times harder than any pixel, and letting it set the
    top of the range would flatten everything the picture is for. */
-static uint8_t *render_writes(const options_t *options, uint32_t *width_out, uint32_t *height_out) {
-  uint32_t left = options->full_raster ? 0 : CROP_LEFT;
-  uint32_t top = options->full_raster ? 0 : CROP_TOP;
-  uint32_t width = options->full_raster ? CPC_FRAMEBUFFER_WIDTH : CROP_WIDTH;
-  uint32_t lines = options->full_raster ? CPC_FRAMEBUFFER_HEIGHT : CROP_HEIGHT;
-  uint32_t repeat = options->double_lines ? 2 : 1;
+static uint8_t *cpc_render_writes(const options_t *options, uint32_t *width_out,
+                                  uint32_t *height_out) {
+  const machine_t *machine = options->machine;
+  uint32_t left = options->full_raster ? 0 : machine->crop_left;
+  uint32_t top = options->full_raster ? 0 : machine->crop_top;
+  uint32_t width = options->full_raster ? machine->raster_width : machine->crop_width;
+  uint32_t lines = options->full_raster ? machine->raster_height : machine->crop_height;
+  uint32_t repeat = options->double_lines && machine->double_lines ? 2 : 1;
   uint32_t height = lines * repeat;
 
   uint32_t peak = 0;
-  for (uint32_t at = 0; at < CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT; at++) {
-    if (displayed[at] != 0 && writes[displayed[at] - 1] > peak) {
-      peak = writes[displayed[at] - 1];
+  for (uint32_t at = 0; at < machine->raster_width * machine->raster_height; at++) {
+    if (cpc_displayed[at] != 0 && cpc_writes[cpc_displayed[at] - 1] > peak) {
+      peak = cpc_writes[cpc_displayed[at] - 1];
     }
   }
 
@@ -315,10 +402,10 @@ static uint8_t *render_writes(const options_t *options, uint32_t *width_out, uin
   }
   uint8_t *out = pixels;
   for (uint32_t line = 0; line < lines; line++) {
-    const uint32_t *row = displayed + (size_t)(top + line) * CPC_FRAMEBUFFER_WIDTH + left;
+    const uint32_t *row = cpc_displayed + (size_t)(top + line) * machine->raster_width + left;
     for (uint32_t again = 0; again < repeat; again++) {
       for (uint32_t column = 0; column < width; column++) {
-        uint32_t rgb = row[column] == 0 ? 0 : heat_colour(writes[row[column] - 1], peak);
+        uint32_t rgb = row[column] == 0 ? 0 : heat_colour(cpc_writes[row[column] - 1], peak);
         *out++ = (uint8_t)(rgb >> 16);
         *out++ = (uint8_t)(rgb >> 8);
         *out++ = (uint8_t)rgb;
@@ -380,7 +467,7 @@ static bool write_file(const char *path, const uint8_t *contents, size_t size) {
   return true;
 }
 
-static bool save_snapshot(const cpc_t *cpc, const char *path) {
+static bool cpc_save_snapshot(const cpc_t *cpc, const char *path) {
   size_t size = snapshot_size(cpc);
   uint8_t *contents = malloc(size);
   if (contents == NULL) {
@@ -398,7 +485,7 @@ static bool save_snapshot(const cpc_t *cpc, const char *path) {
   return ok;
 }
 
-static void record_displayed(const cpc_t *cpc) {
+static void cpc_record_displayed(const cpc_t *cpc) {
   /* The Gate Array shows a character one microsecond after the CRTC hands
      over its address, so the samples just painted came from the address
      fetched last time — and blanking is judged now, as the chip judges it. */
@@ -415,17 +502,17 @@ static void record_displayed(const cpc_t *cpc) {
     for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
       /* Two bytes make sixteen samples, eight each, whatever the mode. */
       uint16_t address = pending_address | (sample < 8 ? 0 : 1);
-      displayed[start + sample] = (uint32_t)address + 1;
+      cpc_displayed[start + sample] = (uint32_t)address + 1;
     }
   }
   pending_address = cpc_video_address(cpc);
   pending_display = (cpc->crtc_pins & CRTC_DISPTMG) != 0;
 }
 
-static void run_frames(cpc_t *cpc, long frames) {
+static void cpc_run_frames(cpc_t *cpc, long frames) {
   for (long tick = 0; tick < frames * CPC_TICKS_PER_STANDARD_FRAME; tick++) {
     uint64_t pins = cpc_tick(cpc);
-    if (writes == NULL) {
+    if (cpc_writes == NULL) {
       continue;
     }
     if ((pins & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR)) {
@@ -433,28 +520,28 @@ static void run_frames(cpc_t *cpc, long frames) {
          was sent to: under banking, two writes to &4000 can reach different
          halves of the machine. */
       uint16_t address = z80_address(pins);
-      writes[cpc->write_page[address >> 14] + (address & 0x3FFF) - cpc->ram]++;
+      cpc_writes[cpc->write_page[address >> 14] + (address & 0x3FFF) - cpc->ram]++;
     }
     if (gate_array_character_clock(&cpc->gate_array)) {
-      record_displayed(cpc);
+      cpc_record_displayed(cpc);
     }
   }
 }
 
 /* Hold a key, with shift if the character needs it, then let go. */
-static void press_and_release(cpc_t *cpc, keyboard_key key, bool shifted) {
+static void cpc_press_and_release(cpc_t *cpc, keyboard_key key, bool shifted) {
   if (shifted) {
     keyboard_press(&cpc->keyboard, KEYBOARD_SHIFT);
   }
   keyboard_press(&cpc->keyboard, key);
-  run_frames(cpc, FRAMES_KEY_HELD);
+  cpc_run_frames(cpc, FRAMES_KEY_HELD);
   keyboard_release_all(&cpc->keyboard);
-  run_frames(cpc, FRAMES_KEY_RELEASED);
+  cpc_run_frames(cpc, FRAMES_KEY_RELEASED);
 }
 
 /* Type text, taking the escapes the usage message lists. Returns false
  * having reported a character this keyboard cannot produce. */
-static bool type_text(cpc_t *cpc, const char *text) {
+static bool cpc_type_text(cpc_t *cpc, const char *text) {
   for (const char *at = text; *at != '\0'; at++) {
     char character = *at;
     keyboard_key key = KEYBOARD_NO_KEY;
@@ -488,14 +575,294 @@ static bool type_text(cpc_t *cpc, const char *text) {
         return false;
       }
     }
-    press_and_release(cpc, key, shifted);
+    cpc_press_and_release(cpc, key, shifted);
   }
   return true;
 }
 
+static void spectrum_run_frames(spectrum_t *spectrum, long frames) {
+  for (long frame = 0; frame < frames; frame++) {
+    for (int tick = 0; tick < SPECTRUM_TICKS_PER_FRAME; tick++) {
+      spectrum_tick(spectrum);
+    }
+  }
+}
+
+/* The screenshot both machines write, from whichever raster they painted. */
+static int write_screenshot(const options_t *options, const uint8_t *framebuffer) {
+  long frames = options->frames + options->frames_after;
+  if (options->screenshot_path == NULL) {
+    printf("%s: %ld frames\n", options->machine->name, frames);
+    return 0;
+  }
+  uint32_t width = 0;
+  uint32_t height = 0;
+  uint8_t *pixels = render(framebuffer, options, &width, &height);
+  int status = 0;
+  if (pixels == NULL || !png_write(options->screenshot_path, pixels, width, height)) {
+    status = 1;
+  } else {
+    printf("%s: %ld frames, %ux%u to %s\n", options->machine->name, frames, width, height,
+           options->screenshot_path);
+  }
+  free(pixels);
+  return status;
+}
+
+/* Hold a key, with whichever shift the character needs, then let go. */
+static void spectrum_press_and_release(spectrum_t *spectrum, keyboard_key key,
+                                       spectrum_shift shift) {
+  if (shift == SPECTRUM_WITH_CAPS_SHIFT) {
+    keyboard_press(&spectrum->keyboard, SPECTRUM_CAPS_SHIFT);
+  } else if (shift == SPECTRUM_WITH_SYMBOL_SHIFT) {
+    keyboard_press(&spectrum->keyboard, SPECTRUM_SYMBOL_SHIFT);
+  }
+  keyboard_press(&spectrum->keyboard, key);
+  spectrum_run_frames(spectrum, FRAMES_KEY_HELD);
+  keyboard_release_all(&spectrum->keyboard);
+  spectrum_run_frames(spectrum, FRAMES_KEY_RELEASED);
+}
+
+static bool spectrum_type_text(spectrum_t *spectrum, const char *text) {
+  for (const char *at = text; *at != '\0'; at++) {
+    char character = *at;
+    keyboard_key key = KEYBOARD_NO_KEY;
+    spectrum_shift shift = SPECTRUM_NO_SHIFT;
+    if (character == '\\' && at[1] != '\0') {
+      character = *++at;
+      if (character == 'n') {
+        key = SPECTRUM_ENTER;
+      } else if (character == '\\') {
+        key = spectrum_key_for_character('\\', &shift);
+      } else {
+        fprintf(stderr, "no such escape: \\%c\n", character);
+        return false;
+      }
+    } else {
+      key = spectrum_key_for_character(character, &shift);
+    }
+    if (key == KEYBOARD_NO_KEY) {
+      fprintf(stderr, "this keyboard has no '%c'\n", character);
+      return false;
+    }
+    spectrum_press_and_release(spectrum, key, shift);
+  }
+  return true;
+}
+
+/* A Spectrum has no disc, no snapshot and no links to solder, so the options
+   that reach those are refused rather than quietly ignored. */
+static bool spectrum_refuses(const options_t *options) {
+  const struct {
+    bool given;
+    const char *what;
+  } unsupported[] = {
+      {options->snapshot_path != NULL, "run"},
+      {options->save_path != NULL, "--save"},
+      {options->writes_path != NULL, "--writes"},
+      {options->disc_paths[0] != NULL || options->disc_paths[1] != NULL, "--disc"},
+      {options->save_disc_path != NULL, "--save-disc"},
+      {!options->fifty_hz, "--sixty-hz"},
+  };
+  for (size_t index = 0; index < sizeof unsupported / sizeof unsupported[0]; index++) {
+    if (unsupported[index].given) {
+      fprintf(stderr, "%s does not do %s yet\n", options->machine->name, unsupported[index].what);
+      return true;
+    }
+  }
+  return false;
+}
+
+static int run_spectrum(const options_t *options) {
+  if (spectrum_refuses(options)) {
+    return 1;
+  }
+  static uint8_t rom[SPECTRUM_ROM_SIZE];
+  if (!load_rom(options->rom_directory, options->machine->rom_file, rom, sizeof rom)) {
+    return 1;
+  }
+
+  size_t raster = (size_t)options->machine->raster_width * options->machine->raster_height;
+  uint8_t *ram = calloc(options->machine->ram_size, 1);
+  uint8_t *framebuffer = calloc(raster, 1);
+  spectrum_t *spectrum = calloc(1, sizeof *spectrum);
+  if (ram == NULL || framebuffer == NULL || spectrum == NULL) {
+    fprintf(stderr, "cannot hold the machine\n");
+    free(spectrum);
+    free(framebuffer);
+    free(ram);
+    return 1;
+  }
+  spectrum_init(spectrum, ram, options->machine->ram_size, rom);
+  spectrum_connect_monitor(spectrum, framebuffer);
+
+  int status = 0;
+  spectrum_run_frames(spectrum, options->frames);
+  if (options->text != NULL && !spectrum_type_text(spectrum, options->text)) {
+    status = 1;
+  }
+  if (status == 0) {
+    spectrum_run_frames(spectrum, options->frames_after);
+  }
+  if (status == 0) {
+    status = write_screenshot(options, framebuffer);
+  }
+
+  free(spectrum);
+  free(framebuffer);
+  free(ram);
+  return status;
+}
+
+/* One machine per kind, each with its own run: they share the options, the
+   rendering and the file handling, and nothing else. */
+static int run_cpc(const options_t *options) {
+  if (options->save_disc_path != NULL && options->disc_paths[0] == NULL) {
+    fprintf(stderr, "--save-disc needs a disc in drive A to write\n");
+    return 1;
+  }
+
+  static uint8_t rom[0x8000];
+  if (!load_rom(options->rom_directory, options->machine->rom_file, rom, sizeof rom)) {
+    return 1;
+  }
+  /* The disc interface brings its own ROM, as upper ROM 7. */
+  bool disc_interface = options->machine->disc_interface || options->disc_paths[0] != NULL ||
+                        options->disc_paths[1] != NULL;
+  static uint8_t amsdos[0x4000];
+  if (disc_interface && !load_rom(options->rom_directory, "amsdos.rom", amsdos, sizeof amsdos)) {
+    return 1;
+  }
+
+  uint8_t *ram = calloc(options->machine->ram_size, 1);
+  size_t raster = (size_t)options->machine->raster_width * options->machine->raster_height;
+  uint8_t *framebuffer = calloc(raster, 1);
+  cpc_t *cpc = calloc(1, sizeof *cpc);
+  if (options->writes_path != NULL) {
+    cpc_writes = calloc(options->machine->ram_size, sizeof *cpc_writes);
+    cpc_displayed = calloc(raster, sizeof *cpc_displayed);
+  }
+  if (ram == NULL || framebuffer == NULL || cpc == NULL ||
+      (options->writes_path != NULL && (cpc_writes == NULL || cpc_displayed == NULL))) {
+    fprintf(stderr, "cannot hold the machine\n");
+    free(cpc_displayed);
+    free(cpc_writes);
+    free(cpc);
+    free(framebuffer);
+    free(ram);
+    return 1;
+  }
+
+  /* The operating system fills the lower 16K, BASIC the upper as ROM 0. */
+  cpc_init(cpc, ram, options->machine->ram_size, rom);
+  cpc_set_upper_rom(cpc, 0, rom + 0x4000);
+  if (disc_interface) {
+    cpc_fit_disc_interface(cpc, true);
+    cpc_set_upper_rom(cpc, 7, amsdos);
+  }
+  cpc_connect_monitor(cpc, framebuffer);
+  cpc_set_links(cpc, options->fifty_hz, CPC_MANUFACTURER_AMSTRAD);
+
+  int status = 0;
+  /* The discs. An image is read into a buffer of its own that the medium
+     borrows for the run, and written back only where asked. */
+  uint8_t *images[2] = {NULL, NULL};
+  static floppy_t discs[2]; /* the machine borrows them; 190K apiece */
+  for (uint8_t drive = 0; drive < 2 && status == 0; drive++) {
+    if (options->disc_paths[drive] == NULL) {
+      continue;
+    }
+    size_t size = 0;
+    images[drive] = read_file_with_room(options->disc_paths[drive], &size, FORMAT_ROOM);
+    const char *problem = NULL;
+    if (images[drive] == NULL) {
+      status = 1;
+    } else if (!dsk_read(&discs[drive], images[drive], size, &problem)) {
+      fprintf(stderr, "%s: %s\n", options->disc_paths[drive], problem);
+      status = 1;
+    } else {
+      floppy_give_room(&discs[drive], size + FORMAT_ROOM);
+      cpc_insert_disc(cpc, drive, &discs[drive]);
+    }
+  }
+  if (options->snapshot_path != NULL) {
+    size_t size = 0;
+    uint8_t *contents = read_file(options->snapshot_path, &size);
+    if (contents == NULL) {
+      status = 1;
+    } else {
+      const char *problem = NULL;
+      if (!snapshot_load(cpc, contents, size, &problem)) {
+        fprintf(stderr, "%s %s\n", options->snapshot_path, problem);
+        status = 1;
+      }
+      free(contents);
+    }
+  }
+  if (status == 0) {
+    cpc_run_frames(cpc, options->frames);
+  }
+  if (status == 0 && options->text != NULL && !cpc_type_text(cpc, options->text)) {
+    status = 1;
+  }
+  if (status == 0) {
+    cpc_run_frames(cpc, options->frames_after);
+  }
+  if (status == 0 && options->save_path != NULL) {
+    cpc_finish_instruction(cpc);
+    if (!cpc_save_snapshot(cpc, options->save_path)) {
+      status = 1;
+    }
+  }
+  if (status == 0 && options->save_disc_path != NULL) {
+    size_t needed = dsk_write(&discs[0], NULL, 0);
+    uint8_t *out = needed == 0 ? NULL : malloc(needed);
+    if (needed == 0) {
+      fprintf(stderr, "the disc in drive A holds a track the image format cannot describe\n");
+      status = 1;
+    } else if (out == NULL) {
+      fprintf(stderr, "cannot hold the image\n");
+      status = 1;
+    } else {
+      dsk_write(&discs[0], out, needed);
+      if (!write_file(options->save_disc_path, out, needed)) {
+        status = 1;
+      } else {
+        printf("%s: disc to %s%s\n", options->machine->name, options->save_disc_path,
+               discs[0].modified ? "" : " (unchanged)");
+      }
+    }
+    free(out);
+  }
+  if (status == 0 && options->writes_path != NULL) {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint8_t *pixels = cpc_render_writes(options, &width, &height);
+    if (pixels == NULL || !png_write(options->writes_path, pixels, width, height)) {
+      status = 1;
+    } else {
+      printf("%s: cpc_writes %ux%u to %s\n", options->machine->name, width, height,
+             options->writes_path);
+    }
+    free(pixels);
+  }
+  if (status == 0) {
+    status = write_screenshot(options, framebuffer);
+  }
+
+  free(images[1]);
+  free(images[0]);
+  free(cpc_displayed);
+  free(cpc_writes);
+  free(cpc);
+  free(framebuffer);
+  free(ram);
+  return status;
+}
+
 static int run_machine(int argc, char **argv, bool from_snapshot) {
   options_t options = {
-      .machine = &machines[0],
+      .machine = NULL,
       .rom_directory = "roms",
       .screenshot_path = NULL,
       .writes_path = NULL,
@@ -504,7 +871,7 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
       .save_path = NULL,
       .disc_paths = {NULL, NULL},
       .save_disc_path = NULL,
-      .frames = DEFAULT_FRAMES,
+      .frames = -1,
       .frames_after = 0,
       .full_raster = false,
       .double_lines = true,
@@ -522,156 +889,20 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   if (!parse_options(argc, argv, first_option, &options)) {
     return 1;
   }
-  if (options.save_disc_path != NULL && options.disc_paths[0] == NULL) {
-    fprintf(stderr, "--save-disc needs a disc in drive A to write\n");
+  if (options.machine == NULL) {
+    fprintf(stderr, "which machine? --machine takes one of:\n");
+    for (size_t index = 0; index < machine_count; index++) {
+      fprintf(stderr, "  %-10s %s\n", machines[index].name, machines[index].description);
+    }
     return 1;
   }
-
-  static uint8_t rom[0x8000];
-  if (!load_rom(options.rom_directory, options.machine->rom_file, rom, sizeof rom)) {
-    return 1;
+  if (options.frames < 0) {
+    options.frames = options.machine->default_frames;
   }
-  /* The disc interface brings its own ROM, as upper ROM 7. */
-  bool disc_interface = options.machine->disc_interface || options.disc_paths[0] != NULL ||
-                        options.disc_paths[1] != NULL;
-  static uint8_t amsdos[0x4000];
-  if (disc_interface && !load_rom(options.rom_directory, "amsdos.rom", amsdos, sizeof amsdos)) {
-    return 1;
+  if (options.machine->kind == MACHINE_SPECTRUM) {
+    return run_spectrum(&options);
   }
-
-  uint8_t *ram = calloc(options.machine->ram_size, 1);
-  uint8_t *framebuffer = calloc((size_t)CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT, 1);
-  cpc_t *cpc = calloc(1, sizeof *cpc);
-  if (options.writes_path != NULL) {
-    writes = calloc(options.machine->ram_size, sizeof *writes);
-    displayed = calloc((size_t)CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT, sizeof *displayed);
-  }
-  if (ram == NULL || framebuffer == NULL || cpc == NULL ||
-      (options.writes_path != NULL && (writes == NULL || displayed == NULL))) {
-    fprintf(stderr, "cannot hold the machine\n");
-    free(displayed);
-    free(writes);
-    free(cpc);
-    free(framebuffer);
-    free(ram);
-    return 1;
-  }
-
-  /* The operating system fills the lower 16K, BASIC the upper as ROM 0. */
-  cpc_init(cpc, ram, options.machine->ram_size, rom);
-  cpc_set_upper_rom(cpc, 0, rom + 0x4000);
-  if (disc_interface) {
-    cpc_fit_disc_interface(cpc, true);
-    cpc_set_upper_rom(cpc, 7, amsdos);
-  }
-  cpc_connect_monitor(cpc, framebuffer);
-  cpc_set_links(cpc, options.fifty_hz, CPC_MANUFACTURER_AMSTRAD);
-
-  int status = 0;
-  /* The discs. An image is read into a buffer of its own that the medium
-     borrows for the run, and written back only where asked. */
-  uint8_t *images[2] = {NULL, NULL};
-  static floppy_t discs[2]; /* the machine borrows them; 190K apiece */
-  for (uint8_t drive = 0; drive < 2 && status == 0; drive++) {
-    if (options.disc_paths[drive] == NULL) {
-      continue;
-    }
-    size_t size = 0;
-    images[drive] = read_file_with_room(options.disc_paths[drive], &size, FORMAT_ROOM);
-    const char *problem = NULL;
-    if (images[drive] == NULL) {
-      status = 1;
-    } else if (!dsk_read(&discs[drive], images[drive], size, &problem)) {
-      fprintf(stderr, "%s: %s\n", options.disc_paths[drive], problem);
-      status = 1;
-    } else {
-      floppy_give_room(&discs[drive], size + FORMAT_ROOM);
-      cpc_insert_disc(cpc, drive, &discs[drive]);
-    }
-  }
-  if (options.snapshot_path != NULL) {
-    size_t size = 0;
-    uint8_t *contents = read_file(options.snapshot_path, &size);
-    if (contents == NULL) {
-      status = 1;
-    } else {
-      const char *problem = NULL;
-      if (!snapshot_load(cpc, contents, size, &problem)) {
-        fprintf(stderr, "%s %s\n", options.snapshot_path, problem);
-        status = 1;
-      }
-      free(contents);
-    }
-  }
-  if (status == 0) {
-    run_frames(cpc, options.frames);
-  }
-  if (status == 0 && options.text != NULL && !type_text(cpc, options.text)) {
-    status = 1;
-  }
-  if (status == 0) {
-    run_frames(cpc, options.frames_after);
-  }
-  if (status == 0 && options.save_path != NULL) {
-    cpc_finish_instruction(cpc);
-    if (!save_snapshot(cpc, options.save_path)) {
-      status = 1;
-    }
-  }
-  if (status == 0 && options.save_disc_path != NULL) {
-    size_t needed = dsk_write(&discs[0], NULL, 0);
-    uint8_t *out = needed == 0 ? NULL : malloc(needed);
-    if (needed == 0) {
-      fprintf(stderr, "the disc in drive A holds a track the image format cannot describe\n");
-      status = 1;
-    } else if (out == NULL) {
-      fprintf(stderr, "cannot hold the image\n");
-      status = 1;
-    } else {
-      dsk_write(&discs[0], out, needed);
-      if (!write_file(options.save_disc_path, out, needed)) {
-        status = 1;
-      } else {
-        printf("%s: disc to %s%s\n", options.machine->name, options.save_disc_path,
-               discs[0].modified ? "" : " (unchanged)");
-      }
-    }
-    free(out);
-  }
-  if (status == 0 && options.writes_path != NULL) {
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint8_t *pixels = render_writes(&options, &width, &height);
-    if (pixels == NULL || !png_write(options.writes_path, pixels, width, height)) {
-      status = 1;
-    } else {
-      printf("%s: writes %ux%u to %s\n", options.machine->name, width, height, options.writes_path);
-    }
-    free(pixels);
-  }
-  if (status == 0 && options.screenshot_path != NULL) {
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint8_t *pixels = render(framebuffer, &options, &width, &height);
-    if (pixels == NULL || !png_write(options.screenshot_path, pixels, width, height)) {
-      status = 1;
-    } else {
-      printf("%s: %ld frames, %ux%u to %s\n", options.machine->name,
-             options.frames + options.frames_after, width, height, options.screenshot_path);
-    }
-    free(pixels);
-  } else if (status == 0) {
-    printf("%s: %ld frames\n", options.machine->name, options.frames + options.frames_after);
-  }
-
-  free(images[1]);
-  free(images[0]);
-  free(displayed);
-  free(writes);
-  free(cpc);
-  free(framebuffer);
-  free(ram);
-  return status;
+  return run_cpc(&options);
 }
 
 int main(int argc, char **argv) {

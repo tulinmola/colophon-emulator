@@ -211,6 +211,42 @@ static void basic_does_arithmetic_it_is_typed(void) {
   }
 }
 
+/* The table of key legends, judged by the firmware rather than by itself:
+   the characters are looked up, the keys held down, and what BASIC makes of
+   them read back off the screen. `p` at the K cursor is the PRINT keyword,
+   the quotes are symbol-shifted, and the letters inside them arrive as
+   letters because by then the cursor is in L mode. */
+static void the_keyboard_types_what_is_printed_on_it(void) {
+  if (!power_on()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  const char *line = "p\"a1z.\"";
+  for (const char *at = line; *at != '\0'; at++) {
+    spectrum_shift shift = SPECTRUM_NO_SHIFT;
+    keyboard_key key = spectrum_key_for_character(*at, &shift);
+    if (key == KEYBOARD_NO_KEY) {
+      TEST_FAIL("no key carries '%c'", *at);
+      return;
+    }
+    keyboard_key held = KEYBOARD_NO_KEY;
+    if (shift == SPECTRUM_WITH_CAPS_SHIFT) {
+      held = SPECTRUM_CAPS_SHIFT;
+    } else if (shift == SPECTRUM_WITH_SYMBOL_SHIFT) {
+      held = SPECTRUM_SYMBOL_SHIFT;
+    }
+    type_key(key, held);
+  }
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+  run_frames(FRAMES_PER_KEY);
+
+  char text[ULA_ROWS][ULA_COLUMNS + 1];
+  screen_from_memory(text);
+  if (strncmp(text[0], "a1z.", 4) != 0) {
+    TEST_FAIL("the top line reads |%s|, expected what was typed", text[0]);
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -218,5 +254,6 @@ int main(int argc, char **argv) {
   TEST_RUN(the_48k_boots_to_its_copyright_message);
   TEST_RUN(the_screen_reads_the_same_through_the_beam);
   TEST_RUN(basic_does_arithmetic_it_is_typed);
+  TEST_RUN(the_keyboard_types_what_is_printed_on_it);
   return TEST_REPORT("spectrum firmware");
 }

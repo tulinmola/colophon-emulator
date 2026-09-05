@@ -6,13 +6,13 @@ For centuries, a scribe finishing a manuscript would add a colophon at the end: 
 
 A lot of it is already gone.
 
-Colophon opens those boxes. It runs Amstrad CPC games and watches them from the inside, revealing how the screen was drawn, how the levels were packed, how the music was squeezed out of a tiny sound chip. Then it writes the note that was never written, and puts it in a public archive where anyone can read it.
+Colophon opens those boxes. It runs the games of the old machines — an Amstrad CPC and a ZX Spectrum so far — and watches them from the inside, revealing how the screen was drawn, how the levels were packed, how the music was squeezed out of a tiny sound chip. Then it writes the note that was never written, and puts it in a public archive where anyone can read it.
 
 Preserving these games means more than keeping the files alive. It means understanding them, while there's still someone around to check we got it right.
 
 ## Building
 
-A C compiler and `make` are the whole toolchain. No configure step, no dependencies: the CPC is from 1984, and its workshop may as well be.
+A C compiler and `make` are the whole toolchain. No configure step, no dependencies: these machines are from the early eighties, and their workshop may as well be.
 
 ```sh
 make        # build
@@ -23,11 +23,12 @@ make roms   # fetch the firmware, once
 Then run a machine and look at it:
 
 ```sh
-build/emulator boot --type 'PRINT 2+2\n' --screenshot sum.png
-build/emulator boot --disc game.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
+build/emulator boot --machine cpc6128 --type 'PRINT 2+2\n' --screenshot sum.png
+build/emulator boot --machine cpc6128 --disc game.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
+build/emulator boot --machine spectrum48 --type 'p2+2\n' --wait 10 --screenshot sinclair.png
 ```
 
-`boot` starts a machine from reset and `run` picks one up from a snapshot; both then run for a fixed number of frames, type whatever `--type` was given, wait as long as `--wait` says, and write what they are asked for — a PNG of the screen, an SNA snapshot of the machine, a map of every write it made, the disc as it now stands, or all of them. Nothing consults a clock, so the same command writes the same bytes every time. [The command line](docs/command-line.en.md) sets out the rest.
+Which machine must always be said; there is no default, because none of them is the ordinary case. `boot` starts a machine from reset and `run` picks one up from a snapshot; both then run for a fixed number of frames, type whatever `--type` was given, wait as long as `--wait` says, and write what they are asked for — a PNG of the screen, an SNA snapshot of the machine, a map of every write it made, the disc as it now stands, or all of them. Nothing consults a clock, so the same command writes the same bytes every time. [The command line](docs/command-line.en.md) sets out the rest.
 
 The firmware images are Amstrad's, and the CPC's are Locomotive Software's as well. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here. Amstrad have kindly given their permission for the redistribution of their copyrighted material but retain that copyright.
 
@@ -35,13 +36,21 @@ For development there are also `make format` (clang-format, config in `.clang-fo
 
 ## Where it stands
 
-There is nothing to play yet, but there is something to see. The Z80 came first — cycle-stepped, complete, every instruction the machine knows, undocumented ones included — and the CPC has been built around it a chip at a time: the memory map with its RAM banking and ROM paging, a 6845 CRTC counting out the frame at one character per microsecond, a Gate Array raising the 300Hz heartbeat and turning bytes into colour, and a monitor that takes the one composite sync wire and separates it the way a tube does. Given the firmware, the machine now boots it, and the Ready prompt arrives on the screen in the right colours, in the right place.
+There is something to play, and more of the machine to see than there is of the game. The Z80 came first — cycle-stepped, complete, every instruction the machine knows, undocumented ones included — and it belongs to neither machine: it is a chip, ticked once a clock, and whatever is wired around it decides what its pins mean.
+
+An Amstrad CPC was built around it a chip at a time: the memory map with its RAM banking and ROM paging, a 6845 CRTC counting out the frame at one character per microsecond, a Gate Array raising the 300Hz heartbeat and turning bytes into colour, and a monitor that takes the one composite sync wire and separates it the way a tube does. Given the firmware, the machine boots it, and the Ready prompt arrives on the screen in the right colours, in the right place.
 
 It can hear you, too. The keyboard is a grid of switches read the long way round — the CPU asks the 8255, which asks the sound chip, which reads the grid — and with that path in place you can type at the prompt and BASIC will answer. And it runs at the right speed: the Gate Array keeps the CPU off the memory for three cycles in four so the video always wins, which stretches every instruction onto a whole microsecond and costs the processor a quarter of its nominal 4MHz — the tax that makes a CPC a CPC.
 
 It can also be stopped and picked up again: a machine writes itself out as an SNA snapshot, and another reads it back and carries on.
 
 And there is a disc, and a controller to read it. A disc image becomes a medium — cylinders, sides, and the sectors lying under the head with the identities they announce, the wrong lengths some of them claim, and the several readings a protected one keeps — laid out on its track where a formatter would have put it. A drive turns it at 300 rpm, and a µPD765 finds each sector as its identity comes round and hands the bytes over one every 32µs, the way the chip did. Given AMSDOS, the machine catalogues a disc somebody else wrote and loads a program off it, and Shaker's own modules run from theirs.
+
+A ZX Spectrum stands beside it now, and it is one chip where a CPC is two. The Ferranti ULA counts out the frame, reads the screen, turns bytes into pixels, raises the interrupt and gates the keyboard, and the board around it is little more than sixteen kilobytes of ROM and eight address lines running to forty keys. It boots its firmware, shows the message Sinclair put in it, and answers arithmetic typed at the keyboard — and its picture is read back off the beam rather than out of the display file, so the serialiser, the composite sync and the tube are all in the path that is checked. What it does not do yet is contend for its own memory, which on a machine whose screen and processor share one bank is not a small omission.
+
+No machine is the default, and none will be. A command that does not say which one it wants is a question rather than an instruction, and the emulator answers it with the list of what it has.
+
+None of it has to be watched from a command line. The [player](https://github.com/tulinmola/colophon-player) compiles this same C to WebAssembly and carries a machine into a page, with a debugger beside it: the processor, the memory, the screen, the drive and the track under its head, each on a panel of its own, and a few seconds of the recent past to step back through. That is where the games are played.
 
 [The machine](docs/machine.en.md) is the full accounting, chip by chip, of what is there and what is not.
 
@@ -67,7 +76,7 @@ make test-exerciser    # the Z80 instruction set exerciser
 make test-all          # all four
 ```
 
-Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — and all three machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table the ROM itself carries. The 6128 also catalogues Shaker's disc through the real AMSDOS and loads a file off it, and both are checked against a reading of the image that never went near the controller.
+Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — and all four machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table each ROM itself carries. The 6128 also catalogues Shaker's disc through the real AMSDOS and loads a file off it, and both are checked against a reading of the image that never went near the controller.
 
 [The evidence](docs/evidence.en.md) sets out what each tier proves, what it costs, and the two suites still to come.
 

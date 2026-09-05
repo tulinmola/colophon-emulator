@@ -251,6 +251,113 @@ static void the_picture_lands_where_the_frame_sync_leaves_it(void) {
   TEST_EQUAL(top, ULA_FIRST_DISPLAY_LINE - SPECTRUM_PICTURE_SHIFT);
 }
 
+/* Spot checks against the published matrix, not against the table restated:
+   a letter, its capital, a digit, a red legend, and the two kinds of
+   character no key carries. */
+static void the_keyboard_finds_a_character_where_it_is_printed(void) {
+  spectrum_shift shift = SPECTRUM_WITH_CAPS_SHIFT;
+  TEST_EQUAL(spectrum_key_for_character('p', &shift), SPECTRUM_KEY(5, 0));
+  TEST_EQUAL(shift, SPECTRUM_NO_SHIFT);
+  TEST_EQUAL(spectrum_key_for_character('Z', &shift), SPECTRUM_KEY(0, 1));
+  TEST_EQUAL(shift, SPECTRUM_WITH_CAPS_SHIFT);
+  TEST_EQUAL(spectrum_key_for_character('7', &shift), SPECTRUM_KEY(4, 3));
+  TEST_EQUAL(shift, SPECTRUM_NO_SHIFT);
+  TEST_EQUAL(spectrum_key_for_character('+', &shift), SPECTRUM_KEY(6, 2));
+  TEST_EQUAL(shift, SPECTRUM_WITH_SYMBOL_SHIFT);
+  TEST_EQUAL(spectrum_key_for_character('"', &shift), SPECTRUM_KEY(5, 0));
+  TEST_EQUAL(shift, SPECTRUM_WITH_SYMBOL_SHIFT);
+  TEST_EQUAL(spectrum_key_for_character(' ', &shift), SPECTRUM_SPACE);
+  TEST_EQUAL(shift, SPECTRUM_NO_SHIFT);
+  /* The pound sign has a key and no ASCII; a token is not a character. */
+  TEST_EQUAL(spectrum_key_for_character('~', &shift), KEYBOARD_NO_KEY);
+  TEST_EQUAL(spectrum_key_for_character('`', &shift), KEYBOARD_NO_KEY);
+}
+
+/* The printed keyboard, transcribed a second time and from the same source,
+   so that a slip in either copy shows. Positions and legends from "Sinclair
+   ZX Specifications" (Martin Korth), Spectrum Keyboard Assignment. */
+static void every_legend_is_where_the_key_is_printed(void) {
+  static const struct {
+    char character;
+    int half_row;
+    int bit;
+    spectrum_shift shift;
+  } printed[] = {
+      {'z', 0, 1, SPECTRUM_NO_SHIFT},
+      {'x', 0, 2, SPECTRUM_NO_SHIFT},
+      {'c', 0, 3, SPECTRUM_NO_SHIFT},
+      {'v', 0, 4, SPECTRUM_NO_SHIFT},
+      {'a', 1, 0, SPECTRUM_NO_SHIFT},
+      {'s', 1, 1, SPECTRUM_NO_SHIFT},
+      {'d', 1, 2, SPECTRUM_NO_SHIFT},
+      {'f', 1, 3, SPECTRUM_NO_SHIFT},
+      {'g', 1, 4, SPECTRUM_NO_SHIFT},
+      {'q', 2, 0, SPECTRUM_NO_SHIFT},
+      {'w', 2, 1, SPECTRUM_NO_SHIFT},
+      {'e', 2, 2, SPECTRUM_NO_SHIFT},
+      {'r', 2, 3, SPECTRUM_NO_SHIFT},
+      {'t', 2, 4, SPECTRUM_NO_SHIFT},
+      {'1', 3, 0, SPECTRUM_NO_SHIFT},
+      {'2', 3, 1, SPECTRUM_NO_SHIFT},
+      {'3', 3, 2, SPECTRUM_NO_SHIFT},
+      {'4', 3, 3, SPECTRUM_NO_SHIFT},
+      {'5', 3, 4, SPECTRUM_NO_SHIFT},
+      {'0', 4, 0, SPECTRUM_NO_SHIFT},
+      {'9', 4, 1, SPECTRUM_NO_SHIFT},
+      {'8', 4, 2, SPECTRUM_NO_SHIFT},
+      {'7', 4, 3, SPECTRUM_NO_SHIFT},
+      {'6', 4, 4, SPECTRUM_NO_SHIFT},
+      {'p', 5, 0, SPECTRUM_NO_SHIFT},
+      {'o', 5, 1, SPECTRUM_NO_SHIFT},
+      {'i', 5, 2, SPECTRUM_NO_SHIFT},
+      {'u', 5, 3, SPECTRUM_NO_SHIFT},
+      {'y', 5, 4, SPECTRUM_NO_SHIFT},
+      {'l', 6, 1, SPECTRUM_NO_SHIFT},
+      {'k', 6, 2, SPECTRUM_NO_SHIFT},
+      {'j', 6, 3, SPECTRUM_NO_SHIFT},
+      {'h', 6, 4, SPECTRUM_NO_SHIFT},
+      {' ', 7, 0, SPECTRUM_NO_SHIFT},
+      {'m', 7, 2, SPECTRUM_NO_SHIFT},
+      {'n', 7, 3, SPECTRUM_NO_SHIFT},
+      {'b', 7, 4, SPECTRUM_NO_SHIFT},
+      /* The red legends, the ones ASCII can hold. */
+      {':', 0, 1, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'?', 0, 3, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'/', 0, 4, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'<', 2, 3, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'>', 2, 4, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'!', 3, 0, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'@', 3, 1, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'#', 3, 2, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'$', 3, 3, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'%', 3, 4, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'_', 4, 0, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {')', 4, 1, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'(', 4, 2, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'\'', 4, 3, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'&', 4, 4, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'"', 5, 0, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {';', 5, 1, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'=', 6, 1, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'+', 6, 2, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'-', 6, 3, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'^', 6, 4, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'.', 7, 2, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {',', 7, 3, SPECTRUM_WITH_SYMBOL_SHIFT},
+      {'*', 7, 4, SPECTRUM_WITH_SYMBOL_SHIFT},
+  };
+  for (size_t index = 0; index < sizeof printed / sizeof printed[0]; index++) {
+    spectrum_shift shift = SPECTRUM_WITH_CAPS_SHIFT;
+    keyboard_key key = spectrum_key_for_character(printed[index].character, &shift);
+    keyboard_key want = SPECTRUM_KEY(printed[index].half_row, printed[index].bit);
+    if (key != want || shift != printed[index].shift) {
+      TEST_FAIL("'%c' is at half-row %d bit %d shift %d, printed on %d/%d shift %d",
+                printed[index].character, key / 8, key % 8, shift, printed[index].half_row,
+                printed[index].bit, printed[index].shift);
+    }
+  }
+}
+
 int main(void) {
   TEST_RUN(reset_fetches_from_the_rom);
   TEST_RUN(ram_answers_from_4000_and_the_rom_refuses_writes);
@@ -263,6 +370,8 @@ int main(void) {
   TEST_RUN(the_ear_socket_reads_on_bit_6);
   TEST_RUN(an_odd_port_reaches_nothing_and_floats);
   TEST_RUN(the_first_interrupt_is_accepted_sixteen_tstates_in);
+  TEST_RUN(the_keyboard_finds_a_character_where_it_is_printed);
+  TEST_RUN(every_legend_is_where_the_key_is_printed);
   TEST_RUN(the_border_reaches_the_framebuffer);
   TEST_RUN(the_picture_lands_where_the_frame_sync_leaves_it);
   return TEST_REPORT("spectrum");

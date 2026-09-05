@@ -54,9 +54,9 @@ all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
-$(BUILD)/emulator: $(CORE_C) $(PNG_C) $(CLI_C) src/cpc.h cli/png.h
+$(BUILD)/emulator: $(CORE_C) $(ULA_C) $(SPECTRUM_C) $(PNG_C) $(CLI_C) src/cpc.h src/spectrum.h cli/png.h
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Icli $(CORE_C) $(PNG_C) $(CLI_C) -o $@
+	$(CC) $(CFLAGS) -Isrc -Icli $(CORE_C) $(ULA_C) $(SPECTRUM_C) $(PNG_C) $(CLI_C) -o $@
 
 $(BUILD)/z80_test: $(SRC_C) src/z80.h $(Z80_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
