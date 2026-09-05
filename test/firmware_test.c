@@ -463,9 +463,11 @@ static void amsdos_loads_a_file_off_the_disc(void) {
   TEST_CHECK(!disc.modified);
 }
 
-/* A module run off the disc takes the machine over: Shaker's menu is drawn
-   in mode 2 with a font of its own, so the ROM's cannot read it, but the
-   mode and the program counter say whose code is running. */
+/* A module run off the disc takes the machine over. Shaker's menu is drawn
+   in the ROM's own characters, but in mode 2, where a character is eight
+   samples across rather than mode 1's sixteen — so the reader here, which
+   counts in sixteens, cannot spell it. The mode and the program counter say
+   whose code is running; `shaker_test` reads the menu itself. */
 static void a_shaker_module_runs_off_the_disc(void) {
   if (!power_on("cpc6128.rom", 0x20000, true, true) || !insert_shaker()) {
     return;
