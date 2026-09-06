@@ -37,6 +37,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/* fork, waitpid and an anonymous shared mapping, so the five modules
+   run at once. The Makefile asks for POSIX on this file's behalf. */
+#include <sys/mman.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include "cpc.h"
 #include "dsk.h"
@@ -87,6 +92,10 @@
 #define MAX_SAMPLES_WITHOUT_NEWS 40
 #define MAX_SAMPLES_PER_GROUP 300
 
+/* Every path this file builds names a directory the sweep was pointed at,
+   so the bound is the host's rather than ours. */
+#define MAX_PATH_LENGTH 4096
+
 #define MAX_GROUPS 32
 #define MAX_CAPTURES 12
 
@@ -99,8 +108,57 @@ static uint8_t rom[0x8000];
 static uint8_t amsdos[0x4000];
 static uint8_t framebuffer[CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT];
 static uint8_t disc_image[256 * 1024];
+
 static uint8_t pixels[CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT * 3];
 static floppy_t disc;
+
+/* Locating the grid scores two hundred and eighty-nine candidates, each of
+   them two thousand cells, so a cell is named some six hundred thousand
+   times a sample. The eight bytes of a glyph read as one 64-bit number, so
+   the table is indexed once and looked up rather than walked. Should two
+   codes ever share a bitmap the lower keeps it, which is the answer walking
+   the table gave; none of the three firmware ROMs holds such a pair. */
+#define GLYPH_INDEX_SLOTS 256
+
+static struct {
+  uint64_t bitmap;
+  char code;
+} glyph_index[GLYPH_INDEX_SLOTS];
+
+static uint64_t bitmap_of_glyph(const uint8_t glyph[8]) {
+  uint64_t bitmap = 0;
+  for (int scanline = 0; scanline < GLYPH_HEIGHT; scanline++) {
+    bitmap = (bitmap << 8) | glyph[scanline];
+  }
+  return bitmap;
+}
+
+/* Most glyphs end on a blank scanline, so the low byte alone crowds the
+   table into a few slots; the whole word folds into the byte instead. */
+static size_t slot_of_bitmap(uint64_t bitmap) {
+  uint64_t folded = bitmap ^ (bitmap >> 32);
+  folded ^= folded >> 16;
+  folded ^= folded >> 8;
+  return (size_t)(folded % GLYPH_INDEX_SLOTS);
+}
+
+/* Open addressing, and ninety-five codes in 256 slots leave free ones, so
+   a lookup for a bitmap the table does not hold always meets one and stops.
+   A free slot is one whose code is still NUL, which no printable code is. */
+static void build_glyph_index(void) {
+  memset(glyph_index, 0, sizeof glyph_index);
+  for (int code = FIRST_CODE; code <= LAST_CODE; code++) {
+    uint64_t bitmap = bitmap_of_glyph(rom + FONT_IN_ROM + (size_t)code * 8);
+    size_t slot = slot_of_bitmap(bitmap);
+    while (glyph_index[slot].code != '\0' && glyph_index[slot].bitmap != bitmap) {
+      slot = (slot + 1) % GLYPH_INDEX_SLOTS;
+    }
+    if (glyph_index[slot].code == '\0') {
+      glyph_index[slot].bitmap = bitmap;
+      glyph_index[slot].code = (char)code;
+    }
+  }
+}
 
 /* The machine is file-scope because the controller's pointers to its drives
    point into it: cpc_init sets fdc.drives[unit] to &cpc.drives[unit], so a
@@ -147,6 +205,12 @@ static int group_count;
 static char scoreboard[MAX_SCOREBOARD];
 static size_t scoreboard_length;
 static bool scoreboard_overflowed;
+/* The line a module run leaves for the sweep to print, rather than printing
+   it itself, so that five at once still report module by module. It holds
+   the report's path and the two counts beside it. */
+#define MAX_MODULE_SUMMARY (MAX_PATH_LENGTH + 256)
+static char module_summary[MAX_MODULE_SUMMARY];
+
 static int total_groups_run;
 static int total_groups_skipped;
 static int total_groups_graded;
@@ -177,7 +241,7 @@ static void write_scoreboard_line(const char *module, const group *entry, const 
 
 static bool load_file(const char *directory, const char *file, uint8_t *into, size_t capacity,
                       size_t *length, const char *remedy) {
-  char path[1024];
+  char path[MAX_PATH_LENGTH];
   snprintf(path, sizeof path, "%s/%s", directory, file);
   FILE *handle = fopen(path, "rb");
   if (handle == NULL) {
@@ -269,6 +333,7 @@ static bool power_on(void) {
     TEST_FAIL("shaker27.dsk: %s", problem);
     return false;
   }
+  build_glyph_index();
   cpc_init(&cpc, ram, sizeof ram, rom);
   cpc_set_upper_rom(&cpc, 0, rom + 0x4000);
   cpc_fit_disc_interface(&cpc, true);
@@ -299,13 +364,17 @@ static void restore_machine(void) {
 static uint8_t paper_colour(int left, int top) {
   int counts[32] = {0};
   for (int row = 0; row < ROWS * GLYPH_HEIGHT; row++) {
+    int y = top + row;
+    if (y < 0 || y >= CPC_FRAMEBUFFER_HEIGHT) {
+      continue;
+    }
+    const uint8_t *frame_row = framebuffer + (size_t)y * CPC_FRAMEBUFFER_WIDTH;
     for (int column = 0; column < COLUMNS * GLYPH_WIDTH; column += 4) {
       int x = left + column;
-      int y = top + row;
-      if (x < 0 || x >= CPC_FRAMEBUFFER_WIDTH || y < 0 || y >= CPC_FRAMEBUFFER_HEIGHT) {
+      if (x < 0 || x >= CPC_FRAMEBUFFER_WIDTH) {
         continue;
       }
-      counts[framebuffer[(size_t)y * CPC_FRAMEBUFFER_WIDTH + (size_t)x] & 0x1F]++;
+      counts[frame_row[x] & 0x1F]++;
     }
   }
   int best = 0;
@@ -356,12 +425,35 @@ static bool find_display_corner(int *corner_left, int *corner_top) {
   return true;
 }
 
-static void cut_glyph(int left, int top, int row, int column, uint8_t behind, uint8_t glyph[8]) {
+/* Two readings of the same cell. One lying wholly inside the frame needs
+   no bounds test at all, and it is the loop a sweep spends most of itself
+   in; a picture these tests have pushed off the edge takes the second,
+   which asks of every pixel and reads what lies outside as paper. */
+static uint64_t cut_bitmap(int left, int top, int row, int column, uint8_t behind) {
+  int cell_left = left + column * GLYPH_WIDTH;
+  int cell_top = top + row * GLYPH_HEIGHT;
+  uint64_t bitmap = 0;
+  if (cell_left >= 0 && cell_left + GLYPH_WIDTH <= CPC_FRAMEBUFFER_WIDTH && cell_top >= 0 &&
+      cell_top + GLYPH_HEIGHT <= CPC_FRAMEBUFFER_HEIGHT) {
+    const uint8_t *cell_row =
+        framebuffer + (size_t)cell_top * CPC_FRAMEBUFFER_WIDTH + (size_t)cell_left;
+    for (int scanline = 0; scanline < GLYPH_HEIGHT; scanline++) {
+      uint8_t bits = 0;
+      for (int pixel = 0; pixel < GLYPH_WIDTH; pixel++) {
+        if (cell_row[pixel] != behind) {
+          bits |= (uint8_t)(0x80u >> pixel);
+        }
+      }
+      bitmap = (bitmap << 8) | bits;
+      cell_row += CPC_FRAMEBUFFER_WIDTH;
+    }
+    return bitmap;
+  }
   for (int scanline = 0; scanline < GLYPH_HEIGHT; scanline++) {
     uint8_t bits = 0;
     for (int pixel = 0; pixel < GLYPH_WIDTH; pixel++) {
-      int x = left + column * GLYPH_WIDTH + pixel;
-      int y = top + row * GLYPH_HEIGHT + scanline;
+      int x = cell_left + pixel;
+      int y = cell_top + scanline;
       if (x < 0 || x >= CPC_FRAMEBUFFER_WIDTH || y < 0 || y >= CPC_FRAMEBUFFER_HEIGHT) {
         continue;
       }
@@ -369,15 +461,18 @@ static void cut_glyph(int left, int top, int row, int column, uint8_t behind, ui
         bits |= (uint8_t)(0x80u >> pixel);
       }
     }
-    glyph[scanline] = bits;
+    bitmap = (bitmap << 8) | bits;
   }
+  return bitmap;
 }
 
-static char code_of_glyph(const uint8_t glyph[8]) {
-  for (int code = FIRST_CODE; code <= LAST_CODE; code++) {
-    if (memcmp(rom + FONT_IN_ROM + (size_t)code * 8, glyph, 8) == 0) {
-      return (char)code;
+static char code_of_bitmap(uint64_t bitmap) {
+  size_t slot = slot_of_bitmap(bitmap);
+  while (glyph_index[slot].code != '\0') {
+    if (glyph_index[slot].bitmap == bitmap) {
+      return glyph_index[slot].code;
     }
+    slot = (slot + 1) % GLYPH_INDEX_SLOTS;
   }
   return '?';
 }
@@ -396,19 +491,12 @@ static void score_grid(int left, int top, int *glyphs_named, int *glyphs_drawn) 
   *glyphs_drawn = 0;
   for (int row = 0; row < ROWS; row++) {
     for (int column = 0; column < COLUMNS; column++) {
-      uint8_t glyph[8];
-      cut_glyph(left, top, row, column, behind, glyph);
-      bool blank = true;
-      for (int scanline = 0; scanline < GLYPH_HEIGHT; scanline++) {
-        if (glyph[scanline] != 0) {
-          blank = false;
-        }
-      }
-      if (blank) {
+      uint64_t bitmap = cut_bitmap(left, top, row, column, behind);
+      if (bitmap == 0) {
         continue;
       }
       (*glyphs_drawn)++;
-      char code = code_of_glyph(glyph);
+      char code = code_of_bitmap(bitmap);
       if (code != '?' && !code_is_a_single_rule(code)) {
         (*glyphs_named)++;
       }
@@ -476,16 +564,9 @@ static int read_screen(void) {
   int glyphs_named = 0;
   for (int row = 0; row < ROWS; row++) {
     for (int column = 0; column < COLUMNS; column++) {
-      uint8_t glyph[8];
-      cut_glyph(grid_left, grid_top, row, column, behind, glyph);
-      bool blank = true;
-      for (int scanline = 0; scanline < GLYPH_HEIGHT; scanline++) {
-        if (glyph[scanline] != 0) {
-          blank = false;
-        }
-      }
-      char found = blank ? ' ' : code_of_glyph(glyph);
-      if (!blank) {
+      uint64_t bitmap = cut_bitmap(grid_left, grid_top, row, column, behind);
+      char found = bitmap == 0 ? ' ' : code_of_bitmap(bitmap);
+      if (bitmap != 0) {
         glyphs_drawn++;
         if (found != '?') {
           glyphs_named++;
@@ -917,7 +998,7 @@ static bool capture_screen(const char *module, const char *key, long frame, int 
   if (!keep_rasters) {
     return true;
   }
-  char path[4096];
+  char path[MAX_PATH_LENGTH];
   snprintf(taken->raster_file, sizeof taken->raster_file, "%.4s-%.7s-%ld.png", module, key, frame);
   snprintf(path, sizeof path, "%s/%s", report_directory, taken->raster_file);
   if (!write_raster(path)) {
@@ -1078,7 +1159,7 @@ static void run_module(const char *module, const char *only_group) {
   save_machine();
   TEST_CHECK(cpc.fdc.drives[0] == &cpc.drives[0]);
 
-  char path[4096];
+  char path[MAX_PATH_LENGTH];
   snprintf(path, sizeof path, "%s/module-%s.txt", report_directory, module);
   FILE *report = fopen(path, "w");
   if (report == NULL) {
@@ -1126,8 +1207,9 @@ static void run_module(const char *module, const char *only_group) {
     TEST_FAIL("module %s has no group (%s)", module, only_group);
     return;
   }
-  printf("  module %s: %d groups run, %d left to another CRTC type, report in %s\n", module, ran,
-         skipped, path);
+  snprintf(module_summary, sizeof module_summary,
+           "  module %s: %d groups run, %d left to another CRTC type, report in %s\n", module, ran,
+           skipped, path);
 }
 
 static const char *only_module;
@@ -1184,7 +1266,7 @@ static void the_scoreboard_matches_the_one_on_record(void) {
   if (only_module != NULL || only_group != NULL) {
     return;
   }
-  char written_path[4096];
+  char written_path[MAX_PATH_LENGTH];
   snprintf(written_path, sizeof written_path, "%s/scoreboard.txt", report_directory);
   FILE *written = fopen(written_path, "r");
   if (written == NULL) {
@@ -1247,6 +1329,134 @@ static void the_scoreboard_matches_the_one_on_record(void) {
             first_now, scoreboard_on_record, written_path);
 }
 
+/* The five modules share nothing: each boots its own machine, writes its own
+   record, and appends its own lines to the scoreboard. So they run at once,
+   a child apiece, and what a child has to hand back — its lines, its
+   tallies, its failures and the line it reports — is gathered through a
+   shared mapping and merged module by module, A through E, so that a sweep
+   costs the slowest module rather than the sum of five and leaves the same
+   scoreboard behind. Only those closing lines are held back to be printed
+   in order; what a module fails on is heard as it happens, out of order and
+   named by its own test. */
+typedef struct {
+  int groups_run;
+  int groups_skipped;
+  int groups_graded;
+  int verdicts;
+  int verdicts_wrong;
+  int failures;
+  char scoreboard[MAX_SCOREBOARD];
+  size_t scoreboard_length;
+  bool scoreboard_overflowed;
+  char summary[MAX_MODULE_SUMMARY];
+} module_result;
+
+static const struct {
+  void (*run)(void);
+  const char *test_name;
+  const char *module;
+} modules[] = {
+    {module_a_is_recorded, "module_a_is_recorded", "A"},
+    {module_b_is_recorded, "module_b_is_recorded", "B"},
+    {module_c_is_recorded, "module_c_is_recorded", "C"},
+    {module_d_is_recorded, "module_d_is_recorded", "D"},
+    {module_e_is_recorded, "module_e_is_recorded", "E"},
+};
+#define MODULE_COUNT (sizeof modules / sizeof modules[0])
+
+static bool run_every_module(void) {
+  size_t mapping_length = MODULE_COUNT * sizeof(module_result);
+  module_result *results =
+      mmap(NULL, mapping_length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (results == MAP_FAILED) {
+    printf("shaker: cannot map the memory the five module runs report through\n");
+    return false;
+  }
+
+  /* Anything the parent has said but not yet written would be inherited by
+     every child and said again by each of them. */
+  fflush(NULL);
+  size_t started = 0;
+  pid_t children[MODULE_COUNT];
+  while (started < MODULE_COUNT) {
+    children[started] = fork();
+    if (children[started] == -1) {
+      break;
+    }
+    if (children[started] == 0) {
+      /* The parent has run nothing yet, so the tallies this child reports
+         are its own from zero. TEST_RUN would have named the test it was
+         about to run; nothing else does now. */
+      test_current = modules[started].test_name;
+      modules[started].run();
+      module_result *result = &results[started];
+      result->groups_run = total_groups_run;
+      result->groups_skipped = total_groups_skipped;
+      result->groups_graded = total_groups_graded;
+      result->verdicts = total_verdicts;
+      result->verdicts_wrong = total_verdicts_wrong;
+      result->failures = test_failures;
+      memcpy(result->scoreboard, scoreboard, scoreboard_length);
+      result->scoreboard_length = scoreboard_length;
+      result->scoreboard_overflowed = scoreboard_overflowed;
+      memcpy(result->summary, module_summary, strlen(module_summary) + 1);
+      /* _exit does not flush, and a run whose output is a pipe rather than
+         a terminal has everything it reported still sitting in a buffer. */
+      fflush(NULL);
+      _exit(0);
+    }
+    started++;
+  }
+
+  /* A run that was started is waited for whether or not the rest could be,
+     so that no child outlives the sweep that asked for it. */
+  bool every_module_ran = started == MODULE_COUNT;
+  for (size_t index = 0; index < started; index++) {
+    int status = 0;
+    if (waitpid(children[index], &status, 0) == -1 || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+      test_current = modules[index].test_name;
+      TEST_FAIL("the run for module %s did not finish", modules[index].module);
+      every_module_ran = false;
+    }
+  }
+  /* Counted as the five the sweep owed rather than the few it managed, so
+     that the closing line is not a smaller number of tests all passing. */
+  for (size_t index = started; index < MODULE_COUNT; index++) {
+    test_current = modules[index].test_name;
+    test_count++;
+    TEST_FAIL("module %s was never started", modules[index].module);
+  }
+
+  for (size_t index = 0; index < started; index++) {
+    const module_result *result = &results[index];
+    /* These five did not go through TEST_RUN — a child ran each — so the
+       count and the failures it would have kept are added here by hand. */
+    test_count++;
+    test_failures += result->failures;
+    printf("%s", result->summary);
+    total_groups_run += result->groups_run;
+    total_groups_skipped += result->groups_skipped;
+    total_groups_graded += result->groups_graded;
+    total_verdicts += result->verdicts;
+    total_verdicts_wrong += result->verdicts_wrong;
+    scoreboard_overflowed = scoreboard_overflowed || result->scoreboard_overflowed;
+    if (scoreboard_overflowed ||
+        scoreboard_length + result->scoreboard_length > sizeof scoreboard) {
+      /* Stop appending rather than skip a module and take up the next: a
+         scoreboard missing one in the middle reads as though that module
+         had nothing to say. The tallies above still count, so the head of
+         the file does not undercount what ran. */
+      scoreboard_overflowed = true;
+      continue;
+    }
+    memcpy(scoreboard + scoreboard_length, result->scoreboard, result->scoreboard_length);
+    scoreboard_length += result->scoreboard_length;
+  }
+  munmap(results, mapping_length);
+  return every_module_ran;
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -1272,11 +1482,9 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  TEST_RUN(module_a_is_recorded);
-  TEST_RUN(module_b_is_recorded);
-  TEST_RUN(module_c_is_recorded);
-  TEST_RUN(module_d_is_recorded);
-  TEST_RUN(module_e_is_recorded);
+  if (!run_every_module()) {
+    return TEST_REPORT("shaker");
+  }
 
   /* A run of one module or one group has walked part of the menu, and a
      part is not something the record can be set against. It writes its
@@ -1286,7 +1494,7 @@ int main(int argc, char **argv) {
     return TEST_REPORT("shaker");
   }
 
-  char scoreboard_path[4096];
+  char scoreboard_path[MAX_PATH_LENGTH];
   snprintf(scoreboard_path, sizeof scoreboard_path, "%s/scoreboard.txt", report_directory);
   FILE *file = fopen(scoreboard_path, "w");
   if (file == NULL) {
