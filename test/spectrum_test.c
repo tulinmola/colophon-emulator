@@ -531,6 +531,29 @@ static void a_port_is_charged_by_its_low_bit_and_its_high_byte(void) {
   TEST_EQUAL(tstates_for(in, sizeof in, 14335), 12);
 }
 
+/* The ULA stops the processor's clock, not the tape's: a held T-state is one
+   the deck plays straight through, and a loader that lost T-states to
+   contention would measure every edge wrong. */
+static void the_tape_runs_on_while_the_clock_is_held(void) {
+  power_on(SPECTRUM_RAM_48K);
+  static const uint8_t image[] = {0x02, 0x00, 0xFF, 0x55};
+  static tape_t tape;
+  const char *problem = NULL;
+  tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
+  TEST_CHECK(tape_insert(&tape, image, sizeof image, &problem));
+  spectrum_insert_tape(&spectrum, &tape);
+  tape_play(&tape);
+  spectrum_tick(&spectrum); /* the deck takes up its first pulse */
+
+  const uint32_t left = tape.pulse_ticks_left;
+  spectrum.held_ticks = 200; /* as a contended access leaves it */
+  for (int tick = 0; tick < 100; tick++) {
+    spectrum_tick(&spectrum);
+  }
+  TEST_EQUAL(spectrum.held_ticks, 100);          /* the processor stood still */
+  TEST_EQUAL(tape.pulse_ticks_left, left - 100); /* and the tape did not */
+}
+
 int main(void) {
   TEST_RUN(reset_fetches_from_the_rom);
   TEST_RUN(ram_answers_from_4000_and_the_rom_refuses_writes);
@@ -555,5 +578,6 @@ int main(void) {
   TEST_RUN(a_push_is_charged_for_both_halves_of_the_address);
   TEST_RUN(a_hold_the_last_tstate_earned_outlives_the_instruction);
   TEST_RUN(a_port_is_charged_by_its_low_bit_and_its_high_byte);
+  TEST_RUN(the_tape_runs_on_while_the_clock_is_held);
   return TEST_REPORT("spectrum");
 }

@@ -61,7 +61,8 @@ static uint8_t read_keyboard(const spectrum_t *spectrum, uint16_t port) {
       keys &= keyboard_line(&spectrum->keyboard, half_row);
     }
   }
-  return (uint8_t)(keys | 0xA0 | (spectrum->ear ? 0x40 : 0x00));
+  bool ear = spectrum->tape != NULL ? tape_level(spectrum->tape) : spectrum->ear;
+  return (uint8_t)(keys | 0xA0 | (ear ? 0x40 : 0x00));
 }
 
 /* The ULA is the only thing fitted, and it answers every port with A0 low. */
@@ -184,8 +185,13 @@ static void run_processor(spectrum_t *spectrum) {
   spectrum->port_charges_left = (uint8_t)(spectrum->port_charges_left >> 1);
 }
 
+void spectrum_insert_tape(spectrum_t *spectrum, tape_t *tape) { spectrum->tape = tape; }
+
 uint64_t spectrum_tick(spectrum_t *spectrum) {
   paint(spectrum);
+  if (spectrum->tape != NULL) {
+    tape_tick(spectrum->tape);
+  }
   if (spectrum->held_ticks > 0) {
     spectrum->held_ticks--;
   } else {

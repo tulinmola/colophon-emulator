@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "spectrum.h"
+#include "tape.h"
 #include "test.h"
 
 #define FONT_IN_ROM 0x3D00
@@ -247,6 +248,145 @@ static void the_keyboard_types_what_is_printed_on_it(void) {
   }
 }
 
+/* The ROM's own tape loader, which measures the time between edges on the
+   EAR line and has no other way of knowing what it is being given. Entered
+   with the flag byte it expects in A, the destination in IX, the length in
+   DE and carry set to load rather than verify; it returns with carry set if
+   the block arrived and its checksum agreed.
+
+   Sources:
+   - "The complete Spectrum ROM disassembly" (Ian Logan and Frank O'Hara),
+     the LD-BYTES routine at &0556 and its entry conditions. */
+#define LD_BYTES 0x0556
+
+/* A header's pilot is 8063 pulses of 2168 T-states, which is five seconds,
+   and a whole tape is that twice over with a second of pause between. */
+#define MOST_FRAMES_TO_LOAD 700
+
+static void a_block_loads_through_the_roms_own_loader(void) {
+  if (!power_on()) {
+    return;
+  }
+  /* One headerless block: the flag a data block carries, sixteen bytes, and
+     the checksum the ROM will insist on. */
+  static uint8_t image[] = {0x12, 0x00, 0xFF, 'A', 'B', 'C', 'D', 'E', 'F', 'G',
+                            'H',  'I',  'J',  'K', 'L', 'M', 'N', 'O', 'P', 0x00};
+  uint8_t checksum = 0;
+  for (size_t index = 2; index + 1 < sizeof image; index++) {
+    checksum ^= image[index];
+  }
+  image[sizeof image - 1] = checksum;
+
+  static tape_t tape;
+  const char *problem = NULL;
+  tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
+  if (!tape_insert(&tape, image, (uint32_t)sizeof image, &problem)) {
+    TEST_FAIL("the tape was refused: %s", problem);
+    return;
+  }
+  spectrum_insert_tape(&spectrum, &tape);
+  tape_play(&tape);
+
+  /* LD IX,&9000 : LD DE,16 : LD A,&FF : SCF : CALL LD-BYTES : HALT */
+  static const uint8_t program[] = {0xDD,          0x21, 0x00, 0x90, 0x11, 0x10,
+                                    0x00,          0x3E, 0xFF, 0x37, 0xCD, LD_BYTES & 0xFF,
+                                    LD_BYTES >> 8, 0x76};
+  for (size_t index = 0; index < sizeof program; index++) {
+    spectrum_poke(&spectrum, (uint16_t)(0x8000 + index), program[index]);
+  }
+  spectrum.cpu.pc = 0x8000;
+  spectrum.cpu.sp = 0x7FF0;
+
+  for (long tick = 0; tick < MOST_FRAMES_TO_LOAD * (long)SPECTRUM_TICKS_PER_FRAME; tick++) {
+    spectrum_tick(&spectrum);
+    if (spectrum.cpu.halted) {
+      break;
+    }
+  }
+  if (!spectrum.cpu.halted) {
+    TEST_FAIL("the loader never returned");
+    return;
+  }
+  TEST_CHECK((spectrum.cpu.f & Z80_FLAG_C) != 0); /* the block arrived whole */
+  for (int index = 0; index < 16; index++) {
+    uint8_t want = image[3 + index];
+    uint8_t got = spectrum_peek(&spectrum, (uint16_t)(0x9000 + index));
+    if (got != want) {
+      TEST_FAIL("byte %d of the block loaded as &%02X, not &%02X", index, got, want);
+      return;
+    }
+  }
+}
+
+/* The whole path a person takes: type LOAD "" at the prompt, press PLAY,
+   and let the firmware find a program on the tape and run it. Nothing here
+   reaches into the machine — the header is read by the ROM, the block is
+   loaded by the ROM, and BASIC runs what arrives. */
+static void a_program_loads_off_a_tape_and_runs(void) {
+  if (!power_on()) {
+    return;
+  }
+  /* A header naming a BASIC program that autostarts at line 10, and the
+     program: 10 PRINT "TAPE OK". Both blocks carry the flag and checksum a
+     tape carries. */
+  static uint8_t image[] = {
+      0x13, 0x00, 0x00,                                            /* block, flag: a header */
+      0x00,                                                        /* type 0: a program */
+      't',  'a',  'p',  'e',  ' ', ' ', ' ', ' ', ' ', ' ',        /* its name */
+      0x0F, 0x00,                                                  /* the program is 15 bytes */
+      0x0A, 0x00,                                                  /* autostart at line 10 */
+      0x0F, 0x00,                                                  /* and no variables after it */
+      0x00,                                                        /* checksum, filled in below */
+      0x11, 0x00, 0xFF,                                            /* block, flag: data */
+      0x00, 0x0A, 0x0B, 0x00,                                      /* line 10, eleven bytes of it */
+      0xF5, 0x22, 'T',  'A',  'P', 'E', ' ', 'O', 'K', 0x22, 0x0D, /* PRINT "TAPE OK" */
+      0x00,                                                        /* checksum, filled in below */
+  };
+  /* A block's checksum is every byte of it from the flag onwards, exclusive
+     or'd together, and it is the last byte of the block. */
+  static const size_t header_at = 2, header_checksum_at = 20;
+  static const size_t data_at = 23, data_checksum_at = 39;
+  for (size_t index = header_at; index < header_checksum_at; index++) {
+    image[header_checksum_at] ^= image[index];
+  }
+  for (size_t index = data_at; index < data_checksum_at; index++) {
+    image[data_checksum_at] ^= image[index];
+  }
+
+  static tape_t tape;
+  const char *problem = NULL;
+  tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
+  if (!tape_insert(&tape, image, (uint32_t)sizeof image, &problem)) {
+    TEST_FAIL("the tape was refused: %s", problem);
+    return;
+  }
+  spectrum_insert_tape(&spectrum, &tape);
+
+  run_frames(FRAMES_TO_PROMPT);
+  type_key(SPECTRUM_KEY(6, 3), KEYBOARD_NO_KEY);       /* J, which is LOAD */
+  type_key(SPECTRUM_KEY(5, 0), SPECTRUM_SYMBOL_SHIFT); /* " */
+  type_key(SPECTRUM_KEY(5, 0), SPECTRUM_SYMBOL_SHIFT); /* " again, which the ROM */
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);           /*   only takes if it saw the */
+  tape_play(&tape);                                    /*   first one let go */
+  run_frames(MOST_FRAMES_TO_LOAD);
+
+  char text[ULA_ROWS][ULA_COLUMNS + 1];
+  screen_from_memory(text);
+  /* The ROM prints what it found on the tape, and then the program it
+     started prints for itself. */
+  if (strncmp(text[1], "Program: tape", 13) != 0) {
+    TEST_FAIL("the header line reads |%s|, expected what the ROM found", text[1]);
+    return;
+  }
+  if (strncmp(text[2], "TAPE OK", 7) != 0) {
+    TEST_FAIL("the line under it reads |%s|, expected what the program printed", text[2]);
+    return;
+  }
+  if (strncmp(text[ULA_ROWS - 1], "0 OK, 10:1", 10) != 0) {
+    TEST_FAIL("the report reads |%s|, expected BASIC's after line 10", text[ULA_ROWS - 1]);
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -255,5 +395,7 @@ int main(int argc, char **argv) {
   TEST_RUN(the_screen_reads_the_same_through_the_beam);
   TEST_RUN(basic_does_arithmetic_it_is_typed);
   TEST_RUN(the_keyboard_types_what_is_printed_on_it);
+  TEST_RUN(a_block_loads_through_the_roms_own_loader);
+  TEST_RUN(a_program_loads_off_a_tape_and_runs);
   return TEST_REPORT("spectrum firmware");
 }

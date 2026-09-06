@@ -101,13 +101,17 @@ The screen and the processor share one bank of memory, and the ULA settles that 
 
 A memory access is charged once, at the T-state it begins. An internal T-state that only holds an address is charged like an access of its own, because these ULAs weigh the address and not the request. A port is charged by a rule of its own, at up to four of the T-states of the one access, turning on the port's low bit as well as its address. An interrupt acknowledge is charged nothing, and nothing here can settle whether the chip would: the acknowledge always falls in the top border, where nothing is owed under any rule.
 
-Two things are missing.
+Three things are missing.
 
 **The floating bus is not modelled.** The chip fetches ahead of the beam through a pipeline that this collapses into a single T-state, and that pipeline is exactly what a read of an unattached port observes. Software that steers by it — waiting for the beam to reach a particular place by watching what the bus happens to be carrying — will not find what it is looking for.
 
-**Nothing sounds, and no tape loads.** The speaker bit is stored and never heard, and there is no tape, so the only software that can be put into the machine is a snapshot or a program written into memory from a test.
+**Nothing sounds.** The speaker bit is stored and never heard.
 
-A snapshot it does keep: the 48K `.sna`, read and written. What that format has no room for is where the beam stood, so a machine picked up from one begins its frame again from the top — the same limitation the CPC's snapshots have, for the same reason.
+**No tape with a loader of its own.** The deck plays a `.tap`, which is bytes at the ROM's own timings, so what loads is what the ROM loader loads. A tape that came with its own loader — which most commercial releases did, for speed and to be hard to copy — used timings a `.tap` has no way of writing down, and wants a `.tzx`.
+
+What it does read, it reads properly: the deck plays a block as the edges it was recorded as, and the firmware measures the time between them exactly as it did on hardware. A Spectrum has no motor line, so the tape turns from the moment it starts and the machine cannot stop it — which is why loading was always a race the program had to win.
+
+A snapshot it keeps too: the 48K `.sna`, read and written. What that format has no room for is where the beam stood, so a machine picked up from one begins its frame again from the top — the same limitation the CPC's snapshots have, for the same reason.
 
 Two smaller declarations. Bits 5 and 7 of a keyboard read are held high, which is what an issue 2 board does and not what later ones do — a handful of 1983 titles read those bits without masking and would know the difference. And the colours are chosen rather than measured: the shape of the answer is fixed by the hardware, one line per gun and one more for brightness, but no measurement of what those lines reach was found, so the levels are the ones the field has settled on and a real reading would replace them.
 

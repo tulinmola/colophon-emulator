@@ -18,6 +18,7 @@
 #include "png.h"
 #include "spectrum.h"
 #include "spectrum_snapshot.h"
+#include "tape.h"
 
 /* The 6128's boot screen stops changing at frame 42, measured by counting
    the text's pixels frame by frame; the other two settle sooner. Twice that
@@ -136,10 +137,16 @@ static const size_t machine_count = sizeof machines / sizeof machines[0];
 
 /* Both firmwares scan the keyboard off their 50Hz interrupt, so a key must
    be held for at least one scan to be seen and released for at least one
-   more to be seen let go. Three frames each way is comfortable on either
-   machine and still types nine characters a second of emulated time. */
-#define FRAMES_KEY_HELD 3
-#define FRAMES_KEY_RELEASED 3
+   more to be seen let go. Three frames each way suits a CPC.
+
+   A Spectrum needs the keyboard clear for longer before it will take the
+   same key twice: its ROM keeps a key in KSTATE with a five-frame counter
+   and will not take it again until that has run out. Typing `""` proves it
+   — one quote arrives with three frames of release and two with six. */
+#define FRAMES_KEY_HELD_CPC 3
+#define FRAMES_KEY_RELEASED_CPC 3
+#define FRAMES_KEY_HELD_SPECTRUM 3
+#define FRAMES_KEY_RELEASED_SPECTRUM 6
 
 typedef struct {
   const machine_t *machine;
@@ -147,6 +154,7 @@ typedef struct {
   const char *screenshot_path;
   const char *writes_path;
   const char *snapshot_path;  /* one to load, for `run` */
+  const char *tape_path;      /* one to put in the deck */
   const char *save_path;      /* one to write when the frames are done */
   const char *disc_paths[2];  /* images for drives A and B */
   const char *save_disc_path; /* where drive A's disc goes when done */
@@ -179,6 +187,7 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --writes PATH       write a map of memory writes here as a PNG\n");
   fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
   fprintf(out, "                      each machine writes its own; the two share a name\n");
+  fprintf(out, "  --tape PATH         put this TAP image in the deck, playing\n");
   fprintf(out, "  --disc PATH         put this DSK image in drive A\n");
   fprintf(out, "  --disc-b PATH       and this one in drive B\n");
   fprintf(out, "  --save-disc PATH    write drive A's disc here when done\n");
@@ -235,6 +244,8 @@ static bool parse_options(int argc, char **argv, int from, options_t *options) {
       options->text = value;
     } else if (strcmp(argument, "--save") == 0) {
       options->save_path = value;
+    } else if (strcmp(argument, "--tape") == 0) {
+      options->tape_path = value;
     } else if (strcmp(argument, "--disc") == 0) {
       options->disc_paths[0] = value;
     } else if (strcmp(argument, "--disc-b") == 0) {
@@ -536,9 +547,9 @@ static void cpc_press_and_release(cpc_t *cpc, keyboard_key key, bool shifted) {
     keyboard_press(&cpc->keyboard, CPC_SHIFT);
   }
   keyboard_press(&cpc->keyboard, key);
-  cpc_run_frames(cpc, FRAMES_KEY_HELD);
+  cpc_run_frames(cpc, FRAMES_KEY_HELD_CPC);
   keyboard_release_all(&cpc->keyboard);
-  cpc_run_frames(cpc, FRAMES_KEY_RELEASED);
+  cpc_run_frames(cpc, FRAMES_KEY_RELEASED_CPC);
 }
 
 /* Type text, taking the escapes the usage message lists. Returns false
@@ -620,9 +631,9 @@ static void spectrum_press_and_release(spectrum_t *spectrum, keyboard_key key,
     keyboard_press(&spectrum->keyboard, SPECTRUM_SYMBOL_SHIFT);
   }
   keyboard_press(&spectrum->keyboard, key);
-  spectrum_run_frames(spectrum, FRAMES_KEY_HELD);
+  spectrum_run_frames(spectrum, FRAMES_KEY_HELD_SPECTRUM);
   keyboard_release_all(&spectrum->keyboard);
-  spectrum_run_frames(spectrum, FRAMES_KEY_RELEASED);
+  spectrum_run_frames(spectrum, FRAMES_KEY_RELEASED_SPECTRUM);
 }
 
 static bool spectrum_type_text(spectrum_t *spectrum, const char *text) {
@@ -719,6 +730,29 @@ static int run_spectrum(const options_t *options) {
   spectrum_connect_monitor(spectrum, framebuffer);
 
   int status = 0;
+  tape_t tape;
+  uint8_t *tape_image = NULL;
+  if (options->tape_path != NULL) {
+    size_t size = 0;
+    tape_image = read_file(options->tape_path, &size);
+    const char *problem = NULL;
+    tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
+    if (tape_image == NULL) {
+      status = 1;
+    } else if (!tape_insert(&tape, tape_image, (uint32_t)size, &problem)) {
+      fprintf(stderr, "%s %s\n", options->tape_path, problem);
+      status = 1;
+    } else {
+      spectrum_insert_tape(spectrum, &tape);
+    }
+  }
+  if (status != 0) {
+    free(tape_image);
+    free(spectrum);
+    free(framebuffer);
+    free(ram);
+    return status;
+  }
   if (options->snapshot_path != NULL) {
     size_t size = 0;
     uint8_t *contents = read_file(options->snapshot_path, &size);
@@ -739,6 +773,13 @@ static int run_spectrum(const options_t *options) {
   if (status == 0 && options->text != NULL && !spectrum_type_text(spectrum, options->text)) {
     status = 1;
   }
+  /* PLAY is pressed here and not when the tape went in, because a header's
+     pilot runs for five seconds and the machine spends longer than that
+     booting and being typed at. A tape started at power-on has played its
+     pilot out before anything asks for it. */
+  if (status == 0) {
+    tape_play(&tape);
+  }
   if (status == 0) {
     spectrum_run_frames(spectrum, options->frames_after);
   }
@@ -752,6 +793,7 @@ static int run_spectrum(const options_t *options) {
     status = write_screenshot(options, framebuffer);
   }
 
+  free(tape_image);
   free(spectrum);
   free(framebuffer);
   free(ram);
@@ -760,7 +802,20 @@ static int run_spectrum(const options_t *options) {
 
 /* One machine per kind, each with its own run: they share the options, the
    rendering and the file handling, and nothing else. */
+/* The cassette is on the board — a socket on the 6128 and 664, a deck built
+   into the 464 — and nothing is wired to it here. */
+static bool cpc_refuses(const options_t *options) {
+  if (options->tape_path != NULL) {
+    fprintf(stderr, "%s does not do --tape yet\n", options->machine->name);
+    return true;
+  }
+  return false;
+}
+
 static int run_cpc(const options_t *options) {
+  if (cpc_refuses(options)) {
+    return 1;
+  }
   if (options->save_disc_path != NULL && options->disc_paths[0] == NULL) {
     fprintf(stderr, "--save-disc needs a disc in drive A to write\n");
     return 1;

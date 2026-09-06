@@ -62,6 +62,7 @@
 
 #include "keyboard.h"
 #include "monitor.h"
+#include "tape.h"
 #include "ula.h"
 #include "z80.h"
 
@@ -71,6 +72,10 @@
 #define SPECTRUM_FRAMEBUFFER_WIDTH (ULA_TICKS_PER_LINE * ULA_SAMPLES_PER_TICK)
 #define SPECTRUM_FRAMEBUFFER_HEIGHT ULA_LINES_PER_FRAME
 #define SPECTRUM_TICKS_PER_FRAME ULA_TICKS_PER_FRAME
+
+/* The board's clock is 3.5MHz — the one thing a deck has to be told about
+   the machine it is wired to. Where it comes from is in ula.h. */
+#define SPECTRUM_TICKS_PER_MILLISECOND 3500
 
 /* Half of the line's own sync, which is where the middle of that pulse lands
    once the beam is timed from it. */
@@ -138,11 +143,15 @@ typedef struct {
      the access begins and spent a bit a tick. */
   uint8_t port_charges_left;
 
-  /* What the EAR socket presents on bit 6 of a read. Nothing drives it
-     here; on hardware it also hears bit 4 of the last write through the
-     board's own resistors, by a route that differs between issues and is
-     not modelled. */
+  /* What the EAR socket hears with no tape in the deck; a loaded one drives
+     the socket instead. On hardware it also hears bit 4 of the last write
+     through the board's own resistors, by a route that differs between
+     issues and is not modelled. */
   bool ear;
+
+  /* The deck, host-owned as a disc is, and NULL when there is none. Nothing
+     on this board reaches it: a Spectrum has no motor line. */
+  tape_t *tape;
 
   /* Host-provided storage; the core allocates nothing. */
   const uint8_t *rom; /* SPECTRUM_ROM_SIZE, answering from 0x0000 */
@@ -166,6 +175,9 @@ void spectrum_init(spectrum_t *spectrum, uint8_t *ram, uint32_t ram_size, const 
  * eight lines of the framebuffer carry the blanking. */
 void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer);
 #define SPECTRUM_PICTURE_SHIFT ULA_VSYNC_LINES
+
+/* Put a tape in the deck, or take it out with NULL. */
+void spectrum_insert_tape(spectrum_t *spectrum, tape_t *tape);
 
 /* Advance the machine one T-state. The ULA runs every time; the processor
  * runs unless the ULA is holding its clock, and a held tick returns the

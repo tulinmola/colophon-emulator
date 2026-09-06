@@ -46,6 +46,7 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 | `--wait N` | Frames to run after typing, for a machine that has been given something to do. The default is 0. |
 | `--sixty-hz` | A CPC's. Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |
+| `--tape PATH` | A Spectrum's. Put this TAP image in the deck. The tape turns from the moment it goes in, because a Spectrum has no motor line to stop it with. |
 | `--writes PATH` | A CPC's. Write a map of memory writes here as a PNG. |
 | `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
 | `--disc PATH` | A CPC's. Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
@@ -56,19 +57,21 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 
 `emulator --help` prints the same list, and is the copy that cannot fall behind the code.
 
-The five options marked a CPC's are refused on a Spectrum rather than ignored, and the machine says which one it will not do.
+An option marked a CPC's is refused on a Spectrum rather than ignored, and `--tape` is refused on a CPC the same way; the machine says which one it will not do.
 
 `--type` takes five escapes on a CPC: `\n` for Return, `\t` for Tab, `\e` for Escape, `\b` for Del, and `\\` for a backslash itself. A Spectrum has keys for none of the middle three and takes `\n` and `\\` alone. A character the machine's keyboard cannot produce is refused rather than dropped.
 
 A disc is read whole into memory, with room after it for every track to be formatted once more, and the medium borrows the buffer for the run. What the machine writes lands in that copy, and reaches a file only through `--save-disc`; the image named by `--disc` is never touched.
 
-Typing is done by holding keys down, not by injecting characters. The firmware scans the keyboard once a frame off the 50Hz tick, so a key must be held for at least one scan to be seen and released for at least one more to be seen let go — which works out at nine characters a second of emulated time, and means what reaches BASIC went through the matrix, the 8255 and the sound chip exactly as a typist's keystroke would.
+Typing is done by holding keys down, not by injecting characters. The firmware scans the keyboard once a frame off the 50Hz tick, so a key must be held for at least one scan to be seen and released for at least one more to be seen let go — which means what reaches BASIC went through the matrix exactly as a typist's keystroke would — by way of a CPC's 8255 and sound chip, or straight off a Spectrum's address lines. A CPC takes three frames each way, or nine characters a second of emulated time; a Spectrum wants six frames of release.
 
 ## Why those frame counts
 
 The 6128's boot screen stops changing at frame 42, measured by counting the text's pixels frame by frame; the other two CPCs settle sooner. The default is twice that, which costs a fraction of a second and leaves room for a machine that dawdles.
 
 Wait states moved that number only from 39. The firmware's boot waits on the 300Hz ticker far more than it computes, so a processor a quarter slower barely shows — which is worth knowing before treating a successful boot as evidence about timing. It is not.
+
+A Spectrum also wants the keyboard clear for longer than a CPC before it will take the same key twice — six frames of release rather than three, because its ROM holds a key for five before letting it be pressed again, measured by typing `""` and counting the quotes that arrive.
 
 A Spectrum shows its copyright message by frame 50 and its cursor by 65, but takes no keystroke until 85 — measured by typing `p2+2` one frame later each time and reading the answer back off the screen. Before that the first key is dropped and the rest arrive as nonsense, which is the failure a screenshot alone will not show. Its default of 128 is half again as long as the number that works.
 

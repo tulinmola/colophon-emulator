@@ -5,7 +5,8 @@ BUILD = build
 Z80_C = src/z80.c
 MONITOR_C = src/monitor.c
 KEYBOARD_C = src/keyboard.c
-SHARED_C = $(Z80_C) $(MONITOR_C) $(KEYBOARD_C)
+TAPE_C = src/tape.c
+SHARED_C = $(Z80_C) $(MONITOR_C) $(KEYBOARD_C) $(TAPE_C)
 
 CRTC_C = src/crtc.c
 GATE_ARRAY_C = src/gate_array.c
@@ -39,6 +40,7 @@ MONITOR_TEST_C = test/monitor_test.c
 PPI_TEST_C = test/ppi_test.c
 PSG_TEST_C = test/psg_test.c
 KEYBOARD_TEST_C = test/keyboard_test.c
+TAPE_TEST_C = test/tape_test.c
 ULA_TEST_C = test/ula_test.c
 FLOPPY_TEST_C = test/floppy_test.c
 DRIVE_TEST_C = test/drive_test.c
@@ -70,7 +72,7 @@ EXERCISER_GROUPS ?= 12
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
@@ -105,6 +107,10 @@ $(BUILD)/psg_test: $(PSG_C) $(PSG_TEST_C) $(HEADERS)
 $(BUILD)/keyboard_test: $(KEYBOARD_C) $(KEYBOARD_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(KEYBOARD_C) $(KEYBOARD_TEST_C) -o $@
+
+$(BUILD)/tape_test: $(TAPE_C) $(TAPE_TEST_C) $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Itest $(TAPE_C) $(TAPE_TEST_C) -o $@
 
 $(BUILD)/ula_test: $(ULA_C) $(ULA_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
@@ -163,7 +169,7 @@ $(BUILD)/z80_exerciser_test: $(Z80_C) $(Z80_EXERCISER_C) $(HEADERS)
 	$(CC) $(CFLAGS) -Isrc -Itest $(Z80_C) $(Z80_EXERCISER_C) -o $@
 
 # The fast tier: hermetic, no network, runs on every change.
-test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test
+test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test
 	@$(BUILD)/z80_test
 	@$(BUILD)/crtc_test
 	@$(BUILD)/gate_array_test
@@ -171,6 +177,7 @@ test: $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/mon
 	@$(BUILD)/ppi_test
 	@$(BUILD)/psg_test
 	@$(BUILD)/keyboard_test
+	@$(BUILD)/tape_test
 	@$(BUILD)/ula_test
 	@$(BUILD)/spectrum_test
 	@$(BUILD)/spectrum_snapshot_test
