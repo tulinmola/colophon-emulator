@@ -96,6 +96,30 @@ static void a_half_done_instruction_cannot_be_saved(void) {
   TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
 }
 
+/* The format has nowhere to put a hold in progress, so a machine given a
+   snapshot stops serving whatever the machine it replaced was serving. */
+static void a_hold_does_not_survive_a_load(void) {
+  power_on(&saved, saved_ram, SPECTRUM_RAM_48K);
+  run_to_the_wait_loop(&saved, 3);
+  const char *problem = NULL;
+  TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+
+  /* Stand the other machine in the middle of a charged access first. */
+  power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
+  rom[0x0100] = 0x34; /* INC (HL), with HL in the screen */
+  restored.cpu.pc = 0x0100;
+  restored.cpu.h = 0x40;
+  restored.cpu.l = 0x00;
+  ula_seek(&restored.ula, 14331);
+  for (int guard = 0; guard < SPECTRUM_TICKS_PER_FRAME && restored.held_ticks == 0; guard++) {
+    spectrum_tick(&restored);
+  }
+  TEST_CHECK(restored.held_ticks > 0);
+
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_EQUAL(restored.held_ticks, 0);
+}
+
 static void a_machine_survives_the_round_trip(void) {
   power_on(&saved, saved_ram, SPECTRUM_RAM_48K);
   run_to_the_wait_loop(&saved, 3);
@@ -321,6 +345,7 @@ int main(void) {
   TEST_RUN(the_border_byte_cannot_drive_the_speaker);
   TEST_RUN(a_half_done_instruction_cannot_be_saved);
   TEST_RUN(a_machine_survives_the_round_trip);
+  TEST_RUN(a_hold_does_not_survive_a_load);
   TEST_RUN(a_restored_machine_goes_on_running_from_a_fresh_frame);
   TEST_RUN(the_program_counter_costs_two_bytes_of_the_snapshot);
   TEST_RUN(a_stack_at_the_bottom_of_memory_cannot_be_written);

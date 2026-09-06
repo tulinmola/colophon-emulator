@@ -3,9 +3,23 @@
  *
  * The board's own decisions are what is under test: what answers where in
  * memory, which ports reach the ULA, how the keyboard hangs off the address
- * lines, and that the ULA's interrupt reaches the processor. The firmware is
- * not involved; the programs are a few bytes each, put in the ROM the
- * processor resets into.
+ * lines, that the ULA's interrupt reaches the processor, and what the chip
+ * charges the processor for the bus. The firmware is not involved; the
+ * programs are a few bytes each, put in the ROM.
+ *
+ * The T-state counts at the end are the published ones, transcribed from the
+ * pattern given for each opcode and from the four rows given for a port —
+ * neither worked out from anything here.
+ *
+ * Sources:
+ * - "Contended memory" (Sinclair Wiki),
+ *   https://sinclair.wiki.zxnet.co.uk/wiki/Contended%20memory — the delay
+ *   owed at each T-state of a frame, and the instruction breakdown table,
+ *   which gives every opcode as the addresses it puts on the bus and how
+ *   long each stands there.
+ * - "Contended I/O" (Sinclair Wiki),
+ *   https://sinclair.wiki.zxnet.co.uk/wiki/Contended%20I/O — the four rows
+ *   by which a port access is charged.
  */
 #include <string.h>
 
@@ -358,6 +372,165 @@ static void every_legend_is_where_the_key_is_printed(void) {
   }
 }
 
+/* Somewhere with room around it, for the programs whose timing is under
+   test rather than their result. */
+#define PROGRAM_ADDRESS 0x0100
+/* Longer than any instruction and every charge a line of the picture can put
+   on it, so a program that never finishes is caught rather than hung on. */
+#define MAX_TSTATES 400
+
+/* T-states from the start of one opcode fetch to the start of the next.
+   That is what the published patterns measure: a hold an instruction earns
+   at its last T-state falls before the next fetch, not inside itself. */
+static int tstates_at(uint16_t address, uint32_t frame_tick) {
+  spectrum.cpu.pc = address;
+  ula_seek(&spectrum.ula, frame_tick);
+  int tstates = 0;
+  do {
+    spectrum_tick(&spectrum);
+    tstates++;
+  } while ((!z80_instruction_complete(&spectrum.cpu) || spectrum.held_ticks > 0) &&
+           tstates < MAX_TSTATES);
+  return tstates;
+}
+
+/* The same, with the program in the ROM, which the ULA never wants — so the
+   only charges are the ones its operands earn. */
+static int tstates_for(const uint8_t *program, size_t length, uint32_t frame_tick) {
+  put_at(PROGRAM_ADDRESS, program, length);
+  return tstates_at(PROGRAM_ADDRESS, frame_tick);
+}
+
+/* The published pattern for each of these is in the comment beside it, in
+   the notation "Contended memory" uses: an address and how many T-states are
+   spent with it on the bus. A charge falls at the head of each, and only
+   where the address is one the ULA wants. */
+static void an_uncontended_instruction_takes_its_book_time(void) {
+  power_on(SPECTRUM_RAM_48K);
+  const uint8_t nop[] = {0x00};
+  TEST_EQUAL(tstates_for(nop, sizeof nop, 0), 4);     /* pc:4 */
+  TEST_EQUAL(tstates_for(nop, sizeof nop, 14335), 4); /* even in the slot */
+}
+
+/* Every row of the published table opens with pc:4, and for a program in the
+   screen's own bank that is where most of what it pays comes from. */
+static void an_opcode_fetch_is_charged_where_the_program_lies(void) {
+  power_on(SPECTRUM_RAM_48K);
+  const uint16_t in_the_screen = SPECTRUM_RAM_BASE;
+  ram[in_the_screen - SPECTRUM_RAM_BASE] = 0x00; /* NOP — pc:4 and nothing more */
+  TEST_EQUAL(tstates_at(in_the_screen, 14335), 4 + 6);
+  TEST_EQUAL(tstates_at(in_the_screen, 14336), 4 + 5);
+  TEST_EQUAL(tstates_at(in_the_screen, 14341), 4);
+  TEST_EQUAL(tstates_at(in_the_screen, 14342), 4);
+  TEST_EQUAL(tstates_at(in_the_screen, 14343), 4 + 6);
+  TEST_EQUAL(tstates_at(in_the_screen, 0), 4);
+}
+
+static void a_read_of_the_screens_memory_waits_for_the_slot(void) {
+  power_on(SPECTRUM_RAM_48K);
+  const uint8_t load[] = {0x7E}; /* LD A,(HL) — pc:4,hl:3 */
+  spectrum.cpu.h = 0x40;
+  spectrum.cpu.l = 0x00;
+
+  /* The fetch is four T-states, so the read falls on 14335 when the
+     instruction starts on 14331, and the chip owes six there. */
+  TEST_EQUAL(tstates_for(load, sizeof load, 14331), 7 + 6);
+  TEST_EQUAL(tstates_for(load, sizeof load, 14332), 7 + 5);
+  TEST_EQUAL(tstates_for(load, sizeof load, 14337), 7); /* the two it owes nothing */
+  TEST_EQUAL(tstates_for(load, sizeof load, 14338), 7);
+  TEST_EQUAL(tstates_for(load, sizeof load, 14339), 7 + 6); /* and the slot begins again */
+  TEST_EQUAL(tstates_for(load, sizeof load, 0), 7);         /* off the picture, nothing */
+}
+
+static void a_read_of_memory_the_ula_does_not_want_is_never_charged(void) {
+  power_on(SPECTRUM_RAM_48K);
+  const uint8_t load[] = {0x7E}; /* LD A,(HL) with HL above the ULA's reach */
+  spectrum.cpu.h = 0x80;
+  spectrum.cpu.l = 0x00;
+  for (uint32_t at = 14331; at < 14331 + 8; at++) {
+    TEST_EQUAL(tstates_for(load, sizeof load, at), 7);
+  }
+}
+
+/* The 16K and 48K ULAs charge for the bus whether or not a request is on it,
+   so an instruction that holds an address between two accesses pays for the
+   T-state in between as well. */
+static void an_internal_tstate_is_charged_like_an_access(void) {
+  power_on(SPECTRUM_RAM_48K);
+  const uint8_t increment[] = {0x34}; /* INC (HL) — pc:4,hl:3,hl:1,hl(write):3 */
+  spectrum.cpu.h = 0x40;
+  spectrum.cpu.l = 0x00;
+  /* Eleven T-states of book time; the read falls on 14335 and is charged
+     six, the internal T-state on 14344 and is charged five, and the write on
+     14350, where the chip owes nothing. */
+  TEST_EQUAL(tstates_for(increment, sizeof increment, 14331), 11 + 6 + 5);
+}
+
+static void a_push_is_charged_for_both_halves_of_the_address(void) {
+  power_on(SPECTRUM_RAM_48K);
+  const uint8_t push[] = {0xC5}; /* PUSH BC — pc:4,ir:1,sp-1:3,sp-2:3 */
+  spectrum.cpu.sp = 0x8000;      /* so the two writes land on 0x7FFF and 0x7FFE */
+  /* The refresh address is in the ROM and costs nothing; the writes fall on
+     14336 and 14344, and the chip owes five at each. */
+  TEST_EQUAL(tstates_for(push, sizeof push, 14331), 11 + 5 + 5);
+}
+
+/* A machine is not settled the moment the processor is between instructions:
+   an instruction whose last T-state is itself charged leaves the clock
+   stopped past its end, and a snapshot taken there would lose the rest. */
+static void a_hold_the_last_tstate_earned_outlives_the_instruction(void) {
+  power_on(SPECTRUM_RAM_48K);
+  const uint8_t block[] = {0xED, 0xA0}; /* LDI — pc:4,pc+1:4,hl:3,de:3,de:1 x2 */
+  spectrum.cpu.h = 0x80;                /* reading from outside the screen */
+  spectrum.cpu.d = 0x40;                /* and writing into it */
+  put_at(PROGRAM_ADDRESS, block, sizeof block);
+  spectrum.cpu.pc = PROGRAM_ADDRESS;
+  ula_seek(&spectrum.ula, 14320);
+  do {
+    spectrum_tick(&spectrum);
+  } while (!z80_instruction_complete(&spectrum.cpu));
+  /* The last of the two internal T-states landed on 14335, and the chip owes
+     six there — after the instruction the processor has finished. */
+  TEST_EQUAL(spectrum.held_ticks, 6);
+  spectrum_finish_instruction(&spectrum);
+  TEST_EQUAL(spectrum.held_ticks, 0);
+  TEST_EQUAL(spectrum.ula.frame_tick, 14320 + 22);
+}
+
+/* A port is charged by two rules at once, in the four combinations below. */
+static void a_port_is_charged_by_its_low_bit_and_its_high_byte(void) {
+  power_on(SPECTRUM_RAM_48K);
+  /* Reading into A rather than B, so that the port in BC survives the
+     instruction that used it. */
+  const uint8_t in[] = {0xED, 0x78}; /* IN A,(C) — pc:4,pc+1:4,I/O */
+
+  /* Three starts, at which the access itself falls on the head of a slot,
+     one T-state into it, and on the last of the two the chip leaves alone. */
+  spectrum.cpu.b = 0x00; /* not contended memory, the ULA's port: N:1, C:3 */
+  spectrum.cpu.c = 0xFE;
+  TEST_EQUAL(tstates_for(in, sizeof in, 14331), 12 + 1);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14334), 12 + 6);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14335), 12 + 5);
+
+  spectrum.cpu.b = 0x40; /* contended memory and the ULA's port: C:1, C:3 */
+  spectrum.cpu.c = 0xFE;
+  TEST_EQUAL(tstates_for(in, sizeof in, 14331), 12 + 2);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14334), 12 + 6);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14335), 12 + 6);
+
+  spectrum.cpu.b = 0x40; /* contended memory, not the ULA's port: C:1 four times */
+  spectrum.cpu.c = 0xFF;
+  TEST_EQUAL(tstates_for(in, sizeof in, 14331), 12 + 8);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14334), 12 + 12);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14335), 12 + 12);
+
+  spectrum.cpu.b = 0x00; /* neither: N:4, and nothing is owed anywhere */
+  spectrum.cpu.c = 0xFF;
+  TEST_EQUAL(tstates_for(in, sizeof in, 14331), 12);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14334), 12);
+  TEST_EQUAL(tstates_for(in, sizeof in, 14335), 12);
+}
+
 int main(void) {
   TEST_RUN(reset_fetches_from_the_rom);
   TEST_RUN(ram_answers_from_4000_and_the_rom_refuses_writes);
@@ -374,5 +547,13 @@ int main(void) {
   TEST_RUN(every_legend_is_where_the_key_is_printed);
   TEST_RUN(the_border_reaches_the_framebuffer);
   TEST_RUN(the_picture_lands_where_the_frame_sync_leaves_it);
+  TEST_RUN(an_uncontended_instruction_takes_its_book_time);
+  TEST_RUN(an_opcode_fetch_is_charged_where_the_program_lies);
+  TEST_RUN(a_read_of_the_screens_memory_waits_for_the_slot);
+  TEST_RUN(a_read_of_memory_the_ula_does_not_want_is_never_charged);
+  TEST_RUN(an_internal_tstate_is_charged_like_an_access);
+  TEST_RUN(a_push_is_charged_for_both_halves_of_the_address);
+  TEST_RUN(a_hold_the_last_tstate_earned_outlives_the_instruction);
+  TEST_RUN(a_port_is_charged_by_its_low_bit_and_its_high_byte);
   return TEST_REPORT("spectrum");
 }

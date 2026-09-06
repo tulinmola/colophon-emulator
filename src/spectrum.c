@@ -1,5 +1,6 @@
 /*
- * spectrum.c — the machine wiring: memory map and I/O decode.
+ * spectrum.c — the machine wiring: the memory map, the I/O decode, and the
+ * clock the ULA stops.
  */
 #include "spectrum.h"
 
@@ -64,12 +65,14 @@ static uint8_t read_keyboard(const spectrum_t *spectrum, uint16_t port) {
 }
 
 /* The ULA is the only thing fitted, and it answers every port with A0 low. */
+static bool ula_answers(uint16_t port) { return (port & 0x0001) == 0; }
+
 static uint8_t io_read(const spectrum_t *spectrum, uint16_t port) {
-  return (port & 0x0001) ? FLOATING : read_keyboard(spectrum, port);
+  return ula_answers(port) ? read_keyboard(spectrum, port) : FLOATING;
 }
 
 static void io_write(spectrum_t *spectrum, uint16_t port, uint8_t data) {
-  if ((port & 0x0001) == 0) {
+  if (ula_answers(port)) {
     ula_write(&spectrum->ula, data);
   }
 }
@@ -89,7 +92,45 @@ void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer) {
                SPECTRUM_FRAMEBUFFER_HEIGHT, SPECTRUM_FRAME_SYNC_SAMPLES, SPECTRUM_LINE_SYNC_CENTRE);
 }
 
-uint64_t spectrum_tick(spectrum_t *spectrum) {
+/* The addresses the ULA takes the bus for are the ones its address lines
+   reach, which on a 16K machine is all the RAM there is. */
+static bool in_contended_memory(uint16_t address) {
+  return address >= SPECTRUM_RAM_BASE && address < SPECTRUM_RAM_BASE + SPECTRUM_RAM_16K;
+}
+
+/* The four rows of the port table, decided by the address's high byte and by
+   A0 ("Contended I/O"). A high byte that looks like contended memory charges
+   the first T-state of the access; the ULA's own port charges the second; a
+   port that looks like contended memory and is not the ULA's is charged at
+   all four; a port that is neither is charged nothing. Each charge is
+   weighed where the ones before it have left the beam.
+
+   The processor is held for the sum rather than between the charges, which
+   is the same to the program: the access takes as long and the instruction
+   ends on the same T-state. It is not the same to a device, because the
+   request lands late by whatever the charges after it come to. Only the
+   fourth row is affected, and only a port the ULA does not answer can reach
+   it, so nothing on this board can tell yet. */
+static uint8_t port_contention(uint32_t frame_tick, uint16_t port) {
+  const bool looks_contended = in_contended_memory(port);
+  const bool ula_port = ula_answers(port);
+  const bool charged[] = {looks_contended, looks_contended || ula_port,
+                          looks_contended && !ula_port, looks_contended && !ula_port};
+  uint32_t at = frame_tick;
+  uint8_t owed = 0;
+  for (size_t tstate = 0; tstate < sizeof charged / sizeof charged[0]; tstate++) {
+    if (charged[tstate]) {
+      uint8_t delay = ula_contention(at);
+      owed = (uint8_t)(owed + delay);
+      at += delay;
+    }
+    at++;
+  }
+  return owed;
+}
+
+/* The beam's own work, which the processor's clock has no bearing on. */
+static void paint(spectrum_t *spectrum) {
   uint16_t display_address = 0;
   uint16_t attribute_address = 0;
   uint8_t display = 0;
@@ -101,7 +142,9 @@ uint64_t spectrum_tick(spectrum_t *spectrum) {
   uint8_t samples[ULA_SAMPLES_PER_TICK];
   ula_video(&spectrum->ula, display, attribute, samples);
   monitor_receive(&spectrum->monitor, samples, ULA_SAMPLES_PER_TICK, ula_csync(&spectrum->ula));
+}
 
+static void run_processor(spectrum_t *spectrum) {
   /* The ULA's interrupt line runs to the processor, and is the only thing
      that ever interrupts it. */
   uint64_t bus = spectrum->pins;
@@ -111,6 +154,7 @@ uint64_t spectrum_tick(spectrum_t *spectrum) {
     bus &= ~Z80_INT;
   }
 
+  z80_cycle cycle = z80_next_cycle(&spectrum->cpu);
   uint64_t pins = z80_tick(&spectrum->cpu, bus);
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
     /* Interrupt acknowledge. Nothing drives the bus, so the byte is the
@@ -128,14 +172,54 @@ uint64_t spectrum_tick(spectrum_t *spectrum) {
   }
 
   spectrum->pins = pins;
+
+  /* The address is on the bus now and the beam has not moved, so this is
+     both the address the ULA weighs and the position it weighs it at. */
+  switch (cycle) {
+    /* An access and an internal T-state are charged alike, for the reason
+       the chip charges at all: these ULAs weigh the address and not the
+       request, so a T-state that only holds one costs what one that acts on
+       it costs. */
+    case Z80_CYCLE_MEMORY:
+    case Z80_CYCLE_INTERNAL:
+      spectrum->held_ticks =
+          in_contended_memory(z80_address(pins)) ? ula_contention(spectrum->ula.frame_tick) : 0;
+      break;
+    case Z80_CYCLE_PORT:
+      spectrum->held_ticks = port_contention(spectrum->ula.frame_tick, z80_address(pins));
+      break;
+    /* Neither is charged. An acknowledge is not, and no evidence here can
+       say whether the chip would: its interrupt is held across the first 32
+       T-states of a frame and it wants the bus from 14335, so an acknowledge
+       always falls in the top border, where nothing is owed under any rule —
+       and the two writes that follow it are ordinary writes, which pay like
+       any other. A tick carrying on a cycle already begun is not charged
+       because that cycle was charged when it began. */
+    case Z80_CYCLE_INTERRUPT:
+    case Z80_CYCLE_NONE:
+      break;
+  }
+}
+
+uint64_t spectrum_tick(spectrum_t *spectrum) {
+  paint(spectrum);
+  if (spectrum->held_ticks > 0) {
+    spectrum->held_ticks--;
+  } else {
+    run_processor(spectrum);
+  }
   ula_tick(&spectrum->ula);
-  return pins;
+  return spectrum->pins;
 }
 
 void spectrum_finish_instruction(spectrum_t *spectrum) {
-  /* Longer than the longest instruction, so the loop is bounded whatever
-     state the processor is in. */
-  for (int guard = 0; guard < 256 && !z80_instruction_complete(&spectrum->cpu); guard++) {
+  /* Longer than the longest instruction, the charges it can earn along a
+     line of the picture and an interrupt taken at the end of it, so the loop
+     is bounded whatever state the machine is in. */
+  for (int guard = 0; guard < 256; guard++) {
+    if (z80_instruction_complete(&spectrum->cpu) && spectrum->held_ticks == 0) {
+      return;
+    }
     spectrum_tick(spectrum);
   }
 }

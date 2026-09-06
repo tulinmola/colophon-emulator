@@ -19,9 +19,11 @@
 
 /* The chip wants the bus one T-state before the first byte it displays, and
    keeps wanting it for as long as it is reading the screen: the first
-   contended T-state of a frame is 14335, one before the first displayed one
-   ("Contended memory"). */
-#define CONTENTION_COLUMN (DISPLAY_COLUMN - 1)
+   contended T-state of a frame is 14335, one before the first displayed one,
+   and the pattern runs the 192 lines of the picture out ("Contended
+   memory"). */
+#define FIRST_CONTENDED_TICK (ULA_FIRST_DISPLAY_LINE * ULA_TICKS_PER_LINE - 1)
+#define CONTENDED_RUN_TICKS (ULA_DISPLAY_LINES * ULA_TICKS_PER_LINE)
 
 /* Four T-states to a display byte: eight pixels at two a T-state. */
 #define TICKS_PER_BYTE 4
@@ -104,17 +106,20 @@ bool ula_csync(const ula_t *ula) {
 
 bool ula_interrupt(const ula_t *ula) { return ula->frame_tick < ULA_INTERRUPT_TICKS; }
 
-uint8_t ula_contention(const ula_t *ula) {
+uint8_t ula_contention(uint32_t frame_tick) {
   /* Six T-states owed at the head of the slot, falling to none for the two
-     the chip leaves the CPU ("Contended memory"). */
+     the chip leaves the processor ("Contended memory"). */
   static const uint8_t owed[8] = {6, 5, 4, 3, 2, 1, 0, 0};
-  if (ula->line < ULA_FIRST_DISPLAY_LINE || ula->line >= LAST_DISPLAY_LINE) {
+  uint32_t tick = frame_tick % ULA_TICKS_PER_FRAME;
+  if (tick < FIRST_CONTENDED_TICK) {
     return 0;
   }
-  if (ula->column < CONTENTION_COLUMN || ula->column >= RIGHT_BORDER_COLUMN - 1) {
+  uint32_t since_first = tick - FIRST_CONTENDED_TICK;
+  uint32_t tick_in_line = since_first % ULA_TICKS_PER_LINE;
+  if (since_first >= CONTENDED_RUN_TICKS || tick_in_line >= ULA_DISPLAY_TICKS) {
     return 0;
   }
-  return owed[(ula->column - CONTENTION_COLUMN) % 8];
+  return owed[tick_in_line % 8];
 }
 
 /* The lowest three bits are the border, bit 3 the MIC socket and bit 4 the

@@ -97,9 +97,11 @@ A Spectrum is one chip where a CPC is two. The Ferranti ULA counts out the frame
 
 It boots its firmware, shows the copyright message Sinclair put in it, and answers arithmetic typed at the keyboard. The picture is read back off the beam and not out of the display file, so the serialiser, the composite sync and the tube are all in the path that is checked.
 
-Three things are missing, and the first of them matters more than the other two together.
+The screen and the processor share one bank of memory, and the ULA settles that argument by stopping the processor's clock rather than by asserting a wait line — so a held T-state here is one the processor does not run, while the beam runs on without it. What it costs depends entirely on when: an instruction that reads and writes the screen can take twice as long as the book says, and the same instruction begun a few T-states later costs nothing at all. That is why a Spectrum program's speed is a property of where in the frame it began, and why one that needs its timing to hold waits for the interrupt before it begins.
 
-**Contention is not applied.** The chip works out what a contended access owes — six T-states falling to none across the eight it spends on each pair of bytes — and the machine ignores it. Every access therefore runs at full speed. On this machine that is not a small error: the screen and the processor share one bank of memory, so a program timed against the display, which is most of them, runs faster here than it ever did. The mechanism is not a wait line, either. The ULA takes the bus by stopping the processor's clock, which is why the chip reports a number of T-states rather than driving a pin, and why applying it will mean the machine declining to tick the processor rather than asserting anything.
+A memory access is charged once, at the T-state it begins. An internal T-state that only holds an address is charged like an access of its own, because these ULAs weigh the address and not the request. A port is charged by a rule of its own, at up to four of the T-states of the one access, turning on the port's low bit as well as its address. An interrupt acknowledge is charged nothing, and nothing here can settle whether the chip would: the acknowledge always falls in the top border, where nothing is owed under any rule.
+
+Two things are missing.
 
 **The floating bus is not modelled.** The chip fetches ahead of the beam through a pipeline that this collapses into a single T-state, and that pipeline is exactly what a read of an unattached port observes. Software that steers by it — waiting for the beam to reach a particular place by watching what the bus happens to be carrying — will not find what it is looking for.
 

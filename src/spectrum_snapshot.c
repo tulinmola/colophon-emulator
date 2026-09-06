@@ -60,6 +60,7 @@ bool spectrum_snapshot_load(spectrum_t *spectrum, const uint8_t *bytes, size_t l
 
   z80_t *cpu = &spectrum->cpu;
   z80_init(cpu);
+  spectrum->held_ticks = 0;
   cpu->i = bytes[AT_I];
   cpu->hl_ = read16(bytes, AT_SHADOW_HL);
   cpu->de_ = read16(bytes, AT_SHADOW_DE);

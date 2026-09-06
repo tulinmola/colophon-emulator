@@ -206,44 +206,53 @@ static void the_frame_sync_holds_across_eight_whole_lines(void) {
 }
 
 static void the_first_contended_tstate_of_a_frame_is_14335(void) {
-  ula_init(&ula);
   int first = -1;
   for (int tick = 0; tick < ULA_TICKS_PER_FRAME; tick++) {
-    ula_seek(&ula, (uint32_t)tick);
-    if (ula_contention(&ula) != 0) {
+    if (ula_contention((uint32_t)tick) != 0) {
       first = tick;
       break;
     }
   }
   TEST_EQUAL(first, 14335);
+  TEST_EQUAL(ula_contention(14334), 0);
 }
 
+/* The published table, transcribed: two slots of it at the head of the
+   frame, then the line's last and the next line's first. */
 static void the_slot_owes_six_falling_to_none(void) {
-  ula_init(&ula);
-  const uint8_t want[8] = {6, 5, 4, 3, 2, 1, 0, 0};
-  for (int slot = 0; slot < 8; slot++) {
-    ula_seek(&ula, (uint32_t)(14335 + slot));
-    TEST_EQUAL(ula_contention(&ula), want[slot]);
+  const uint8_t want[16] = {6, 5, 4, 3, 2, 1, 0, 0, 6, 5, 4, 3, 2, 1, 0, 0};
+  for (int tick = 0; tick < 16; tick++) {
+    TEST_EQUAL(ula_contention((uint32_t)(14335 + tick)), want[tick]);
   }
-  /* and it repeats for the whole of the screen the chip is reading */
-  ula_seek(&ula, 14335 + 8);
-  TEST_EQUAL(ula_contention(&ula), 6);
-  ula_seek(&ula, 14335 + 127);
-  TEST_EQUAL(ula_contention(&ula), 0);
+  TEST_EQUAL(ula_contention(14462), 0); /* the line's last contended tstate */
+  TEST_EQUAL(ula_contention(14463), 0); /* then 96 with no delay at all */
+  TEST_EQUAL(ula_contention(14558), 0);
+  TEST_EQUAL(ula_contention(14559), 6); /* and the pattern starts again */
 }
 
-static void nothing_is_owed_off_the_picture(void) {
-  ula_init(&ula);
-  ula_seek(&ula, 14334); /* one before the first */
-  TEST_EQUAL(ula_contention(&ula), 0);
-  ula_seek(&ula, 14335 + 128); /* one past the last */
-  TEST_EQUAL(ula_contention(&ula), 0);
-  ula_seek(&ula, 0); /* the vertical sync */
-  TEST_EQUAL(ula_contention(&ula), 0);
-  put_beam(ULA_FIRST_DISPLAY_LINE - 1, ULA_RETRACE_TICKS + ULA_LEFT_BORDER_TICKS);
-  TEST_EQUAL(ula_contention(&ula), 0); /* the border above the picture */
-  put_beam(ULA_FIRST_DISPLAY_LINE + ULA_DISPLAY_LINES, ULA_RETRACE_TICKS + ULA_LEFT_BORDER_TICKS);
-  TEST_EQUAL(ula_contention(&ula), 0); /* and below it */
+static void the_picture_is_the_only_part_of_the_frame_that_owes(void) {
+  int owing = 0;
+  for (int tick = 0; tick < ULA_TICKS_PER_FRAME; tick++) {
+    if (ula_contention((uint32_t)tick) != 0) {
+      owing++;
+    }
+  }
+  /* Six of every eight, for 128 tstates of each of 192 lines. */
+  TEST_EQUAL(owing, 192 * 128 * 6 / 8);
+
+  TEST_EQUAL(ula_contention(0), 0);     /* the vertical sync */
+  TEST_EQUAL(ula_contention(14112), 0); /* the border above the picture */
+  TEST_EQUAL(ula_contention(57119), 6); /* the last line that owes anything */
+  TEST_EQUAL(ula_contention(57247), 0); /* and nothing after it */
+  TEST_EQUAL(ula_contention(69887), 0); /* down to the frame's last tstate */
+}
+
+/* A caller walking a port's four tstates adds delays to a position and can
+   run off the end of the frame doing it. */
+static void a_tstate_past_the_frame_is_one_in_the_next(void) {
+  TEST_EQUAL(ula_contention(ULA_TICKS_PER_FRAME + 14335), 6);
+  TEST_EQUAL(ula_contention(ULA_TICKS_PER_FRAME + 14336), 5);
+  TEST_EQUAL(ula_contention(ULA_TICKS_PER_FRAME), 0);
 }
 
 static void port_fe_holds_the_border_the_microphone_and_the_speaker(void) {
@@ -278,7 +287,8 @@ int main(void) {
   TEST_RUN(the_frame_sync_holds_across_eight_whole_lines);
   TEST_RUN(the_first_contended_tstate_of_a_frame_is_14335);
   TEST_RUN(the_slot_owes_six_falling_to_none);
-  TEST_RUN(nothing_is_owed_off_the_picture);
+  TEST_RUN(the_picture_is_the_only_part_of_the_frame_that_owes);
+  TEST_RUN(a_tstate_past_the_frame_is_one_in_the_next);
   TEST_RUN(port_fe_holds_the_border_the_microphone_and_the_speaker);
   return TEST_REPORT("ula");
 }

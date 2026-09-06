@@ -20,16 +20,29 @@
  * held cycle is a tick the processor never runs, so no request is ever
  * presented twice and no such guard is needed.
  *
- * Not wired yet: the ULA reports what a contended access owes, and nothing
- * here acts on it. Every access runs at full speed, so a program timed
- * against the screen — which on this machine is most of them — runs faster
- * than it did.
+ * Contention is that same stopped clock, and it is wired here rather than in
+ * the chip because it turns on the memory map. Before each tick the
+ * processor is asked what it is about to begin; if the address it will
+ * present is one the ULA wants, the clock is held for as many T-states as
+ * the chip owes, and the beam runs on without it. A port is contended by a
+ * rule of its own, which turns on the port's low bit as well as its
+ * address.
+ *
+ * Not wired: the floating bus. A port nothing answers reads 0xFF here, where
+ * the hardware gives back whatever the ULA last fetched — which is how a
+ * program with no other clock finds the beam.
  *
  * Sources:
  * - "Contended I/O" (Sinclair Wiki),
  *   https://sinclair.wiki.zxnet.co.uk/wiki/Contended%20I/O — the ULA "pauses
- *   the processor by stopping its clock", which is what the paragraph above
- *   turns on.
+ *   the processor by stopping its clock", which is what the paragraphs above
+ *   turn on.
+ * - "Contended memory" (Sinclair Wiki),
+ *   https://sinclair.wiki.zxnet.co.uk/wiki/Contended%20memory — 0x4000 to
+ *   0x7FFF is the contended range, and the charge falls "on the first tstate
+ *   (T1) of any instruction fetch, memory read or memory write operation",
+ *   with the 16K and 48K ULAs applying it "under all circumstances" and so
+ *   to the internal T-states that hold an address between accesses.
  * - "ZX Spectrum ULA" (Sinclair Wiki),
  *   https://sinclair.wiki.zxnet.co.uk/wiki/ZX%20Spectrum%20ULA — the chip
  *   answers any even port, so the decode is the one address line A0; a read
@@ -116,6 +129,10 @@ typedef struct {
   monitor_t monitor;
   keyboard_t keyboard;
 
+  /* T-states the ULA is holding the processor's clock for. The beam goes on
+     through them; the processor does not. */
+  uint8_t held_ticks;
+
   /* What the EAR socket presents on bit 6 of a read. Nothing drives it
      here; on hardware it also hears bit 4 of the last write through the
      board's own resistors, by a route that differs between issues and is
@@ -145,13 +162,17 @@ void spectrum_init(spectrum_t *spectrum, uint8_t *ram, uint32_t ram_size, const 
 void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer);
 #define SPECTRUM_PICTURE_SHIFT ULA_VSYNC_LINES
 
-/* Advance the machine one T-state: the processor and the ULA both run every
- * time. Returns the bus for the host to watch. */
+/* Advance the machine one T-state. The ULA runs every time; the processor
+ * runs unless the ULA is holding its clock, and a held tick returns the
+ * bus the last one left, address and all. Returns that bus for the host to
+ * watch. */
 uint64_t spectrum_tick(spectrum_t *spectrum);
 
-/* Tick until the processor is between instructions. A snapshot has nowhere
- * to record a half-executed one, so anything about to take one owes the
- * machine this call first. */
+/* Tick until the processor is between instructions and owes the ULA nothing.
+ * A snapshot has nowhere to record a half-executed instruction, nor a hold
+ * still to be served — an instruction whose last T-state was a charged one
+ * leaves the clock stopped past its end — so anything about to take one owes
+ * the machine this call first. */
 void spectrum_finish_instruction(spectrum_t *spectrum);
 
 /* The processor's view without the processor: a peek under the ROM sees the

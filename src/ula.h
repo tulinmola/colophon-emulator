@@ -137,15 +137,17 @@ bool ula_csync(const ula_t *ula);
 /* The interrupt line, held for the first ULA_INTERRUPT_TICKS of a frame. */
 bool ula_interrupt(const ula_t *ula);
 
-/* T-states the chip would keep the bus from a contended memory access
- * beginning now; zero when it does not want the bus. The machine decides
- * what to do with them: this chip takes the bus by holding the CPU's clock,
- * which is not something a wait line can express.
+/* T-states the chip would keep the bus from an access beginning at this
+ * point in the frame; zero when it does not want the bus. Nothing else bears
+ * on it: the screen is always in the same place and always read, so the
+ * whole of contention is a function of where in the frame the access falls.
+ * Ticks past the end of a frame wrap into the next.
  *
- * A port access is contended by a different rule, which turns on the port's
- * low bit and on whether its high byte looks like contended memory. That
- * rule is not here. */
-uint8_t ula_contention(const ula_t *ula);
+ * What to do with the answer is the machine's. This chip takes the bus by
+ * holding the processor's clock, which is not something a wait line can
+ * express; and it is the machine that knows which addresses are contended,
+ * and that a port is contended by a rule of its own. */
+uint8_t ula_contention(uint32_t frame_tick);
 
 /* One command byte, as written to any port with A0 low. */
 void ula_write(ula_t *ula, uint8_t data);
