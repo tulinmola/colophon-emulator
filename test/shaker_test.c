@@ -922,7 +922,9 @@ static bool appears_in_previous_screen(const char *line) {
    WRONG can be lost to a bad read where the brackets survive, and a
    half-read failure must never be counted as agreement. */
 static int collect_verdicts(void) {
-  int added = 0;
+  /* What this screen carries, in the order Shaker wrote it. */
+  verdict standing[ROWS];
+  int standing_count = 0;
   for (int row = 0; row < ROWS; row++) {
     char line[COLUMNS + 1];
     const char *from = screen[row];
@@ -950,13 +952,32 @@ static int collect_verdicts(void) {
     if (!appears_in_previous_screen(line)) {
       continue;
     }
-    bool known = false;
-    for (int index = 0; index < verdict_count; index++) {
-      if (strcmp(verdicts[index].text, line) == 0) {
-        known = true;
+    memcpy(standing[standing_count].text, line, strlen(line) + 1);
+    standing[standing_count].failed = failed;
+    standing_count++;
+  }
+
+  /* Two of a group's tests can agree in the same words, and the record owes
+     both a line — module E's (6) prints eleven and two of them read the
+     same the day the machine gets them right. So a line counts as held not
+     when the record holds one like it, but when it holds as many as this
+     screen shows down to here. Shaker writes its verdicts downward, so that
+     count is an identity where the text alone is not. */
+  int added = 0;
+  for (int index = 0; index < standing_count; index++) {
+    int shown_here = 0;
+    for (int earlier = 0; earlier <= index; earlier++) {
+      if (strcmp(standing[earlier].text, standing[index].text) == 0) {
+        shown_here++;
       }
     }
-    if (known) {
+    int held = 0;
+    for (int kept = 0; kept < verdict_count; kept++) {
+      if (strcmp(verdicts[kept].text, standing[index].text) == 0) {
+        held++;
+      }
+    }
+    if (held >= shown_here) {
       continue;
     }
     if (verdict_count == MAX_VERDICTS) {
@@ -964,8 +985,7 @@ static int collect_verdicts(void) {
       added++;
       continue;
     }
-    memcpy(verdicts[verdict_count].text, line, strlen(line) + 1);
-    verdicts[verdict_count].failed = failed;
+    verdicts[verdict_count] = standing[index];
     verdict_count++;
     added++;
   }
