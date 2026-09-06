@@ -45,11 +45,12 @@ static void enter_scanline(crtc_t *crtc) {
   if (crtc->last_line) {
     crtc->c9 = 0;
     enter_character_row(crtc, 0);
-  } else if (crtc->in_vertical_adjustment && crtc->c4 != r[4]) {
+  } else if (crtc->c9_against_r5 && crtc->c4 != r[4]) {
     /* The adjustment's own lines. C9 counts against R5 here, and C4 stands
        still because it no longer matches R4 — the line that carried it past
        R4 was the last line, counted the ordinary way (ch. 11.2.2). */
     if (((crtc->c9 + 1) & C9_BITS) == r[5]) {
+      crtc->c9_against_r5 = false;
       crtc->in_vertical_adjustment = false;
       crtc->c9 = 0;
       enter_character_row(crtc, 0);
@@ -119,6 +120,7 @@ static void decide_last_line(crtc_t *crtc) {
 static void begin_vertical_adjustment(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   if (crtc->c0 < 3 && r[5] != 0 && crtc->c4 >= r[4] && crtc->c9 == r[9]) {
+    crtc->c9_against_r5 = true;
     crtc->in_vertical_adjustment = true;
     crtc->last_line = false;
   }

@@ -87,6 +87,12 @@ typedef struct {
      rest of the line, so a register written afterwards cannot take it back
      (ch. 10.3.1.2). */
   bool last_line;
+  /* A last line seen while C0 is 0 or 1 stops C9 being counted against R9
+     and has it counted against R5 instead, and going through C0=2 does not
+     take that back — where it does take back the extra line itself (ch.
+     13.2.4, 13.2.5). The two are one state here and the chip has two, which
+     is why C0=2 cannot yet disarm the one without the other. */
+  bool c9_against_r5;
   bool in_vertical_adjustment;
   /* A chip that has drawn nothing has no character to leave behind, so the
      first tick draws one instead of advancing past one. Zero is the
