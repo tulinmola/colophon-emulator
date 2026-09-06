@@ -13,10 +13,11 @@
 #include <string.h>
 
 #include "cpc.h"
+#include "cpc_snapshot.h"
 #include "dsk.h"
 #include "png.h"
-#include "snapshot.h"
 #include "spectrum.h"
+#include "spectrum_snapshot.h"
 
 /* One machine per name the --machine option accepts. A name earns its place
    here the day the machine behind it boots to its prompt, not before. */
@@ -178,10 +179,12 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --screenshot PATH   write the screen here as a PNG\n");
   fprintf(out, "  --writes PATH       write a map of memory writes here as a PNG\n");
   fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
+  fprintf(out, "                      each machine writes its own; the two share a name\n");
   fprintf(out, "  --disc PATH         put this DSK image in drive A\n");
   fprintf(out, "  --disc-b PATH       and this one in drive B\n");
   fprintf(out, "  --save-disc PATH    write drive A's disc here when done\n");
-  fprintf(out, "                      the six above, and run, are a CPC's alone\n");
+  fprintf(out, "\n");
+  fprintf(out, "  a CPC alone does --writes, --disc, --disc-b, --save-disc and --sixty-hz.\n\n");
   fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
   fprintf(out, "  --no-double         one image line per raster line, squashed\n");
 }
@@ -468,14 +471,14 @@ static bool write_file(const char *path, const uint8_t *contents, size_t size) {
 }
 
 static bool cpc_save_snapshot(const cpc_t *cpc, const char *path) {
-  size_t size = snapshot_size(cpc);
+  size_t size = cpc_snapshot_size(cpc);
   uint8_t *contents = malloc(size);
   if (contents == NULL) {
     fprintf(stderr, "cannot hold a snapshot of %zu bytes\n", size);
     return false;
   }
   const char *problem = NULL;
-  bool ok = snapshot_save(cpc, contents, size, &problem);
+  bool ok = cpc_snapshot_save(cpc, contents, size, &problem);
   if (!ok) {
     fprintf(stderr, "cannot make a snapshot: %s\n", problem);
   } else {
@@ -650,15 +653,13 @@ static bool spectrum_type_text(spectrum_t *spectrum, const char *text) {
   return true;
 }
 
-/* A Spectrum has no disc, no snapshot and no links to solder, so the options
+/* A Spectrum has no disc and no links to solder, so the options
    that reach those are refused rather than quietly ignored. */
 static bool spectrum_refuses(const options_t *options) {
   const struct {
     bool given;
     const char *what;
   } unsupported[] = {
-      {options->snapshot_path != NULL, "run"},
-      {options->save_path != NULL, "--save"},
       {options->writes_path != NULL, "--writes"},
       {options->disc_paths[0] != NULL || options->disc_paths[1] != NULL, "--disc"},
       {options->save_disc_path != NULL, "--save-disc"},
@@ -671,6 +672,28 @@ static bool spectrum_refuses(const options_t *options) {
     }
   }
   return false;
+}
+
+static bool spectrum_save_snapshot(const spectrum_t *spectrum, const char *path) {
+  size_t size = spectrum_snapshot_size(spectrum);
+  if (size == 0) {
+    fprintf(stderr, "no snapshot format describes this machine\n");
+    return false;
+  }
+  uint8_t *contents = malloc(size);
+  if (contents == NULL) {
+    fprintf(stderr, "cannot hold %zu bytes of snapshot\n", size);
+    return false;
+  }
+  const char *problem = NULL;
+  bool ok = spectrum_snapshot_save(spectrum, contents, size, &problem);
+  if (!ok) {
+    fprintf(stderr, "this machine %s\n", problem);
+  } else {
+    ok = write_file(path, contents, size);
+  }
+  free(contents);
+  return ok;
 }
 
 static int run_spectrum(const options_t *options) {
@@ -697,12 +720,34 @@ static int run_spectrum(const options_t *options) {
   spectrum_connect_monitor(spectrum, framebuffer);
 
   int status = 0;
-  spectrum_run_frames(spectrum, options->frames);
-  if (options->text != NULL && !spectrum_type_text(spectrum, options->text)) {
+  if (options->snapshot_path != NULL) {
+    size_t size = 0;
+    uint8_t *contents = read_file(options->snapshot_path, &size);
+    if (contents == NULL) {
+      status = 1;
+    } else {
+      const char *problem = NULL;
+      if (!spectrum_snapshot_load(spectrum, contents, size, &problem)) {
+        fprintf(stderr, "%s %s\n", options->snapshot_path, problem);
+        status = 1;
+      }
+      free(contents);
+    }
+  }
+  if (status == 0) {
+    spectrum_run_frames(spectrum, options->frames);
+  }
+  if (status == 0 && options->text != NULL && !spectrum_type_text(spectrum, options->text)) {
     status = 1;
   }
   if (status == 0) {
     spectrum_run_frames(spectrum, options->frames_after);
+  }
+  if (status == 0 && options->save_path != NULL) {
+    spectrum_finish_instruction(spectrum);
+    if (!spectrum_save_snapshot(spectrum, options->save_path)) {
+      status = 1;
+    }
   }
   if (status == 0) {
     status = write_screenshot(options, framebuffer);
@@ -792,7 +837,7 @@ static int run_cpc(const options_t *options) {
       status = 1;
     } else {
       const char *problem = NULL;
-      if (!snapshot_load(cpc, contents, size, &problem)) {
+      if (!cpc_snapshot_load(cpc, contents, size, &problem)) {
         fprintf(stderr, "%s %s\n", options->snapshot_path, problem);
         status = 1;
       }

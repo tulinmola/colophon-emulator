@@ -103,7 +103,9 @@ Three things are missing, and the first of them matters more than the other two 
 
 **The floating bus is not modelled.** The chip fetches ahead of the beam through a pipeline that this collapses into a single T-state, and that pipeline is exactly what a read of an unattached port observes. Software that steers by it — waiting for the beam to reach a particular place by watching what the bus happens to be carrying — will not find what it is looking for.
 
-**Nothing sounds, and nothing loads.** The speaker bit is stored and never heard. There is no tape and no snapshot, so there is no way to put software into the machine except by writing it into memory from a test.
+**Nothing sounds, and no tape loads.** The speaker bit is stored and never heard, and there is no tape, so the only software that can be put into the machine is a snapshot or a program written into memory from a test.
+
+A snapshot it does keep: the 48K `.sna`, read and written. What that format has no room for is where the beam stood, so a machine picked up from one begins its frame again from the top — the same limitation the CPC's snapshots have, for the same reason.
 
 Two smaller declarations. Bits 5 and 7 of a keyboard read are held high, which is what an issue 2 board does and not what later ones do — a handful of 1983 titles read those bits without masking and would know the difference. And the colours are chosen rather than measured: the shape of the answer is fixed by the hardware, one line per gun and one more for brightness, but no measurement of what those lines reach was found, so the levels are the ones the field has settled on and a real reading would replace them.
 

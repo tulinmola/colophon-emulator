@@ -29,6 +29,8 @@ build/emulator boot --machine cpc6128 --type 'PRINT 2+2\n' --writes heat.png
 build/emulator boot --machine cpc6128 --disc shaker27.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
 build/emulator boot --machine spectrum48 --screenshot sinclair.png
 build/emulator boot --machine spectrum48 --type 'p2+2\n' --wait 10 --screenshot sum.png
+build/emulator boot --machine spectrum48 --save state.sna
+build/emulator run state.sna --machine spectrum48 --screenshot resumed.png
 ```
 
 That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry upwards of two hundred meanings between them, and at the start of a line a letter is a keyword — so `p` is PRINT. `--type` holds keys down; what they mean is the firmware's business.
@@ -45,7 +47,7 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 | `--sixty-hz` | Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |
 | `--writes PATH` | Write a map of memory writes here as a PNG. |
-| `--save PATH` | Write the machine here as an SNA snapshot. |
+| `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
 | `--disc PATH` | Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
 | `--disc-b PATH` | And this one in drive B. |
 | `--save-disc PATH` | Write drive A's disc here when the run is done, in the extended layout. Nothing is ever written back to the image that was given. |
