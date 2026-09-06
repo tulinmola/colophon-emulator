@@ -19,8 +19,12 @@
 #include "spectrum.h"
 #include "spectrum_snapshot.h"
 
-/* One machine per name the --machine option accepts. A name earns its place
-   here the day the machine behind it boots to its prompt, not before. */
+/* The 6128's boot screen stops changing at frame 42, measured by counting
+   the text's pixels frame by frame; the other two settle sooner. Twice that
+   costs a fraction of a second and leaves room for a machine that dawdles.
+   Wait states moved this only from 39: the firmware's boot waits on the
+   300Hz ticker far more than it computes, so a processor a quarter slower
+   barely shows. */
 #define CPC_DEFAULT_FRAMES 78
 
 /* A Spectrum shows its copyright message by frame 50 and its cursor by 65,
@@ -96,6 +100,8 @@ typedef struct {
   .crop_width = SPECTRUM_CROP_WIDTH, .crop_height = SPECTRUM_CROP_HEIGHT, .sample_rgb = ula_rgb,   \
   .default_frames = SPECTRUM_DEFAULT_FRAMES, .double_lines = false
 
+/* One machine per name the --machine option accepts. A name earns its place
+   here the day the machine behind it boots to its prompt, not before. */
 static const machine_t machines[] = {
     {.kind = MACHINE_CPC,
      .name = "cpc6128",
@@ -127,13 +133,6 @@ static const machine_t machines[] = {
      SPECTRUM_RASTER},
 };
 static const size_t machine_count = sizeof machines / sizeof machines[0];
-
-/* The 6128's boot screen stops changing at frame 42, measured by counting
-   the text's pixels frame by frame; the other two settle sooner. Twice that
-   costs a fraction of a second and leaves room for a machine that dawdles.
-   Wait states moved this only from 39: the firmware's boot waits on the
-   300Hz ticker far more than it computes, so a CPU a quarter slower barely
-   shows. */
 
 /* Both firmwares scan the keyboard off their 50Hz interrupt, so a key must
    be held for at least one scan to be seen and released for at least one
@@ -886,7 +885,7 @@ static int run_cpc(const options_t *options) {
     if (pixels == NULL || !png_write(options->writes_path, pixels, width, height)) {
       status = 1;
     } else {
-      printf("%s: cpc_writes %ux%u to %s\n", options->machine->name, width, height,
+      printf("%s: writes %ux%u to %s\n", options->machine->name, width, height,
              options->writes_path);
     }
     free(pixels);
@@ -944,10 +943,13 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   if (options.frames < 0) {
     options.frames = options.machine->default_frames;
   }
-  if (options.machine->kind == MACHINE_SPECTRUM) {
-    return run_spectrum(&options);
+  switch (options.machine->kind) {
+    case MACHINE_CPC:
+      return run_cpc(&options);
+    case MACHINE_SPECTRUM:
+      return run_spectrum(&options);
   }
-  return run_cpc(&options);
+  return 1;
 }
 
 int main(int argc, char **argv) {

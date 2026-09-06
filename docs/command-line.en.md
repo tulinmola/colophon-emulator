@@ -41,40 +41,46 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 | --- | --- |
 | `--machine NAME` | Which machine to build: `cpc6128`, `cpc664`, `cpc464` or `spectrum48`. Required. |
 | `--roms DIRECTORY` | Where the ROM images are. The default is `roms`. |
-| `--frames N` | Frames to run before typing. The default is 78. |
+| `--frames N` | Frames to run before typing. The default is each machine's own: 78 on a CPC, 128 on a Spectrum. |
 | `--type TEXT` | Type this once the machine has booted. Keys are held down, not characters injected, so what arrives is whatever the firmware makes of the keypress — on a Spectrum, where forty keys carry two hundred meanings, `p` at the start of a line is the PRINT keyword and not a letter. |
 | `--wait N` | Frames to run after typing, for a machine that has been given something to do. The default is 0. |
-| `--sixty-hz` | Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
+| `--sixty-hz` | A CPC's. Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |
-| `--writes PATH` | Write a map of memory writes here as a PNG. |
+| `--writes PATH` | A CPC's. Write a map of memory writes here as a PNG. |
 | `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
-| `--disc PATH` | Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
-| `--disc-b PATH` | And this one in drive B. |
-| `--save-disc PATH` | Write drive A's disc here when the run is done, in the extended layout. Nothing is ever written back to the image that was given. |
+| `--disc PATH` | A CPC's. Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
+| `--disc-b PATH` | A CPC's. And this one in drive B. |
+| `--save-disc PATH` | A CPC's. Write drive A's disc here when the run is done, in the extended layout. Nothing is ever written back to the image that was given. |
 | `--full-raster` | The whole beam path instead of the picture: sync, blanking, the border in its entirety, and the corner the flyback never sweeps. |
 | `--no-double` | One image line per raster line, squashed. |
 
 `emulator --help` prints the same list, and is the copy that cannot fall behind the code.
 
-`--type` takes five escapes: `\n` for Return, `\t` for Tab, `\e` for Escape, `\b` for Del, and `\\` for a backslash itself. A character the UK keyboard cannot produce is refused rather than dropped.
+The five options marked a CPC's are refused on a Spectrum rather than ignored, and the machine says which one it will not do.
+
+`--type` takes five escapes on a CPC: `\n` for Return, `\t` for Tab, `\e` for Escape, `\b` for Del, and `\\` for a backslash itself. A Spectrum has keys for none of the middle three and takes `\n` and `\\` alone. A character the machine's keyboard cannot produce is refused rather than dropped.
 
 A disc is read whole into memory, with room after it for every track to be formatted once more, and the medium borrows the buffer for the run. What the machine writes lands in that copy, and reaches a file only through `--save-disc`; the image named by `--disc` is never touched.
 
 Typing is done by holding keys down, not by injecting characters. The firmware scans the keyboard once a frame off the 50Hz tick, so a key must be held for at least one scan to be seen and released for at least one more to be seen let go — which works out at nine characters a second of emulated time, and means what reaches BASIC went through the matrix, the 8255 and the sound chip exactly as a typist's keystroke would.
 
-## Why 78 frames
+## Why those frame counts
 
-The 6128's boot screen stops changing at frame 42, measured by counting the text's pixels frame by frame; the other two machines settle sooner. The default is twice that, which costs a fraction of a second and leaves room for a machine that dawdles.
+The 6128's boot screen stops changing at frame 42, measured by counting the text's pixels frame by frame; the other two CPCs settle sooner. The default is twice that, which costs a fraction of a second and leaves room for a machine that dawdles.
 
 Wait states moved that number only from 39. The firmware's boot waits on the 300Hz ticker far more than it computes, so a processor a quarter slower barely shows — which is worth knowing before treating a successful boot as evidence about timing. It is not.
 
+A Spectrum shows its copyright message by frame 50 and its cursor by 65, but takes no keystroke until 85 — measured by typing `p2+2` one frame later each time and reading the answer back off the screen. Before that the first key is dropped and the rest arrive as nonsense, which is the failure a screenshot alone will not show. Its default of 128 is half again as long as the number that works.
+
 ## The picture
 
-By default the screenshot is the window a monitor shows: 768 by 544, the picture with a border around it and the frame flyback left out, each raster line drawn twice so the image stands at the proportions a screen had. `--no-double` gives the raster its true height instead, 768 by 272. `--full-raster` crops nothing at all: the whole beam path, 1024 samples by 312 lines — doubled to 624 like everything else, unless `--no-double` says otherwise — with the sync, the blanking, and the corner the flyback never sweeps.
+By default the screenshot is the window a monitor shows, cropped to each machine's own: 768 by 544 on a CPC, 352 by 264 on a Spectrum. The picture with a border around it, and the frame flyback left out. A CPC's raster lines are drawn twice so the image stands at the proportions a screen had; a Spectrum's are not, because at two samples to a T-state they already do. `--no-double` gives a CPC's raster its true height instead, 768 by 272. `--full-raster` crops nothing at all — the whole beam path, sync and blanking and the corner the flyback never sweeps: 1024 samples by 312 lines on a CPC, doubled to 624 unless `--no-double` says otherwise, and 448 by 312 on a Spectrum.
 
 The PNGs are uncompressed. The format allows it, and it saves us a compressor to get wrong.
 
 ## The map of writes
+
+This is a CPC's alone, because what it records is read off the 6845.
 
 `--writes` draws every write the machine made, on the screen where the beam put it — the same crop and the same line doubling the screenshot uses, so that the two images lie over one another exactly.
 

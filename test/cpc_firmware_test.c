@@ -1,5 +1,5 @@
 /*
- * firmware_test — boot the real firmware and read the screen back.
+ * cpc_firmware_test — boot the real firmware and read the screen back.
  *
  * The acceptance tier for the machine. Everything here is judged by
  * Locomotive Software and Amstrad rather than by us: the boot screen is
@@ -549,5 +549,5 @@ int main(int argc, char **argv) {
   TEST_RUN(a_shaker_module_runs_off_the_disc);
   TEST_RUN(amsdos_saves_a_file_onto_the_disc);
   TEST_RUN(amsdos_reports_a_missing_disc);
-  return TEST_REPORT("firmware");
+  return TEST_REPORT("cpc firmware");
 }

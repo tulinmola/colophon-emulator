@@ -94,7 +94,7 @@
 #define SPECTRUM_KEY(half_row, bit) KEYBOARD_KEY(half_row, bit)
 #define SPECTRUM_HALF_ROWS 8
 
-/* The matrix has to have room for them, as it does for a CPC's ten. */
+/* As for a CPC's ten. */
 typedef char spectrum_keyboard_fits_the_matrix[SPECTRUM_HALF_ROWS <= KEYBOARD_MAX_LINES ? 1 : -1];
 
 /* The four keys that carry no character and so cannot be looked up by one. */
@@ -132,6 +132,11 @@ typedef struct {
   /* T-states the ULA is holding the processor's clock for. The beam goes on
      through them; the processor does not. */
   uint8_t held_ticks;
+
+  /* The T-states of a port access still to be weighed, one bit each. A port
+     is charged at more than one of its own, so the answer is worked out when
+     the access begins and spent a bit a tick. */
+  uint8_t port_charges_left;
 
   /* What the EAR socket presents on bit 6 of a read. Nothing drives it
      here; on hardware it also hears bit 4 of the last write through the

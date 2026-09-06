@@ -94,8 +94,7 @@
 #define CPC_KEY(line, bit) KEYBOARD_KEY(line, bit)
 #define CPC_KEYBOARD_LINES 10
 
-/* The matrix has to have room for them. Nothing else would say so, and a
-   keyboard one line short loses a whole row of keys without a word. */
+/* A matrix one line short loses a whole row of keys without a word. */
 typedef char cpc_keyboard_fits_the_matrix[CPC_KEYBOARD_LINES <= KEYBOARD_MAX_LINES ? 1 : -1];
 
 /* The keys a text-typing caller needs by name; the rest it finds through

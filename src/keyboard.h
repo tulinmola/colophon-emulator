@@ -5,11 +5,6 @@
  * which a zero means pressed: the switches pull their bit down, so an
  * untouched keyboard reads &FF, and so does a line that does not exist.
  *
- * What is wired to each line, what is printed on each key, and how many
- * lines a machine fits belong to that machine and are declared with it.
- * This file reserves the room and holds none of the rest: it is the grid of
- * switches and nothing else.
- *
  * Not modelled: keyboard clash. On real hardware three keys held at the
  * corners of a rectangle in the matrix conjure the fourth, because the
  * switches are a grid of wires with nothing to stop a current going the
@@ -26,9 +21,7 @@
 
 #include <stdint.h>
 
-/* The widest matrix fitted, which is the room a keyboard reserves: ten lines
-   on a CPC, eight on a Spectrum. How many a machine actually has is declared
-   with that machine. */
+/* The widest matrix fitted: ten lines on a CPC, eight on a Spectrum. */
 #define KEYBOARD_MAX_LINES 10
 
 /* A position in the matrix, as line * 8 + bit. */

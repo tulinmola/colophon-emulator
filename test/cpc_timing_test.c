@@ -1,5 +1,5 @@
 /*
- * timing_test — how long each instruction takes on a CPC, in microseconds.
+ * cpc_timing_test — how long each instruction takes on a CPC, in microseconds.
  *
  * The Gate Array holds the CPU off the RAM for three cycles in four, so
  * every machine cycle stretches until the next window and every instruction
@@ -268,5 +268,5 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
-  return TEST_REPORT("timing");
+  return TEST_REPORT("cpc timing");
 }

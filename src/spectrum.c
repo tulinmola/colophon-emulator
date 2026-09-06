@@ -92,41 +92,24 @@ void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer) {
                SPECTRUM_FRAMEBUFFER_HEIGHT, SPECTRUM_FRAME_SYNC_SAMPLES, SPECTRUM_LINE_SYNC_CENTRE);
 }
 
-/* The addresses the ULA takes the bus for are the ones its address lines
-   reach, which on a 16K machine is all the RAM there is. */
+/* The sixteen kilobytes the ULA's address lines reach, which on a 16K
+   machine is all the RAM there is. */
 static bool in_contended_memory(uint16_t address) {
   return address >= SPECTRUM_RAM_BASE && address < SPECTRUM_RAM_BASE + SPECTRUM_RAM_16K;
 }
 
-/* The four rows of the port table, decided by the address's high byte and by
-   A0 ("Contended I/O"). A high byte that looks like contended memory charges
-   the first T-state of the access; the ULA's own port charges the second; a
-   port that looks like contended memory and is not the ULA's is charged at
-   all four; a port that is neither is charged nothing. Each charge is
-   weighed where the ones before it have left the beam.
-
-   The processor is held for the sum rather than between the charges, which
-   is the same to the program: the access takes as long and the instruction
-   ends on the same T-state. It is not the same to a device, because the
-   request lands late by whatever the charges after it come to. Only the
-   fourth row is affected, and only a port the ULA does not answer can reach
-   it, so nothing on this board can tell yet. */
-static uint8_t port_contention(uint32_t frame_tick, uint16_t port) {
+/* Which of a port access's four T-states are charged, one bit each, first
+   one lowest ("Contended I/O"). */
+static uint8_t port_charges(uint16_t port) {
   const bool looks_contended = in_contended_memory(port);
   const bool ula_port = ula_answers(port);
   const bool charged[] = {looks_contended, looks_contended || ula_port,
                           looks_contended && !ula_port, looks_contended && !ula_port};
-  uint32_t at = frame_tick;
-  uint8_t owed = 0;
+  uint8_t rows = 0;
   for (size_t tstate = 0; tstate < sizeof charged / sizeof charged[0]; tstate++) {
-    if (charged[tstate]) {
-      uint8_t delay = ula_contention(at);
-      owed = (uint8_t)(owed + delay);
-      at += delay;
-    }
-    at++;
+    rows = (uint8_t)(rows | (charged[tstate] ? 1u << tstate : 0u));
   }
-  return owed;
+  return rows;
 }
 
 /* The beam's own work, which the processor's clock has no bearing on. */
@@ -176,29 +159,29 @@ static void run_processor(spectrum_t *spectrum) {
   /* The address is on the bus now and the beam has not moved, so this is
      both the address the ULA weighs and the position it weighs it at. */
   switch (cycle) {
-    /* An access and an internal T-state are charged alike, for the reason
-       the chip charges at all: these ULAs weigh the address and not the
-       request, so a T-state that only holds one costs what one that acts on
-       it costs. */
+    /* These ULAs weigh the address and not the request, so a T-state that
+       only holds one costs what one that acts on it costs. */
     case Z80_CYCLE_MEMORY:
     case Z80_CYCLE_INTERNAL:
       spectrum->held_ticks =
           in_contended_memory(z80_address(pins)) ? ula_contention(spectrum->ula.frame_tick) : 0;
       break;
     case Z80_CYCLE_PORT:
-      spectrum->held_ticks = port_contention(spectrum->ula.frame_tick, z80_address(pins));
+      spectrum->port_charges_left = port_charges(z80_address(pins));
       break;
-    /* Neither is charged. An acknowledge is not, and no evidence here can
-       say whether the chip would: its interrupt is held across the first 32
-       T-states of a frame and it wants the bus from 14335, so an acknowledge
-       always falls in the top border, where nothing is owed under any rule —
-       and the two writes that follow it are ordinary writes, which pay like
-       any other. A tick carrying on a cycle already begun is not charged
-       because that cycle was charged when it began. */
+    /* No evidence here can say whether an acknowledge is charged: the
+       interrupt is held across the first 32 T-states of a frame and the chip
+       wants the bus from 14335, so an acknowledge always falls in the top
+       border, where nothing is owed under any rule. */
     case Z80_CYCLE_INTERRUPT:
     case Z80_CYCLE_NONE:
       break;
   }
+
+  if (spectrum->port_charges_left & 1) {
+    spectrum->held_ticks = ula_contention(spectrum->ula.frame_tick);
+  }
+  spectrum->port_charges_left = (uint8_t)(spectrum->port_charges_left >> 1);
 }
 
 uint64_t spectrum_tick(spectrum_t *spectrum) {
