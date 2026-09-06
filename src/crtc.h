@@ -14,27 +14,32 @@
  * line decided while C0 is 0 or 1, the vertical adjustment spent on C9 —
  * asked for by R5, taken back where R5 is cancelled in time, and opened by
  * an R4 or R9 moved under a standing last line — and the block that stops
- * one VSYNC condition serving twice. R8's interlace bit is read: the frame
+ * one VSYNC condition serving twice. R8 is read but for its skew: the frame
  * parity this chip keeps in two states rather than one, the line either
- * interlace mode adds to the end of an even frame, and the MID-VSYNC that
- * holds an even frame's VSYNC back to the middle of its line — which,
- * beginning away from a line's head, then runs longer than R3 asks for. C0
- * names the character being drawn and holds it for that whole microsecond,
- * which is what a positional register write needs; the last line and the
- * vertical adjustment already read it, and both are settled at the
- * characters ch. 13.2.1 settles them at rather than wherever they next
- * stand. Not yet: the counting of the interlace video mode, where R8 of 3
- * has C9 doubled to be tested against R9 and to address memory — this chip
- * counts it straight, so a frame in that mode comes out with about twice
- * the scanlines it should (ch. 19.8.1); the VSYNC delayed a line on an odd
- * C4 of an odd frame whose character rows are an odd number of lines (ch.
- * 19.7.1); skew, cursor, lightpen, the per-type divergences, the rest of
- * what ch. 13.2.1 gives a line's first three microseconds — the counter
- * updates those characters schedule for a later one — and the VSYNC arming
- * of ch. 13.2.2. Every other comparison is made where it stands. Two of the border's rules need a
- * finer pin than this one: the byte of border at C0=R0 when R1 exceeds it (ch. 17.6.2) and the
- * byte-by-byte alternation an R6 of 0 makes on a frame's first line (ch. 18.3.2) both toggle
- * DISPLAY ENABLE inside a character, where crtc_tick reports it once per character.
+ * interlace mode adds to the end of an even frame, the MID-VSYNC that holds
+ * an even frame's VSYNC back to the middle of its line — which, beginning
+ * away from a line's head, then runs longer than R3 asks for — and the
+ * counting of the interlace video mode, where the raster address becomes C9
+ * doubled with a parity filling the bit it leaves and R9 is read up to that
+ * same parity — the doubling taken up a line after the write that asks for
+ * it, the parity in the limit at once, which is what leaves a row entered
+ * or left off its parity counting the long way round, and what a program
+ * reads its own frame parity from (ch. 19.8.1). C0 names the character
+ * being drawn and holds it for that whole microsecond, which is what a
+ * positional register write needs; the last line and the vertical
+ * adjustment already read it, and both are settled at the characters ch.
+ * 13.2.1 settles them at rather than wherever they next stand. Not yet:
+ * skew, cursor, lightpen, the later deadline ch. 11.9 gives R8 for the
+ * interlace line, which is taken here on R5's own schedule, the per-type
+ * divergences, the rest of what ch. 13.2.1 gives a line's first three
+ * microseconds — the counter updates those characters schedule for a later
+ * one — and the VSYNC arming
+ * of ch. 13.2.2. Every other comparison is made where it stands. Two of the
+ * border's rules need a finer pin than this one: the byte of border at
+ * C0=R0 when R1 exceeds it (ch. 17.6.2) and the byte-by-byte alternation an
+ * R6 of 0 makes on a frame's first line (ch. 18.3.2) both toggle DISPLAY
+ * ENABLE inside a character, where crtc_tick reports it once per
+ * character.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -118,6 +123,10 @@ typedef struct {
   /* The one line interlace adds after the R5 lines, spent once a frame
      (ch. 19.6.1). */
   bool interlace_line_given;
+  /* The interlace video mode as the counters see it, which is not quite as
+     R8 holds it: the mode a write asks for is taken up at the next C0=0,
+     after that line's own R9 test (ch. 19.8.1). */
+  bool interlace_video_mode;
   /* A chip that has drawn nothing has no character to leave behind, so the
      first tick draws one instead of advancing past one. Zero is the
      power-on state, which is what leaves the first tick drawing a line's

@@ -83,29 +83,111 @@ static long frame_scanlines(void) {
   return ticks / SCANLINE;
 }
 
-/* The next VSYNC to rise: the character C0 named when it did, the
-   characters it stayed up for counting that one, and whether the chip
-   called the frame odd. Gives up after four frames. */
-static bool next_vsync(uint8_t *at_character, long *characters, bool *odd_frame) {
+/* What the next VSYNC to rise looked like: the character C0 named when it
+   rose, the row it fell in and the raster address that row had reached,
+   whether the chip called the frame odd, and how many characters it stayed
+   up counting the one it rose on. */
+typedef struct {
+  uint8_t character;
+  uint8_t row;
+  uint8_t raster;
+  bool odd_frame;
+  long characters;
+} vsync_seen;
+
+/* Gives up after four frames. */
+static bool next_vsync(vsync_seen *seen) {
   for (long tick = 0; tick < 4L * FRAME_TICKS; tick++) {
     bool standing = crtc.vsync;
-    crtc_tick(&crtc);
-    if (standing || !crtc.vsync) {
+    uint64_t pins = crtc_tick(&crtc);
+    if (standing || (pins & CRTC_VSYNC) == 0) {
       continue;
     }
-    *at_character = crtc.c0;
-    *odd_frame = crtc.parity_frame;
-    *characters = 1;
-    while (crtc.vsync && *characters < 18L * SCANLINE) {
+    seen->character = crtc.c0;
+    seen->row = crtc.c4;
+    seen->raster = crtc_ra(pins);
+    seen->odd_frame = crtc.parity_frame;
+    seen->characters = 1;
+    while (crtc.vsync && seen->characters < 18L * SCANLINE) {
       crtc_tick(&crtc);
       if (crtc.vsync) {
-        (*characters)++;
+        seen->characters++;
       }
     }
     return true;
   }
   return false;
 }
+
+/* A scanline as the Compendium's counting tables print one: the row, the
+   counter, and the raster address the chip put on RA (ch. 19.8.1). */
+typedef struct {
+  uint8_t c4;
+  uint8_t c9;
+  uint8_t raster;
+} recorded_line;
+
+/* An R8 UPDATE where those tables mark one: a value written inside the line
+   at the given index. */
+typedef struct {
+  int line;
+  uint8_t value;
+} r8_update;
+
+#define MAX_RECORDED_LINES 24
+
+/* Records the head of each of the next scanlines, entering on the character
+   C0 names 0 and leaving on the one after the last line recorded. The
+   raster address is read a character into the line, where it is the same as
+   at its head: C9 moves only where a line ends. */
+static void record_lines(recorded_line *lines, int count, const r8_update *updates,
+                         int update_count) {
+  for (int index = 0; index < count; index++) {
+    lines[index].c4 = crtc.c4;
+    lines[index].c9 = crtc.c9;
+    lines[index].raster = crtc_ra(crtc_tick(&crtc));
+    for (int update = 0; update < update_count; update++) {
+      if (updates[update].line == index) {
+        write_register(8, updates[update].value);
+      }
+    }
+    run_characters(SCANLINE - 1);
+  }
+}
+
+/* Against a table transcribed from the Compendium: C4, C9, C9-VMA a row.
+   Reports the first line that parts company and stops, because after one
+   the rest say the same thing again. */
+static void check_lines(const char *table, const recorded_line *got, const uint8_t (*want)[3],
+                        int count) {
+  for (int index = 0; index < count; index++) {
+    if (got[index].c4 == want[index][0] && got[index].c9 == want[index][1] &&
+        got[index].raster == want[index][2]) {
+      continue;
+    }
+    TEST_FAIL("%s, line %d: C4=%u C9=%u C9-VMA=%u, where the table says %u, %u, %u", table, index,
+              got[index].c4, got[index].c9, got[index].raster, want[index][0], want[index][1],
+              want[index][2]);
+    return;
+  }
+}
+
+/* Stands on the first character of a frame of the parity asked for, with the
+   standard values but for R9. Callers name the parity through the two
+   wrappers below rather than by a bare true or false. */
+static void stand_on_a_frame(bool odd_frame, uint8_t r9) {
+  program_standard();
+  write_register(9, r9);
+  frame_scanlines();
+  if (crtc.parity_frame != odd_frame) {
+    frame_scanlines();
+  }
+  TEST_CHECK(crtc.parity_frame == odd_frame);
+  TEST_CHECK(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+}
+
+static void stand_on_an_even_frame(uint8_t r9) { stand_on_a_frame(false, r9); }
+static void stand_on_an_odd_frame(uint8_t r9) { stand_on_a_frame(true, r9); }
 
 static void reset_state(void) {
   crtc_init(&crtc);
@@ -488,25 +570,23 @@ static void an_interlace_mode_adds_a_line_to_the_even_frames(void) {
    the next one and the rest of this one runs on top of them (ch. 16.4.1,
    19.7.1, 19.7.2). */
 static void an_interlace_mode_holds_the_even_frames_vsync_back(void) {
-  uint8_t at_character = 0;
-  long characters = 0;
-  bool odd_frame = false;
+  vsync_seen seen;
 
   program_standard();
-  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
-  TEST_EQUAL(at_character, 0);
-  TEST_EQUAL(characters, 8 * SCANLINE);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
 
   write_register(8, 1);
-  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
-  TEST_CHECK(odd_frame);
-  TEST_EQUAL(at_character, 0);
-  TEST_EQUAL(characters, 8 * SCANLINE);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(seen.odd_frame);
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
 
-  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
-  TEST_CHECK(!odd_frame);
-  TEST_EQUAL(at_character, 31); /* R0/2, R0 being 63 */
-  TEST_EQUAL(characters, 8 * SCANLINE + SCANLINE - 31);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(!seen.odd_frame);
+  TEST_EQUAL(seen.character, 31); /* R0/2, R0 being 63 */
+  TEST_EQUAL(seen.characters, 8 * SCANLINE + SCANLINE - 31);
 }
 
 /* An R6 of 0 puts the parity's turn on the frame's own first character,
@@ -563,20 +643,260 @@ static void a_disarmed_adjustment_forgets_the_interlace_line(void) {
    where R7 is 0 and the two fall on the same character: the frame that has
    just become even takes a MID-VSYNC in its own first line (ch. 19.7.2). */
 static void the_parity_settles_before_an_r7_of_zero_is_read(void) {
-  uint8_t at_character = 0;
-  long characters = 0;
-  bool odd_frame = false;
+  vsync_seen seen;
 
   program_standard();
   write_register(7, 0);
   write_register(8, 1);
-  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
-  TEST_CHECK(!odd_frame);
-  TEST_EQUAL(at_character, 31);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(!seen.odd_frame);
+  TEST_EQUAL(seen.character, 31);
 
-  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
-  TEST_CHECK(odd_frame);
-  TEST_EQUAL(at_character, 0);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(seen.odd_frame);
+  TEST_EQUAL(seen.character, 0);
+}
+
+/* Ch. 19.8.1's counting tables for R9=6, transcribed. From the line after
+   the one R8 is given 3 on, the raster address is C9 doubled with parity in
+   bit 0, and the row ends where that address reaches R9 read up to the same
+   parity — so a row is four lines where it was seven, and the two frames
+   address alternate lines. */
+static void the_video_mode_doubles_the_raster_address(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+  static const r8_update on_the_first_line[] = {{0, 3}};
+
+  static const uint8_t even_from_the_first_line[8][3] = {
+      {0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6}, {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, on_the_first_line, 1);
+  check_lines("R8=3 on C9=0, even frame", got, even_from_the_first_line, 8);
+
+  static const uint8_t odd_from_the_first_line[8][3] = {{0, 0, 0}, {0, 1, 3}, {0, 2, 5}, {0, 3, 7},
+                                                        {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, on_the_first_line, 1);
+  check_lines("R8=3 on C9=0, odd frame", got, odd_from_the_first_line, 8);
+
+  /* The doubling waits for the head of the next line, so the line the mode
+     is asked for on still addresses itself undoubled. */
+  static const r8_update on_the_second_line[] = {{1, 3}};
+  static const uint8_t even_from_the_second_line[8][3] = {
+      {0, 0, 0}, {0, 1, 1}, {0, 2, 4}, {0, 3, 6}, {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, on_the_second_line, 1);
+  check_lines("R8=3 on C9=1, even frame", got, even_from_the_second_line, 8);
+
+  static const uint8_t odd_from_the_second_line[8][3] = {
+      {0, 0, 0}, {0, 1, 1}, {0, 2, 5}, {0, 3, 7}, {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, on_the_second_line, 1);
+  check_lines("R8=3 on C9=1, odd frame", got, odd_from_the_second_line, 8);
+
+  static const r8_update on_the_third_line[] = {{2, 3}};
+  static const uint8_t even_from_the_third_line[8][3] = {
+      {0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 6}, {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, on_the_third_line, 1);
+  check_lines("R8=3 on C9=2, even frame", got, even_from_the_third_line, 8);
+
+  static const uint8_t odd_from_the_third_line[8][3] = {{0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 7},
+                                                        {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, on_the_third_line, 1);
+  check_lines("R8=3 on C9=2, odd frame", got, odd_from_the_third_line, 8);
+}
+
+/* Parity joins the limit the moment R8 is written, a line before the
+   doubling does, and a row that has already passed the line the new limit
+   names cannot end on it: C9 climbs until the doubled address comes round
+   through five bits. This is one of the two counting bugs ch. 19.5.2 offers
+   a program as a way of reading the parity it is on. */
+static void a_video_mode_entered_late_overflows_c9(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+
+  static const r8_update on_the_fourth_line[] = {{3, 3}};
+  static const uint8_t even_overflow[24][3] = {
+      {0, 0, 0},   {0, 1, 1},   {0, 2, 2},   {0, 3, 3},   {0, 4, 8},   {0, 5, 10},
+      {0, 6, 12},  {0, 7, 14},  {0, 8, 16},  {0, 9, 18},  {0, 10, 20}, {0, 11, 22},
+      {0, 12, 24}, {0, 13, 26}, {0, 14, 28}, {0, 15, 30}, {0, 16, 0},  {0, 17, 2},
+      {0, 18, 4},  {0, 19, 6},  {1, 0, 0},   {1, 1, 2},   {1, 2, 4},   {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 24, on_the_fourth_line, 1);
+  check_lines("R8=3 on C9=3, even frame", got, even_overflow, 24);
+
+  static const uint8_t odd_overflow[24][3] = {
+      {0, 0, 0},   {0, 1, 1},   {0, 2, 2},   {0, 3, 3},   {0, 4, 9},   {0, 5, 11},
+      {0, 6, 13},  {0, 7, 15},  {0, 8, 17},  {0, 9, 19},  {0, 10, 21}, {0, 11, 23},
+      {0, 12, 25}, {0, 13, 27}, {0, 14, 29}, {0, 15, 31}, {0, 16, 1},  {0, 17, 3},
+      {0, 18, 5},  {0, 19, 7},  {1, 0, 1},   {1, 1, 3},   {1, 2, 5},   {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 24, on_the_fourth_line, 1);
+  check_lines("R8=3 on C9=3, odd frame", got, odd_overflow, 24);
+
+  /* Asked for on the row's last line, an even frame ends the row where it
+     would have ended anyway — and an odd one finds the limit a line higher
+     and overruns the whole way round.
+
+     The even table prints C9 as 0, 2, 4, 6 for the row after, where the
+     switching tables print 0, 1, 2, 3 for rows of the same shape and every
+     exit table shows C9 carrying on by one. C9 is a counter: its column is
+     corrected here, and the C9-VMA column, which is what the chip puts on
+     RA, is copied as printed. */
+  static const r8_update on_the_last_line[] = {{6, 3}};
+  static const uint8_t even_on_r9[11][3] = {{0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 3},
+                                            {0, 4, 4}, {0, 5, 5}, {0, 6, 6}, {1, 0, 0},
+                                            {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 11, on_the_last_line, 1);
+  check_lines("R8=3 on C9=R9, even frame", got, even_on_r9, 11);
+
+  static const uint8_t odd_on_r9[24][3] = {
+      {0, 0, 0},   {0, 1, 1},   {0, 2, 2},   {0, 3, 3},   {0, 4, 4},   {0, 5, 5},
+      {0, 6, 6},   {0, 7, 15},  {0, 8, 17},  {0, 9, 19},  {0, 10, 21}, {0, 11, 23},
+      {0, 12, 25}, {0, 13, 27}, {0, 14, 29}, {0, 15, 31}, {0, 16, 1},  {0, 17, 3},
+      {0, 18, 5},  {0, 19, 7},  {1, 0, 1},   {1, 1, 3},   {1, 2, 5},   {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 24, on_the_last_line, 1);
+  check_lines("R8=3 on C9=R9, odd frame", got, odd_on_r9, 24);
+}
+
+/* Leaving, the two switches part company the other way about: the limit
+   loses its parity at once and the address keeps its doubling for one line
+   more. So a row left on an address that has passed R9 runs on to R9
+   undoubled, and one left on R9 itself ends there.
+
+   The Compendium's exit tables give the line R8 is asked for on a doubled
+   address, where its switching tables and its own prose give that line an
+   undoubled one — "from the line C9 which follows that where R8 goes to 3".
+   The switching tables are followed here. */
+static void leaving_the_video_mode_drops_the_parity_from_the_limit(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+
+  static const r8_update left_on_the_rows_first_line[] = {{0, 3}, {4, 0}};
+  static const uint8_t even_left_early[12][3] = {{0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6},
+                                                 {1, 0, 0}, {1, 1, 1}, {1, 2, 2}, {1, 3, 3},
+                                                 {1, 4, 4}, {1, 5, 5}, {1, 6, 6}, {2, 0, 0}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 12, left_on_the_rows_first_line, 2);
+  check_lines("R8=0 on C4=1 C9=0, even frame", got, even_left_early, 12);
+
+  static const r8_update left_on_the_rows_last_line[] = {{0, 3}, {7, 0}};
+  static const uint8_t even_left_on_r9[12][3] = {{0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6},
+                                                 {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6},
+                                                 {2, 0, 0}, {2, 1, 1}, {2, 2, 2}, {2, 3, 3}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 12, left_on_the_rows_last_line, 2);
+  check_lines("R8=0 on C4=1 C9=3, even frame", got, even_left_on_r9, 12);
+
+  /* The other counting bug: on an odd frame that address is R9+1, which the
+     limit no longer reaches, so the row runs on. */
+  static const uint8_t odd_left_on_r9[12][3] = {{0, 0, 0}, {0, 1, 3}, {0, 2, 5}, {0, 3, 7},
+                                                {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7},
+                                                {1, 4, 4}, {1, 5, 5}, {1, 6, 6}, {2, 0, 0}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 12, left_on_the_rows_last_line, 2);
+  check_lines("R8=0 on C4=1 C9=3, odd frame", got, odd_left_on_r9, 12);
+}
+
+/* With an odd R9 the parity of a row's lines turns with C4 as well as with
+   the frame, so the rows come out alternately five lines and four and a
+   pair of them holds the nine an R9 of 7 asks for — the balance that lets
+   the two frames carry the same number of lines (ch. 19.5.2). */
+static void an_odd_r9_gives_the_rows_alternating_parities(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+  static const r8_update on_the_first_line[] = {{0, 3}};
+
+  static const uint8_t even_frame[18][3] = {{0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6}, {0, 4, 8},
+                                            {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}, {2, 0, 0},
+                                            {2, 1, 2}, {2, 2, 4}, {2, 3, 6}, {2, 4, 8}, {3, 0, 1},
+                                            {3, 1, 3}, {3, 2, 5}, {3, 3, 7}};
+  stand_on_an_even_frame(7);
+  record_lines(got, 18, on_the_first_line, 1);
+  check_lines("R9=7, even frame", got, even_frame, 18);
+
+  static const uint8_t odd_frame[18][3] = {{0, 0, 0}, {0, 1, 3}, {0, 2, 5}, {0, 3, 7}, {1, 0, 0},
+                                           {1, 1, 2}, {1, 2, 4}, {1, 3, 6}, {1, 4, 8}, {2, 0, 1},
+                                           {2, 1, 3}, {2, 2, 5}, {2, 3, 7}, {3, 0, 0}, {3, 1, 2},
+                                           {3, 2, 4}, {3, 3, 6}, {3, 4, 8}};
+  stand_on_an_odd_frame(7);
+  record_lines(got, 18, on_the_first_line, 1);
+  check_lines("R9=7, odd frame", got, odd_frame, 18);
+}
+
+/* An odd R9 in the video mode gives a row five lines on one parity and four
+   on the other, so an odd C4 of an odd frame begins where an even frame's
+   begins one line earlier. Its VSYNC waits that line out, rising at
+   C9.VMA=2 — which is what still leaves the two frames' syncs half a line
+   apart (ch. 19.5.2, 19.7.1). */
+static void an_odd_row_of_an_odd_frame_takes_its_vsync_late(void) {
+  vsync_seen seen;
+
+  stand_on_an_odd_frame(7);
+  write_register(7, 1);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 1);
+  TEST_EQUAL(seen.raster, 2);
+
+  /* On the even frame that same row runs its odd lines and starts at 1, so
+     the sync falls on the row's own first line. */
+  stand_on_an_even_frame(7);
+  write_register(7, 1);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 1);
+  TEST_EQUAL(seen.raster, 1);
+
+  /* An even C4 waits for nothing on either frame. */
+  stand_on_an_odd_frame(7);
+  write_register(7, 2);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 2);
+  TEST_EQUAL(seen.raster, 1);
+
+  /* Nor does an odd C4 whose rows are an even number of lines. */
+  stand_on_an_odd_frame(6);
+  write_register(7, 1);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 1);
+  TEST_EQUAL(seen.raster, 1);
+}
+
+/* VMA' is captured where C0 reaches R1 on the row's last scanline, and in
+   the video mode that is the last of the doubled address's rather than the
+   last C9 would name — ch. 19.8.1 says the test "also takes place when
+   C0=R1 ... and the assignment of VMA' with VMA". So the video pointer
+   still steps R1 characters a row where C9 never reaches R9 at all. */
+static void the_video_pointer_still_steps_a_row_at_a_time(void) {
+  stand_on_an_even_frame(6);
+  write_register(8, 3);
+
+  TEST_CHECK(run_to_row(1));
+  uint16_t first = crtc.vma;
+  TEST_CHECK(run_to_row(2));
+  uint16_t second = crtc.vma;
+  TEST_CHECK(run_to_row(3));
+  uint16_t third = crtc.vma;
+  TEST_EQUAL(second - first, 40); /* R1 */
+  TEST_EQUAL(third - second, 40);
+}
+
+/* The vertical adjustment is armed on the row's last scanline too, so a
+   frame in the video mode still takes the lines R5 asks for. Five rows of
+   four lines and eight adjustment lines, and the even frame's interlace
+   line on top of them (ch. 11.2.2, 19.6.1, 19.8.1). */
+static void the_video_mode_still_takes_the_adjustment_lines(void) {
+  stand_on_an_even_frame(6);
+  write_register(4, 4);
+  write_register(5, 8);
+  write_register(6, 2);
+  write_register(8, 3);
+  TEST_EQUAL(frame_scanlines(), 29);
+  TEST_EQUAL(frame_scanlines(), 28);
+  TEST_EQUAL(frame_scanlines(), 29);
 }
 
 static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
@@ -743,6 +1063,13 @@ int main(void) {
   TEST_RUN(an_r6_of_zero_keeps_the_line_on_the_even_frame);
   TEST_RUN(a_disarmed_adjustment_forgets_the_interlace_line);
   TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
+  TEST_RUN(the_video_mode_doubles_the_raster_address);
+  TEST_RUN(a_video_mode_entered_late_overflows_c9);
+  TEST_RUN(leaving_the_video_mode_drops_the_parity_from_the_limit);
+  TEST_RUN(an_odd_r9_gives_the_rows_alternating_parities);
+  TEST_RUN(an_odd_row_of_an_odd_frame_takes_its_vsync_late);
+  TEST_RUN(the_video_pointer_still_steps_a_row_at_a_time);
+  TEST_RUN(the_video_mode_still_takes_the_adjustment_lines);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);

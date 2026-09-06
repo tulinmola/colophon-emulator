@@ -2,16 +2,22 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-6 of them printed self-graded lines, 31 in all: 22 agree with Longshot's
-silicon and 9 do not. That is 71% of what this reader can score, and no
-measure at all of the other 58 groups.
+4 of them printed self-graded lines, 22 in all: 22 agree with Longshot's
+silicon and 0 do not. That is 100% of what this reader can score, and no
+measure at all of the other 60 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture, a legend, or a table whose rows
-carry more than one test, rather than in words this reader can score. It
+carry more than one test, rather than in words this reader can score, or
+because it names silicon's value only where the machine differs from it. It
 was run and kept, not skipped. A line marked ! is a test this machine
 failed: either the module said so, or the machine's value differs from the
 one Longshot's silicon produced.
+
+That last kind is worth knowing about: such a group grades itself while the
+machine is wrong and prints its measurement alone once it is right, so it
+leaves the tally above by being agreed with. A group falling out of that
+count is not the same as a group that could not be read.
 
 The copy of this file in the test sources is the one on record, and a sweep
 fails on the first line where the two differ. The screens behind these
@@ -75,17 +81,8 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
       R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
       R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
 C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
-C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           1 graded, 1 wrong
-    ! RESULT:#8720 WRONG (EXP:#4E40)
-C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             8 graded, 8 wrong
-    ! R9=6,R4=6, R6=9, PARITY=E, R7=3 FROM C4=2, CPU=#0540 WRONG (EXP:#0320)
-    ! R9=6,R4=6, R6=9, PARITY=E, R7=6 FROM C4=2, CPU=#0AA0 WRONG (EXP:#0620)
-    ! R9=6,R4=6, R6=9, PARITY=E, R7=0 FROM C4=2, CPU=#0C60 WRONG (EXP:#0720)
-    ! R9=6,R4=6, R6=9, PARITY=E, R7=1 FROM C4=2, CPU=#0260 WRONG (EXP:#0820)
-    ! R9=6,R4=6, R6=5, PARITY=E, R7=3 FROM C4=2, CPU=#0540 WRONG (EXP:#0320)
-    ! R9=6,R4=6, R6=5, PARITY=E, R7=6 FROM C4=2, CPU=#0AA0 WRONG (EXP:#0620)
-    ! R9=6,R4=6, R6=5, PARITY=E, R7=0 FROM C4=2, CPU=#0C80 WRONG (EXP:#0740)
-    ! R9=6,R4=6, R6=5, PARITY=E, R7=1 FROM C4=2, CPU=#0260 WRONG (EXP:#0840)
+C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
+C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  recorded, ungraded
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's

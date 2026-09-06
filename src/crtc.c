@@ -4,8 +4,8 @@
 #include "crtc.h"
 
 /* Type 0 — Compendium ch. 4.3. R3 carries the VSYNC width in its high
-   nibble and the HSYNC width in its low one; of R8 the interlace bit is
-   read and the skew bits are stored and no more. R16/R17 are the lightpen
+   nibble and the HSYNC width in its low one; of R8 the two interlace bits
+   are read and the skew bits are stored and no more. R16/R17 are the lightpen
    latches, read-only. */
 static const uint8_t writable_bits[18] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x1F, 0x7F, 0x7F, 0xF3,
@@ -35,6 +35,82 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
    at the end of a frame is added on the parity R6 anticipated (ch. 19.6.1). */
 static bool interlace_line_due(const crtc_t *crtc) {
   return (crtc->registers[8] & 1) != 0 && crtc->parity_r6;
+}
+
+/* The interlace video mode as R8 holds it, which is not always as the
+   counters have it: R8's two low bits both set ask for it, and the chip
+   takes it up at the head of the next line (ch. 19.1, 19.8.1). */
+static bool interlace_video_asked(const crtc_t *crtc) { return (crtc->registers[8] & 3) == 3; }
+
+/* ParityC9, which fills bit 0 of the raster address in the interlace video
+   mode: "ParityC9 = C4.0 xor ParityFrame" (ch. 19.5.2). Where R9 is odd the
+   rows come out alternately even-lined and odd-lined as C4 advances, which
+   is how a pair of them keeps the same length on both frames; where R9 is
+   even every row takes the frame's own parity. The Compendium holds this in
+   a state it updates at a row's end and only while R9 is odd, which leaves
+   it stale where R9 is even; read from C4 it says the same thing, except
+   where R9's own parity is changed inside a line — the stored state would
+   carry the old parity to the row's end, and this one moves the raster
+   address under the line being drawn, which is the very thing ch. 19.8.1
+   gives the delayed take-up to prevent. Nothing we can run grades it. */
+static bool parity_c9(const crtc_t *crtc) {
+  if ((crtc->registers[9] & 1) != 0 && (crtc->c4 & 1) != 0) {
+    return !crtc->parity_frame;
+  }
+  return crtc->parity_frame;
+}
+
+/* C9.VMA, the raster address (ch. 19.8.1). It is what leaves the chip on
+   RA, what R9 is measured against, and what the late VSYNC of an odd row is
+   timed by. In the interlace video mode a row covers two rows' worth of
+   memory and the two frames take alternate lines of it, while the counter
+   itself goes on counting by one — which is the half of this the
+   Compendium's own tables get wrong. The shift carries out of five bits
+   rather than widening, so a row entered off its parity comes round to its
+   limit instead of missing it: for an R9 of 6, at C9=19. */
+static uint8_t c9_vma(const crtc_t *crtc) {
+  if (!crtc->interlace_video_mode) {
+    return crtc->c9;
+  }
+  return (uint8_t)((((unsigned)crtc->c9 << 1) | (parity_c9(crtc) ? 1u : 0u)) & C9_BITS);
+}
+
+/* R9 read up to the nearest line of ParityC9's own parity, which is the
+   limit a row ends on while the raster address carries parity in bit 0. The
+   Compendium says this three ways that do not agree — "R9 + ParityFrame"
+   (ch. 19.8.1), "R9 or ParityC9" (its note), and ch. 19.3.3's "it suffices
+   to ignore bit 0 ... and to manage this bit 0 as that of frame parity" —
+   and all three coincide where R9 is even. Where it is odd only this one
+   answers the table in ch. 19.5.2, which for R9=7 runs a row of even lines
+   to 8 and a row of odd lines to 7: the five-then-four that holds a pair of
+   rows at nine lines. Reading up carries out of five bits at an R9 of 31,
+   where it gives a limit of 0 and rows one line long — undocumented, and
+   the alternative is a limit no address can reach and a frame that never
+   ends. */
+static uint8_t r9_with_parity(const crtc_t *crtc) {
+  unsigned r9 = crtc->registers[9];
+  return (uint8_t)((r9 + ((r9 ^ (parity_c9(crtc) ? 1u : 0u)) & 1u)) & C9_BITS);
+}
+
+/* Writing R8 moves two things and they do not move together (ch. 19.8.1):
+   the parity in the limit follows R8 at once — "the parity is however
+   considered immediately for R9" — while the doubling of what is measured
+   against it waits for the next C0=0. So the line a mode is entered on
+   measures C9 against a limit that already carries parity, and the line it
+   is left on measures the raster address against one that no longer does.
+   Both counting bugs the Compendium offers a program as a way of reading
+   its current parity are those two lines: a mode entered on C9=R9 with an
+   odd parity finds the limit a line higher and overruns, and one left on
+   C9.VMA=R9+1 finds it a line lower (ch. 19.5.2).
+
+   On the line a mode is entered the limit takes ParityC9 and not
+   ParityFrame. The two differ only where R9 is odd, and every table that
+   enters a mode does so either with an even R9 or at C9=0, where the
+   comparison cannot bite — so the Compendium settles this nowhere.
+   ParityC9 is the bit that will fill the address, and a limit of the other
+   parity is one no address of that row could ever meet. */
+static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
+  return c9_vma(crtc) == (interlace_video_asked(crtc) ? r9_with_parity(crtc) : crtc->registers[9]);
 }
 
 /* The adjustment is one state in two flags, and they are dropped together
@@ -73,7 +149,7 @@ static void enter_scanline(crtc_t *crtc) {
        (ch. 13.2.4) — so both the zeroing and the increment ride on the row
        having reached its last line, and C4 returns to 0 when the adjustment
        is done whatever R4 holds by then. */
-    bool row_ended_on_r4 = crtc->c9 == r[9] && crtc->c4 == r[4];
+    bool row_ended_on_r4 = row_is_on_its_last_scanline(crtc) && crtc->c4 == r[4];
     uint8_t next_c9 = row_ended_on_r4 ? 0 : (uint8_t)((crtc->c9 + 1) & C9_BITS);
     bool r5_lines_spent = next_c9 == r[5];
     if (r5_lines_spent && interlace_line_due(crtc) && !crtc->interlace_line_given) {
@@ -98,12 +174,18 @@ static void enter_scanline(crtc_t *crtc) {
   } else if (crtc->last_line) {
     crtc->c9 = 0;
     enter_character_row(crtc, 0);
-  } else if (crtc->c9 == r[9]) {
+  } else if (row_is_on_its_last_scanline(crtc)) {
     crtc->c9 = 0;
     enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
   } else {
     crtc->c9 = (uint8_t)((crtc->c9 + 1) & C9_BITS);
   }
+
+  /* And the doubling R8 asks for is taken up here rather than where it was
+     written: the status it sets "will be performed on the next C0=0, after
+     the C9/R9 test of the line" (ch. 19.8.1), which is what keeps the
+     raster address from moving under a line already being drawn. */
+  crtc->interlace_video_mode = interlace_video_asked(crtc);
 }
 
 /* C0 names the character being drawn and holds it for the whole of that
@@ -147,7 +229,7 @@ static void enter_character(crtc_t *crtc) {
 static void decide_last_line(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   if (crtc->c0 < 2) {
-    crtc->last_line = crtc->c4 == r[4] && crtc->c9 == r[9];
+    crtc->last_line = crtc->c4 == r[4] && row_is_on_its_last_scanline(crtc);
   }
 }
 
@@ -166,8 +248,13 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      that (ch. 10.3.1.2, 12.2, 13.2.1). Only a write made during the
      character C0 named 1 can leave things so: one made at C0=0 would have
      been seen by the last line's own second look, which is why the state
-     and the comparison can disagree here and nowhere else. */
-  if (crtc->c0 == 2 && crtc->last_line && (crtc->c4 != r[4] || crtc->c9 != r[9])) {
+     and the comparison can disagree here and nowhere else. R8 is a third
+     register that can do it, by moving the parity the limit is read up to,
+     and the Compendium does not say whether the chip does: it names this
+     comparison only where a row ends and where VMA' is captured, and one
+     comparator makes it so everywhere. */
+  if (crtc->c0 == 2 && crtc->last_line &&
+      (crtc->c4 != r[4] || !row_is_on_its_last_scanline(crtc))) {
     crtc->in_vertical_adjustment = true;
   }
   /* R5 counts on the characters C0 names 0, 1 and 2, and a write lands in
@@ -176,10 +263,11 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      line interlace adds is additional-line handling too, and asks for no R5
      at all (ch. 19.6.1). Ch. 11.9 gives R8 a later deadline than R5 — the
      condition "is evaluated on the last line of a frame, when C0=R0" — and
-     the group Shaker points at it, C (P), cannot be read until the video
-     mode's counting is here, so R5's schedule carries both for now. */
+     the group Shaker points at it, C (P), states its verdict in a picture,
+     so nothing we can run tells the two apart and R5's schedule carries
+     both. */
   if (crtc->c0 < 4 && (r[5] != 0 || interlace_line_due(crtc)) && crtc->c4 >= r[4] &&
-      crtc->c9 == r[9]) {
+      row_is_on_its_last_scanline(crtc)) {
     crtc->in_vertical_adjustment = true;
   }
   /* And the same deadline read the other way: a line armed on an R5 that
@@ -191,7 +279,7 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      that one back, and nothing in Shaker asks. A line the R5 arm admitted
      with C4 already past R4 it cannot reach at all. */
   if (crtc->c0 == 3 && r[5] == 0 && !interlace_line_due(crtc) && crtc->c4 == r[4] &&
-      crtc->c9 == r[9]) {
+      row_is_on_its_last_scanline(crtc)) {
     leave_vertical_adjustment(crtc);
   }
 }
@@ -209,7 +297,7 @@ static void move_video_pointer(crtc_t *crtc) {
     }
     crtc->vma = crtc->vma_;
   }
-  if (crtc->c0 == r[1] && crtc->c9 == r[9]) {
+  if (crtc->c0 == r[1] && row_is_on_its_last_scanline(crtc)) {
     crtc->vma_ = crtc->vma;
   }
 }
@@ -233,8 +321,18 @@ static void begin_syncs(crtc_t *crtc) {
      reaches R0/2, which is the half line the second field is raised by
      (ch. 19.7.2). */
   bool mid_vsync = (r[8] & 1) != 0 && !crtc->parity_frame;
+  /* And where the video mode gives a row an odd number of lines, an odd C4
+     of an odd frame starts its VSYNC a line late, at C9.VMA=2 rather than
+     at the row's own first line: the two frames' rows are of unequal length
+     there, and this is what still leaves their syncs half a line apart
+     (ch. 19.5.2, 19.7.1). It never meets a MID-VSYNC, which happens only on
+     an even frame. A row of one line never reaches C9.VMA=2 and so raises
+     no VSYNC at all, which an R9 of 31 makes of every even-parity row; the
+     Compendium describes neither. */
+  bool late_vsync =
+      crtc->interlace_video_mode && (r[9] & 1) != 0 && (crtc->c4 & 1) != 0 && crtc->parity_frame;
   if (crtc->c4 == r[7] && !crtc->vsync && !crtc->vsync_blocked &&
-      (!mid_vsync || crtc->c0 == r[0] / 2)) {
+      (!mid_vsync || crtc->c0 == r[0] / 2) && (!late_vsync || c9_vma(crtc) == 2)) {
     crtc->vsync = true;
     crtc->vsync_blocked = true;
     crtc->c3h = 0;
@@ -267,7 +365,7 @@ static void throw_display_latches(crtc_t *crtc) {
 
 static uint64_t pins_of(const crtc_t *crtc) {
   bool display = !crtc->display_r1 && !crtc->display_r6;
-  return (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)(crtc->c9 & 0x1F) << 24) |
+  return (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)c9_vma(crtc) << 24) |
          (display ? CRTC_DISPTMG : 0) | (crtc->hsync ? CRTC_HSYNC : 0) |
          (crtc->vsync ? CRTC_VSYNC : 0);
 }

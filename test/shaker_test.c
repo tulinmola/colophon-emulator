@@ -1549,10 +1549,15 @@ int main(int argc, char **argv) {
           total_groups_run - total_groups_graded);
   fprintf(file, "A group stands as \"recorded, ungraded\" when it drew a screen of its own but\n");
   fprintf(file, "said what it had to say in a picture, a legend, or a table whose rows\n");
-  fprintf(file, "carry more than one test, rather than in words this reader can score. It\n");
+  fprintf(file, "carry more than one test, rather than in words this reader can score, or\n");
+  fprintf(file, "because it names silicon's value only where the machine differs from it. It\n");
   fprintf(file, "was run and kept, not skipped. A line marked ! is a test this machine\n");
   fprintf(file, "failed: either the module said so, or the machine's value differs from the\n");
   fprintf(file, "one Longshot's silicon produced.\n\n");
+  fprintf(file, "That last kind is worth knowing about: such a group grades itself while the\n");
+  fprintf(file, "machine is wrong and prints its measurement alone once it is right, so it\n");
+  fprintf(file, "leaves the tally above by being agreed with. A group falling out of that\n");
+  fprintf(file, "count is not the same as a group that could not be read.\n\n");
   fprintf(file, "The copy of this file in the test sources is the one on record, and a sweep\n");
   fprintf(file, "fails on the first line where the two differ. The screens behind these\n");
   fprintf(file, "standings are in the module records written beside the sweep's own copy.\n\n");
