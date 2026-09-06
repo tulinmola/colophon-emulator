@@ -15,11 +15,13 @@
  * the block that stops one VSYNC condition serving twice. C0 names the
  * character being drawn and holds it for that whole microsecond, which is
  * what a positional register write needs; the last line and the vertical
- * adjustment already read it. Not yet: interlace and skew (R8 is stored,
- * unread), cursor, lightpen, the per-type divergences, and what ch. 13.2.1
- * gives a line's first three microseconds — the states C0 0, 1 and 2
- * schedule for a later character, and the VSYNC arming of ch. 13.2.2. Every
- * comparison here is made where it stands. Two of the border's rules need a finer
+ * adjustment already read it, and both are settled at the characters ch.
+ * 13.2.1 settles them at rather than wherever they next stand. Not yet:
+ * interlace and skew (R8 is stored, unread), cursor, lightpen, the per-type
+ * divergences, the rest of what ch. 13.2.1 gives a line's first three
+ * microseconds — the counter updates those characters schedule for a later
+ * one — and the VSYNC arming of ch. 13.2.2. Every other comparison is made
+ * where it stands. Two of the border's rules need a finer
  * pin than this one: the byte of border at C0=R0 when R1 exceeds it (ch.
  * 17.6.2) and the byte-by-byte alternation an R6 of 0 makes on a frame's
  * first line (ch. 18.3.2) both toggle DISPLAY ENABLE inside a character,
@@ -87,12 +89,6 @@ typedef struct {
      rest of the line, so a register written afterwards cannot take it back
      (ch. 10.3.1.2). */
   bool last_line;
-  /* A last line seen while C0 is 0 or 1 stops C9 being counted against R9
-     and has it counted against R5 instead, and going through C0=2 does not
-     take that back — where it does take back the extra line itself (ch.
-     13.2.4, 13.2.5). The two are one state here and the chip has two, which
-     is why C0=2 cannot yet disarm the one without the other. */
-  bool c9_against_r5;
   bool in_vertical_adjustment;
   /* A chip that has drawn nothing has no character to leave behind, so the
      first tick draws one instead of advancing past one. Zero is the

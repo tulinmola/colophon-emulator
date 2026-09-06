@@ -304,6 +304,72 @@ static void a_late_write_cannot_end_the_frame(void) {
   TEST_EQUAL(crtc.c4, 6);
 }
 
+/* R5 raised on the last line while C0 has not passed 2 is considered and
+   the lines it asks for are added; raised later it is not (ch. 11.2.2,
+   11.4.2, 13.2.1). A write lands the microsecond after the character it was
+   made in, so this one is made in the character C0 names 2. */
+static void an_r5_asked_for_in_time_adds_its_lines(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(2);
+  write_register(5, 4);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 39);
+}
+
+/* And the disarming, which the case above cannot see: with no adjustment
+   left to spend, R4 moved later in the line changes nothing, because the
+   last line it stood in front of was never taken away (ch. 12.2, 13.2.5). */
+static void a_cancelled_r5_leaves_the_last_line_standing(void) {
+  program_standard();
+  write_register(5, 4);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(5, 0);
+  run_characters(9);
+  write_register(4, 3);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* The Compendium tabulates a type 0 adjustment of its own (ch. 11.2.1):
+   R4=10, R5=16, R9=3, and sixteen lines all carrying C4=11 while C9 runs 0
+   to 15 — C4 incremented once whatever R5 holds, and both counters back to
+   0 after (ch. 13.2.4). Transcribed from the table rather than from us. */
+static void the_documented_sixteen_line_adjustment(void) {
+  program_standard();
+  write_register(4, 10);
+  write_register(5, 16);
+  write_register(9, 3);
+  TEST_CHECK(run_to_row(10));
+  run_scanlines(3);
+  for (int line = 0; line < 16; line++) {
+    run_scanlines(1);
+    TEST_EQUAL(crtc.c4, 11);
+    TEST_EQUAL(crtc.c9, line);
+  }
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* An R5 of 0 is a quantity of no lines, so a frame whose adjustment is
+   cancelled ends where it would have ended without one (ch. 13.2.4). */
+static void an_r5_cancelled_in_time_adds_no_line(void) {
+  program_standard();
+  write_register(5, 4);
+  TEST_EQUAL(frame_scanlines(), 316);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(5, 0);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
 static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
   /* The firmware's other table, at &5D5 of the 6128 OS ROM: 32 rows of 8
      scanlines and six adjustment lines (ch. 11.2.2). */
@@ -450,6 +516,10 @@ int main(void) {
   TEST_RUN(the_vertical_adjustment_brings_c4_back_from_past_r4);
   TEST_RUN(the_last_line_holds_once_it_is_decided);
   TEST_RUN(a_late_write_cannot_end_the_frame);
+  TEST_RUN(an_r5_asked_for_in_time_adds_its_lines);
+  TEST_RUN(a_cancelled_r5_leaves_the_last_line_standing);
+  TEST_RUN(the_documented_sixteen_line_adjustment);
+  TEST_RUN(an_r5_cancelled_in_time_adds_no_line);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);
