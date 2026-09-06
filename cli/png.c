@@ -43,7 +43,10 @@ static bool write_chunk(FILE *file, const char *type, const uint8_t *data, size_
   crc = crc32_of(data, length, crc) ^ 0xFFFFFFFFu;
   uint8_t trailer[4];
   put_be32(trailer, crc);
-  return fwrite(header, 1, 8, file) == 8 && fwrite(data, 1, length, file) == length &&
+  /* IEND carries nothing, and fwrite may not be handed a null pointer even
+     for no bytes. */
+  return fwrite(header, 1, 8, file) == 8 &&
+         (length == 0 || fwrite(data, 1, length, file) == length) &&
          fwrite(trailer, 1, 4, file) == 4;
 }
 

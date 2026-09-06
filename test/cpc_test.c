@@ -102,10 +102,7 @@ static void reset_shows_both_roms_and_the_base_map(void) {
 
 static void programs_fetch_from_the_lower_rom(void) {
   power_on(sizeof ram);
-  const uint8_t program[] = {
-      0x3E, 0x42, /* LD A,&42 */
-      0x76,       /* HALT */
-  };
+  const uint8_t program[] = {0x3E, 0x42, 0x76}; /* LD A,&42 : HALT */
   rom_program(program, sizeof program);
   TEST_CHECK(run_to_halt());
   TEST_EQUAL(cpc.cpu.a, 0x42);
