@@ -4,9 +4,9 @@
 #include "crtc.h"
 
 /* Type 0 — Compendium ch. 4.3. R3 carries the VSYNC width in its high
-   nibble and the HSYNC width in its low one; R8's interlace and skew bits
-   are stored but nothing reads them yet. R16/R17 are the lightpen latches,
-   read-only. */
+   nibble and the HSYNC width in its low one; of R8 the interlace bit is
+   read and the skew bits are stored and no more. R16/R17 are the lightpen
+   latches, read-only. */
 static const uint8_t writable_bits[18] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x1F, 0x7F, 0x7F, 0xF3,
     0x1F, 0x7F, 0x1F, 0x3F, 0xFF, 0x3F, 0xFF, 0x00, 0x00,
@@ -31,11 +31,32 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
   crtc->c4 = next;
 }
 
+/* Either interlace mode is asked for by R8's low bit, and the line it adds
+   at the end of a frame is added on the parity R6 anticipated (ch. 19.6.1). */
+static bool interlace_line_due(const crtc_t *crtc) {
+  return (crtc->registers[8] & 1) != 0 && crtc->parity_r6;
+}
+
+/* The adjustment is one state in two flags, and they are dropped together
+   wherever it ends. */
+static void leave_vertical_adjustment(crtc_t *crtc) {
+  crtc->in_vertical_adjustment = false;
+  crtc->interlace_line_given = false;
+}
+
 /* C3h counts VSYNC scanlines on its 4 bits, so a width of 0 runs the full 16
    (ch. 6.1.2). */
 static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
-  if (crtc->vsync) {
+  if (crtc->vsync_began_mid_line) {
+    /* A VSYNC that began away from the head of a line has its counter
+       initialized at the next C0=0 rather than advanced there, which leaves
+       the pulse longer than R3's high nibble by the rest of the line it
+       began in: one begun during line 1 of 16 ends at the end of line 17
+       (ch. 16.4.1). */
+    crtc->c3h = 0;
+    crtc->vsync_began_mid_line = false;
+  } else if (crtc->vsync) {
     crtc->c3h = (crtc->c3h + 1) & 0x0F;
     if (crtc->c3h == (r[3] >> 4)) {
       crtc->vsync = false;
@@ -54,8 +75,18 @@ static void enter_scanline(crtc_t *crtc) {
        is done whatever R4 holds by then. */
     bool row_ended_on_r4 = crtc->c9 == r[9] && crtc->c4 == r[4];
     uint8_t next_c9 = row_ended_on_r4 ? 0 : (uint8_t)((crtc->c9 + 1) & C9_BITS);
-    if (next_c9 == r[5]) {
-      crtc->in_vertical_adjustment = false;
+    bool r5_lines_spent = next_c9 == r[5];
+    if (r5_lines_spent && interlace_line_due(crtc) && !crtc->interlace_line_given) {
+      /* The R5 lines are spent and interlace asks for one more, which is
+         the last of them (ch. 19.6.1). C4 has already been incremented once
+         for all the additional lines there are. */
+      crtc->interlace_line_given = true;
+      crtc->c9 = next_c9;
+      if (row_ended_on_r4) {
+        enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
+      }
+    } else if (r5_lines_spent || crtc->interlace_line_given) {
+      leave_vertical_adjustment(crtc);
       crtc->c9 = 0;
       enter_character_row(crtc, 0);
     } else {
@@ -141,8 +172,14 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
   }
   /* R5 counts on the characters C0 names 0, 1 and 2, and a write lands in
      the microsecond after the tick that named it, so the last tick that
-     sees one in time is the one naming 3 (ch. 11.2.2, 12.2, 13.2.1). */
-  if (crtc->c0 < 4 && r[5] != 0 && crtc->c4 >= r[4] && crtc->c9 == r[9]) {
+     sees one in time is the one naming 3 (ch. 11.2.2, 12.2, 13.2.1). The
+     line interlace adds is additional-line handling too, and asks for no R5
+     at all (ch. 19.6.1). Ch. 11.9 gives R8 a later deadline than R5 — the
+     condition "is evaluated on the last line of a frame, when C0=R0" — and
+     the group Shaker points at it, C (P), cannot be read until the video
+     mode's counting is here, so R5's schedule carries both for now. */
+  if (crtc->c0 < 4 && (r[5] != 0 || interlace_line_due(crtc)) && crtc->c4 >= r[4] &&
+      crtc->c9 == r[9]) {
     crtc->in_vertical_adjustment = true;
   }
   /* And the same deadline read the other way: a line armed on an R5 that
@@ -153,8 +190,9 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      begun by the clause above — the document gives no warrant for taking
      that one back, and nothing in Shaker asks. A line the R5 arm admitted
      with C4 already past R4 it cannot reach at all. */
-  if (crtc->c0 == 3 && r[5] == 0 && crtc->c4 == r[4] && crtc->c9 == r[9]) {
-    crtc->in_vertical_adjustment = false;
+  if (crtc->c0 == 3 && r[5] == 0 && !interlace_line_due(crtc) && crtc->c4 == r[4] &&
+      crtc->c9 == r[9]) {
+    leave_vertical_adjustment(crtc);
   }
 }
 
@@ -190,10 +228,17 @@ static void begin_syncs(crtc_t *crtc) {
     crtc->hsync = true;
     crtc->c3l = 0;
   }
-  if (crtc->c4 == r[7] && !crtc->vsync && !crtc->vsync_blocked) {
+  /* On an even frame in either interlace mode the VSYNC is a MID-VSYNC:
+     the C4/R7 equality does not start it where it falls, but where C0
+     reaches R0/2, which is the half line the second field is raised by
+     (ch. 19.7.2). */
+  bool mid_vsync = (r[8] & 1) != 0 && !crtc->parity_frame;
+  if (crtc->c4 == r[7] && !crtc->vsync && !crtc->vsync_blocked &&
+      (!mid_vsync || crtc->c0 == r[0] / 2)) {
     crtc->vsync = true;
     crtc->vsync_blocked = true;
     crtc->c3h = 0;
+    crtc->vsync_began_mid_line = crtc->c0 != 0;
   }
 }
 
@@ -227,8 +272,24 @@ static uint64_t pins_of(const crtc_t *crtc) {
          (crtc->vsync ? CRTC_VSYNC : 0);
 }
 
+/* ParityFrame takes what ParityR6 anticipated, at the frame's first
+   character; ParityR6 then anticipates the next frame's, which is why it is
+   read from ParityFrame and settled after it (ch. 19.5.2). Both come before
+   the VSYNC is looked at, because "ParityFrame management takes priority
+   over VSYNC management" — the case that turns on it is an R7 of 0, where
+   the equality and the switch fall on the same character (ch. 19.7.2). */
+static void settle_parity(crtc_t *crtc) {
+  if (crtc->c0 == 0 && crtc->c4 == 0 && crtc->c9 == 0) {
+    crtc->parity_frame = crtc->parity_r6;
+  }
+  if (crtc->c4 == crtc->registers[6]) {
+    crtc->parity_r6 = !crtc->parity_frame;
+  }
+}
+
 uint64_t crtc_tick(crtc_t *crtc) {
   enter_character(crtc);
+  settle_parity(crtc);
   decide_last_line(crtc);
   begin_vertical_adjustment(crtc);
   move_video_pointer(crtc);

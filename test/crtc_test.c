@@ -83,6 +83,30 @@ static long frame_scanlines(void) {
   return ticks / SCANLINE;
 }
 
+/* The next VSYNC to rise: the character C0 named when it did, the
+   characters it stayed up for counting that one, and whether the chip
+   called the frame odd. Gives up after four frames. */
+static bool next_vsync(uint8_t *at_character, long *characters, bool *odd_frame) {
+  for (long tick = 0; tick < 4L * FRAME_TICKS; tick++) {
+    bool standing = crtc.vsync;
+    crtc_tick(&crtc);
+    if (standing || !crtc.vsync) {
+      continue;
+    }
+    *at_character = crtc.c0;
+    *odd_frame = crtc.parity_frame;
+    *characters = 1;
+    while (crtc.vsync && *characters < 18L * SCANLINE) {
+      crtc_tick(&crtc);
+      if (crtc.vsync) {
+        (*characters)++;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
 static void reset_state(void) {
   crtc_init(&crtc);
   TEST_EQUAL(crtc.c0, 0);
@@ -417,6 +441,144 @@ static void an_r5_cancelled_in_time_adds_no_line(void) {
   TEST_EQUAL(crtc.c4, 0);
 }
 
+/* Either interlace mode adds one line to the end of the even frames — the
+   parity R6 anticipated, which turns odd where C4 reaches R6 on an even one
+   (ch. 11.9, 19.5.2, 19.6.1). So a pair of frames runs 312 lines and 313,
+   the 19968 and 20032 microseconds of ch. 19.3.1, averaging the 20000 an
+   interlaced field wants. That chapter calls the long one the odd frame,
+   counting from one VSYNC to the next; these frames are counted from one
+   C4=C9=C0=0 to the next, and the line falls after the VSYNC, which is what
+   ch. 19.3.1 means by the odd frame inheriting it. */
+static void an_interlace_mode_adds_a_line_to_the_even_frames(void) {
+  program_standard();
+  TEST_EQUAL(frame_scanlines(), 312);
+  TEST_EQUAL(frame_scanlines(), 312);
+
+  write_register(8, 1);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 313);
+  TEST_CHECK(crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 312);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 313);
+
+  /* It comes after the lines R5 asks for, and C4 is incremented once for
+     all of them together (ch. 11.9, 19.6.1). */
+  write_register(5, 6);
+  TEST_EQUAL(frame_scanlines(), 318);
+  TEST_EQUAL(frame_scanlines(), 319);
+  write_register(5, 0);
+  TEST_EQUAL(frame_scanlines(), 312);
+
+  /* R6 put above R4 while ParityR6 stands odd freezes it odd, because C4
+     can no longer reach it — and then every frame takes a line, rather than
+     every other (ch. 19.6.1). */
+  TEST_CHECK(run_to_row(26));
+  TEST_CHECK(crtc.parity_r6);
+  write_register(6, 40);
+  TEST_EQUAL(frame_scanlines(), 313);
+  TEST_EQUAL(frame_scanlines(), 313);
+  TEST_EQUAL(frame_scanlines(), 313);
+}
+
+/* On an even frame in either interlace mode the VSYNC is a MID-VSYNC: the
+   C4/R7 equality does not raise it where it falls but where C0 reaches
+   R0/2, which is the half line the second field is raised by. It begins
+   away from the head of a line, so R3's eight are counted from the head of
+   the next one and the rest of this one runs on top of them (ch. 16.4.1,
+   19.7.1, 19.7.2). */
+static void an_interlace_mode_holds_the_even_frames_vsync_back(void) {
+  uint8_t at_character = 0;
+  long characters = 0;
+  bool odd_frame = false;
+
+  program_standard();
+  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
+  TEST_EQUAL(at_character, 0);
+  TEST_EQUAL(characters, 8 * SCANLINE);
+
+  write_register(8, 1);
+  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
+  TEST_CHECK(odd_frame);
+  TEST_EQUAL(at_character, 0);
+  TEST_EQUAL(characters, 8 * SCANLINE);
+
+  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
+  TEST_CHECK(!odd_frame);
+  TEST_EQUAL(at_character, 31); /* R0/2, R0 being 63 */
+  TEST_EQUAL(characters, 8 * SCANLINE + SCANLINE - 31);
+}
+
+/* An R6 of 0 puts the parity's turn on the frame's own first character,
+   where ParityFrame is settled too. ParityFrame is settled first and
+   ParityR6 is read from it, so ParityR6 answers the frame that has just
+   begun rather than the one that just ended, and the line still falls on
+   the even frame (ch. 19.5.2, 19.6.1). Four scanlines a frame, so the extra
+   one is a fifth. */
+static void an_r6_of_zero_keeps_the_line_on_the_even_frame(void) {
+  program_standard();
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 0);
+  write_register(9, 3);
+  write_register(8, 1);
+  crtc_tick(&crtc);
+  TEST_CHECK(!crtc.parity_frame);
+
+  TEST_EQUAL(frame_scanlines(), 5);
+  TEST_CHECK(crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 4);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 5);
+}
+
+/* The adjustment is one state held in two flags, and a line taken back
+   drops both: a chip left thinking it had already spent its interlace line
+   would withhold a later frame's without a word (ch. 13.2.1, 19.6.1). */
+static void a_disarmed_adjustment_forgets_the_interlace_line(void) {
+  program_standard();
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 0);
+  write_register(9, 3);
+  write_register(8, 1);
+  crtc_tick(&crtc);
+
+  run_scanlines(4);
+  TEST_CHECK(crtc.in_vertical_adjustment);
+  TEST_CHECK(crtc.interlace_line_given);
+  TEST_EQUAL(crtc.c4, 1); /* R4+1, incremented once for the whole of it */
+
+  /* R4 and R9 moved onto the counters, and the interlace asked for taken
+     back, all in time for the character C0 names 3. */
+  write_register(4, 1);
+  write_register(9, 0);
+  write_register(8, 0);
+  run_characters(4);
+  TEST_CHECK(!crtc.in_vertical_adjustment);
+  TEST_CHECK(!crtc.interlace_line_given);
+}
+
+/* ParityFrame is settled before the VSYNC is looked at, which only shows
+   where R7 is 0 and the two fall on the same character: the frame that has
+   just become even takes a MID-VSYNC in its own first line (ch. 19.7.2). */
+static void the_parity_settles_before_an_r7_of_zero_is_read(void) {
+  uint8_t at_character = 0;
+  long characters = 0;
+  bool odd_frame = false;
+
+  program_standard();
+  write_register(7, 0);
+  write_register(8, 1);
+  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
+  TEST_CHECK(!odd_frame);
+  TEST_EQUAL(at_character, 31);
+
+  TEST_CHECK(next_vsync(&at_character, &characters, &odd_frame));
+  TEST_CHECK(odd_frame);
+  TEST_EQUAL(at_character, 0);
+}
+
 static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
   /* The firmware's other table, at &5D5 of the 6128 OS ROM: 32 rows of 8
      scanlines and six adjustment lines (ch. 11.2.2). */
@@ -441,7 +603,13 @@ static void one_vsync_per_equality_of_c4_and_r7(void) {
   write_register(7, 1);
   crtc_tick(&crtc);
   TEST_CHECK(crtc.vsync);
-  run_scanlines(8); /* R3's high nibble */
+  /* Begun at C0=1 rather than at the head of the line, so the counter is
+     initialized at the head of the next one and R3's eight lines are
+     counted from there — the rest of this line runs on top of them (ch.
+     16.4.1). */
+  run_characters(8 * SCANLINE + (SCANLINE - 1) - 1);
+  TEST_CHECK(crtc.vsync);
+  run_characters(1);
   TEST_CHECK(!crtc.vsync);
   run_scanlines(10); /* still row 1, and still no second VSYNC */
   TEST_CHECK(!crtc.vsync);
@@ -570,6 +738,11 @@ int main(void) {
   TEST_RUN(r4_moved_at_c0_1_makes_the_line_an_adjustment);
   TEST_RUN(a_late_write_cannot_begin_an_adjustment);
   TEST_RUN(an_r5_cancelled_in_time_adds_no_line);
+  TEST_RUN(an_interlace_mode_adds_a_line_to_the_even_frames);
+  TEST_RUN(an_interlace_mode_holds_the_even_frames_vsync_back);
+  TEST_RUN(an_r6_of_zero_keeps_the_line_on_the_even_frame);
+  TEST_RUN(a_disarmed_adjustment_forgets_the_interlace_line);
+  TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);
