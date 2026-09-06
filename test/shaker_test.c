@@ -33,6 +33,7 @@
  *   from the "Amstrad CPC CRTC Compendium" by Longshot (CC BY-NC-ND).
  */
 #include <ctype.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -580,7 +581,7 @@ static int read_screen(void) {
 }
 
 static bool write_raster(const char *path) {
-  for (size_t index = 0; index < CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT; index++) {
+  for (size_t index = 0; index < (size_t)CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT; index++) {
     uint32_t rgb = gate_array_rgb(framebuffer[index]);
     pixels[index * 3] = (uint8_t)(rgb >> 16);
     pixels[index * 3 + 1] = (uint8_t)(rgb >> 8);
@@ -603,6 +604,10 @@ static void trim_trailing_spaces(char *text) {
   }
 }
 
+static bool begins_with(const char *text, const char *prefix) {
+  return strncmp(text, prefix, strlen(prefix)) == 0;
+}
+
 /* Which CRTC type a group belongs to is stated at the head of its label and
    nowhere else: "CRTC 2 RVMB" is type 2's, "CRTC 0.2" is shared, "ALL" is
    everyone's. A type named later in a label is a remark about the test, not
@@ -619,7 +624,7 @@ static bool applies_to_type_0(const char *label) {
   while (*at == ' ') {
     at++;
   }
-  if (strncmp(at, "CRTC", 4) != 0) {
+  if (!begins_with(at, "CRTC")) {
     return true;
   }
   at += 4;
@@ -638,16 +643,16 @@ static bool applies_to_type_0(const char *label) {
 }
 
 /* The whole bracket has to match: a label can carry "(2.1.0)" beside its
-   count, and a conversion that stopped early would read that as a number of
-   tests. The width keeps a screenful of arbitrary digits inside an int. */
+   count, and a conversion that stopped where the digits ran out would read
+   that as a number of tests. */
 static int declared_test_count(const char *label) {
   const char *at = label;
   while ((at = strchr(at, '(')) != NULL) {
-    int count = 0;
-    int end = 0;
-    if ((sscanf(at, "(%8d TST)%n", &count, &end) == 1 && end > 0) ||
-        (sscanf(at, "(%8d INTERACTIVE TST)%n", &count, &end) == 1 && end > 0)) {
-      return count;
+    char *after_digits = NULL;
+    long count = strtol(at + 1, &after_digits, 10);
+    if (after_digits != at + 1 && count >= 0 && count <= INT_MAX &&
+        (begins_with(after_digits, " TST)") || begins_with(after_digits, " INTERACTIVE TST)"))) {
+      return (int)count;
     }
     at++;
   }
@@ -1309,9 +1314,16 @@ static void the_scoreboard_matches_the_one_on_record(void) {
   int line = 0;
   int first_difference = 0;
   int differences = 0;
+  /* One file outlasts the other where a line was added or dropped, and the
+     one that ended first is not read again: the walk goes on to the end of
+     the longer so that every line that moved is counted. */
+  bool written_ended = false;
+  bool record_ended = false;
   while (true) {
-    char *from_written = fgets(written_line, sizeof written_line, written);
-    char *from_record = fgets(recorded_line, sizeof recorded_line, on_record);
+    char *from_written = written_ended ? NULL : fgets(written_line, sizeof written_line, written);
+    char *from_record = record_ended ? NULL : fgets(recorded_line, sizeof recorded_line, on_record);
+    written_ended = from_written == NULL;
+    record_ended = from_record == NULL;
     if (from_written == NULL && from_record == NULL) {
       break;
     }

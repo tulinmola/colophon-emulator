@@ -104,7 +104,7 @@ static void programs_fetch_from_the_lower_rom(void) {
   power_on(sizeof ram);
   const uint8_t program[] = {
       0x3E, 0x42, /* LD A,&42 */
-      0x76,       /* HALT */
+      0x76        /* HALT */
   };
   rom_program(program, sizeof program);
   TEST_CHECK(run_to_halt());
