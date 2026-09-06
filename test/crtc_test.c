@@ -356,6 +356,53 @@ static void the_documented_sixteen_line_adjustment(void) {
   TEST_EQUAL(crtc.c9, 0);
 }
 
+/* A last line whose comparison no longer holds, because R9 moved under it
+   at C0=1, spends itself on an adjustment instead of ending the frame, and
+   no R5 above 0 is wanted for that (ch. 10.3.1.2). The numbers are the
+   Compendium's own third example in ch. 11.2.2 — C4 and C9 at 38 and 7 with
+   R9 taken to 6 — and so is the answer: "The next line is then C4==38,
+   C9==8." C9 climbs past R9 where without the rule both would return to 0,
+   and C4 stays where it is because the row never reached its last line. */
+static void r9_moved_at_c0_1_makes_the_line_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(9, 6);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 38);
+  TEST_EQUAL(crtc.c9, 8);
+}
+
+/* R4 is the other half of the same rule, and moving it does the same. */
+static void r4_moved_at_c0_1_makes_the_line_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(4, 20);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 38);
+  TEST_EQUAL(crtc.c9, 8);
+}
+
+/* And the deadline the other way about: a move the chip sees after C0 has
+   passed 2 can neither take the last line back nor make an adjustment of
+   it, so the frame ends where it stood (ch. 10.3.1.2, 12.2). */
+static void a_late_write_cannot_begin_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(2);
+  write_register(4, 20);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
 /* An R5 of 0 is a quantity of no lines, so a frame whose adjustment is
    cancelled ends where it would have ended without one (ch. 13.2.4). */
 static void an_r5_cancelled_in_time_adds_no_line(void) {
@@ -519,6 +566,9 @@ int main(void) {
   TEST_RUN(an_r5_asked_for_in_time_adds_its_lines);
   TEST_RUN(a_cancelled_r5_leaves_the_last_line_standing);
   TEST_RUN(the_documented_sixteen_line_adjustment);
+  TEST_RUN(r9_moved_at_c0_1_makes_the_line_an_adjustment);
+  TEST_RUN(r4_moved_at_c0_1_makes_the_line_an_adjustment);
+  TEST_RUN(a_late_write_cannot_begin_an_adjustment);
   TEST_RUN(an_r5_cancelled_in_time_adds_no_line);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);

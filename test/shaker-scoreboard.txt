@@ -2,8 +2,8 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-6 of them printed self-graded lines, 31 in all: 15 agree with Longshot's
-silicon and 16 do not. That is 48% of what this reader can score, and no
+6 of them printed self-graded lines, 30 in all: 21 agree with Longshot's
+silicon and 9 do not. That is 70% of what this reader can score, and no
 measure at all of the other 58 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -120,17 +120,16 @@ E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME          
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   recorded, ungraded
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
-E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        11 graded, 7 wrong
+E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        10 graded, 0 wrong
       >>>>>> DELAY TO VSYNC:#002A (EXP:#002A)
-    ! >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
-    ! >>>>>> DELAY TO VSYNC:#0030 (EXP:#00B7)  WRONG
+      >>>>>> DELAY TO VSYNC:#00F7 (EXP:#00F7)
+      >>>>>> DELAY TO VSYNC:#00B7 (EXP:#00B7)
       >>>>>> DELAY TO VSYNC:#0032 (EXP:#0032)
       >>>>>> DELAY TO VSYNC:#00C0 (EXP:#00C0)
-    ! >>>>>> DELAY TO VSYNC:#0003 (EXP:#007F)  WRONG
+      >>>>>> DELAY TO VSYNC:#007F (EXP:#007F)
       >>>>>> DELAY TO VSYNC:#001B (EXP:#001B)
-    ! >>>>>> DELAY TO VSYNC:#001F (EXP:#007F)  WRONG
-    ! >>>>>> DELAY TO VSYNC:#003F (EXP:#009F)  WRONG
-    ! >>>>>> DELAY TO VSYNC:#04DF (EXP:#053F)  WRONG
-    ! >>>>>> DELAY TO VSYNC:#04BF (EXP:#0000)  WRONG
+      >>>>>> DELAY TO VSYNC:#009F (EXP:#009F)
+      >>>>>> DELAY TO VSYNC:#053F (EXP:#053F)
+      >>>>>> DELAY TO VSYNC:#0000 (EXP:#0000)
 E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   another CRTC type's
 E (COPY)    RESET CPC                                                                        recorded, ungraded

@@ -11,8 +11,10 @@
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its readable set, its
  * VMA/VMA' reload rules, the counter widths a program can overrun, the last
- * line decided while C0 is 0 or 1, the vertical adjustment spent on C9, and
- * the block that stops one VSYNC condition serving twice. C0 names the
+ * line decided while C0 is 0 or 1, the vertical adjustment spent on C9 —
+ * asked for by R5, taken back where R5 is cancelled in time, and opened by
+ * an R4 or R9 moved under a standing last line — and the block that stops
+ * one VSYNC condition serving twice. C0 names the
  * character being drawn and holds it for that whole microsecond, which is
  * what a positional register write needs; the last line and the vertical
  * adjustment already read it, and both are settled at the characters ch.

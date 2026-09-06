@@ -47,18 +47,20 @@ static void enter_scanline(crtc_t *crtc) {
        increment: the line the chip would move to becomes the adjustment's
        own unless that line has reached R5 (ch. 13.2.4). Once C4 has left R4
        behind, C9 can no longer be zeroed, which is what lets it climb past
-       R9 to reach an R5 larger than a row (ch. 11.2.2). C4 is incremented
-       once whatever R5 holds, and returns to 0 when the adjustment is done,
-       whatever R4 holds (ch. 13.2.4). */
-    uint8_t next_c9 =
-        crtc->c9 == r[9] && crtc->c4 == r[4] ? 0 : (uint8_t)((crtc->c9 + 1) & C9_BITS);
+       R9 to reach an R5 larger than a row (ch. 11.2.2). "If C9==R9 then
+       C4=C4+1, and in additional management only once if C4 was worth R4"
+       (ch. 13.2.4) — so both the zeroing and the increment ride on the row
+       having reached its last line, and C4 returns to 0 when the adjustment
+       is done whatever R4 holds by then. */
+    bool row_ended_on_r4 = crtc->c9 == r[9] && crtc->c4 == r[4];
+    uint8_t next_c9 = row_ended_on_r4 ? 0 : (uint8_t)((crtc->c9 + 1) & C9_BITS);
     if (next_c9 == r[5]) {
       crtc->in_vertical_adjustment = false;
       crtc->c9 = 0;
       enter_character_row(crtc, 0);
     } else {
       crtc->c9 = next_c9;
-      if (crtc->c4 == r[4]) {
+      if (row_ended_on_r4) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       }
     }
@@ -127,6 +129,16 @@ static void decide_last_line(crtc_t *crtc) {
    and the reason a split screen resynchronises instead of drifting. */
 static void begin_vertical_adjustment(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
+  /* A last line whose comparison held while C0 was 0 and 1 and does not
+     hold now, because R4 or R9 moved under it, spends itself on an
+     adjustment instead of ending the frame, and no R5 above 0 is wanted for
+     that (ch. 10.3.1.2, 12.2, 13.2.1). Only a write made during the
+     character C0 named 1 can leave things so: one made at C0=0 would have
+     been seen by the last line's own second look, which is why the state
+     and the comparison can disagree here and nowhere else. */
+  if (crtc->c0 == 2 && crtc->last_line && (crtc->c4 != r[4] || crtc->c9 != r[9])) {
+    crtc->in_vertical_adjustment = true;
+  }
   /* R5 counts on the characters C0 names 0, 1 and 2, and a write lands in
      the microsecond after the tick that named it, so the last tick that
      sees one in time is the one naming 3 (ch. 11.2.2, 12.2, 13.2.1). */
@@ -135,12 +147,12 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
   }
   /* And the same deadline read the other way: a line armed on an R5 that
      the same line goes on to cancel is disarmed, and the last line it stood
-     in front of is simply left standing (ch. 13.2.1, 13.2.5). C4 on R4
-     names a line the frame could end on; an adjustment already being spent
-     stands one past R4, so this cannot reach it. What it can reach is a
-     line the other arm admitted with C4 already past R4, which nothing
-     disarms — R4 moved under its own counter is rare and R5 cancelled on
-     top of it rarer, and neither Shaker nor the document speaks to it. */
+     in front of is simply left standing (ch. 13.2.1, 13.2.5). It reaches
+     only a line whose counters still stand on their limits, which is the
+     line the frame could end on and also the first line of an adjustment
+     begun by the clause above — the document gives no warrant for taking
+     that one back, and nothing in Shaker asks. A line the R5 arm admitted
+     with C4 already past R4 it cannot reach at all. */
   if (crtc->c0 == 3 && r[5] == 0 && crtc->c4 == r[4] && crtc->c9 == r[9]) {
     crtc->in_vertical_adjustment = false;
   }
