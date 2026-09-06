@@ -39,6 +39,13 @@ SPECTRUM_FIRMWARE_TEST_C = test/spectrum_firmware_test.c
 SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
 EXERCISER_C = test/z80_exerciser_test.c
 CORE_C = $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(PPI_C) $(PSG_C) $(KEYBOARD_C) $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(MACHINE_C) $(CPC_SNAPSHOT_C)
+# Every target depends on every header. The build compiles straight from
+# sources with nothing finer to hang a dependency on, and a header naming
+# only its own target is not what a translation unit reads: a constant in
+# keyboard.h governs whether a CPC has a Q key, and a stale object file
+# hid that from a test that went looking for it.
+HEADERS = $(wildcard src/*.h) $(wildcard cli/*.h) $(wildcard test/*.h)
+
 SPECTRUM_CORE_C = $(SRC_C) $(MONITOR_C) $(KEYBOARD_C) $(ULA_C) $(SPECTRUM_C) $(SPECTRUM_SNAPSHOT_C)
 PNG_C = cli/png.c
 CLI_C = cli/main.c
@@ -56,91 +63,91 @@ all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
-$(BUILD)/emulator: $(CORE_C) $(ULA_C) $(SPECTRUM_C) $(SPECTRUM_SNAPSHOT_C) $(PNG_C) $(CLI_C) src/cpc.h src/spectrum.h cli/png.h
+$(BUILD)/emulator: $(CORE_C) $(ULA_C) $(SPECTRUM_C) $(SPECTRUM_SNAPSHOT_C) $(PNG_C) $(CLI_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Icli $(CORE_C) $(ULA_C) $(SPECTRUM_C) $(SPECTRUM_SNAPSHOT_C) $(PNG_C) $(CLI_C) -o $@
 
-$(BUILD)/z80_test: $(SRC_C) src/z80.h $(Z80_TEST_C) test/test.h
+$(BUILD)/z80_test: $(SRC_C) $(Z80_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SRC_C) $(Z80_TEST_C) -o $@
 
-$(BUILD)/crtc_test: $(CRTC_C) src/crtc.h $(CRTC_TEST_C) test/test.h
+$(BUILD)/crtc_test: $(CRTC_C) $(CRTC_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CRTC_C) $(CRTC_TEST_C) -o $@
 
-$(BUILD)/gate_array_test: $(GATE_ARRAY_C) src/gate_array.h $(GATE_ARRAY_TEST_C) test/test.h
+$(BUILD)/gate_array_test: $(GATE_ARRAY_C) $(GATE_ARRAY_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(GATE_ARRAY_C) $(GATE_ARRAY_TEST_C) -o $@
 
-$(BUILD)/monitor_test: $(MONITOR_C) src/monitor.h $(MONITOR_TEST_C) test/test.h
+$(BUILD)/monitor_test: $(MONITOR_C) $(MONITOR_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(MONITOR_C) $(MONITOR_TEST_C) -o $@
 
-$(BUILD)/ppi_test: $(PPI_C) src/ppi.h $(PPI_TEST_C) test/test.h
+$(BUILD)/ppi_test: $(PPI_C) $(PPI_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(PPI_C) $(PPI_TEST_C) -o $@
 
-$(BUILD)/psg_test: $(PSG_C) src/psg.h $(PSG_TEST_C) test/test.h
+$(BUILD)/psg_test: $(PSG_C) $(PSG_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(PSG_C) $(PSG_TEST_C) -o $@
 
-$(BUILD)/keyboard_test: $(KEYBOARD_C) src/keyboard.h $(KEYBOARD_TEST_C) test/test.h
+$(BUILD)/keyboard_test: $(KEYBOARD_C) $(KEYBOARD_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(KEYBOARD_C) $(KEYBOARD_TEST_C) -o $@
 
-$(BUILD)/ula_test: $(ULA_C) src/ula.h $(ULA_TEST_C) test/test.h
+$(BUILD)/ula_test: $(ULA_C) $(ULA_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(ULA_C) $(ULA_TEST_C) -o $@
 
-$(BUILD)/spectrum_test: $(SPECTRUM_CORE_C) src/spectrum.h $(SPECTRUM_TEST_C) test/test.h
+$(BUILD)/spectrum_test: $(SPECTRUM_CORE_C) $(SPECTRUM_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_TEST_C) -o $@
 
-$(BUILD)/spectrum_snapshot_test: $(SPECTRUM_CORE_C) src/spectrum_snapshot.h $(SPECTRUM_SNAPSHOT_TEST_C) test/test.h
+$(BUILD)/spectrum_snapshot_test: $(SPECTRUM_CORE_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_SNAPSHOT_TEST_C) -o $@
 
-$(BUILD)/cpc_test: $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/cpc.h $(CPC_TEST_C) test/test.h
+$(BUILD)/cpc_test: $(CORE_C) $(CPC_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(CPC_TEST_C) -o $@
 
-$(BUILD)/firmware_test: $(CORE_C) src/cpc.h $(FIRMWARE_TEST_C) test/test.h
+$(BUILD)/firmware_test: $(CORE_C) $(FIRMWARE_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(FIRMWARE_TEST_C) -o $@
 
-$(BUILD)/spectrum_firmware_test: $(SPECTRUM_CORE_C) src/spectrum.h $(SPECTRUM_FIRMWARE_TEST_C) test/test.h
+$(BUILD)/spectrum_firmware_test: $(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C) -o $@
 
-$(BUILD)/timing_test: $(CORE_C) src/cpc.h $(TIMING_TEST_C) test/test.h
+$(BUILD)/timing_test: $(CORE_C) $(TIMING_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(TIMING_TEST_C) -o $@
 
-$(BUILD)/cpc_snapshot_test: $(CORE_C) src/cpc_snapshot.h $(CPC_SNAPSHOT_TEST_C) test/test.h
+$(BUILD)/cpc_snapshot_test: $(CORE_C) $(CPC_SNAPSHOT_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(CPC_SNAPSHOT_TEST_C) -o $@
 
-$(BUILD)/floppy_test: $(FLOPPY_C) src/floppy.h src/dsk.h $(FLOPPY_TEST_C) test/test.h
+$(BUILD)/floppy_test: $(FLOPPY_C) $(FLOPPY_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(FLOPPY_C) $(FLOPPY_TEST_C) -o $@
 
-$(BUILD)/drive_test: $(FLOPPY_C) $(DRIVE_C) src/floppy.h src/drive.h $(DRIVE_TEST_C) test/test.h
+$(BUILD)/drive_test: $(FLOPPY_C) $(DRIVE_C) $(DRIVE_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(FLOPPY_C) $(DRIVE_C) $(DRIVE_TEST_C) -o $@
 
-$(BUILD)/upd765_test: $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) src/floppy.h src/dsk.h src/drive.h src/upd765.h $(UPD765_TEST_C) test/test.h
+$(BUILD)/upd765_test: $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(UPD765_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(UPD765_TEST_C) -o $@
 
-$(BUILD)/png_test: $(PNG_C) cli/png.h $(PNG_TEST_C) test/test.h
+$(BUILD)/png_test: $(PNG_C) $(PNG_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Icli -Itest $(PNG_C) $(PNG_TEST_C) -o $@
 
-$(BUILD)/z80_single_step_test: $(SRC_C) src/z80.h $(SINGLE_STEP_C) test/json.h
+$(BUILD)/z80_single_step_test: $(SRC_C) $(SINGLE_STEP_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SRC_C) $(SINGLE_STEP_C) -o $@
 
-$(BUILD)/z80_exerciser_test: $(SRC_C) src/z80.h $(EXERCISER_C)
+$(BUILD)/z80_exerciser_test: $(SRC_C) $(EXERCISER_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SRC_C) $(EXERCISER_C) -o $@
 

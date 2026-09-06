@@ -534,7 +534,7 @@ static void cpc_run_frames(cpc_t *cpc, long frames) {
 /* Hold a key, with shift if the character needs it, then let go. */
 static void cpc_press_and_release(cpc_t *cpc, keyboard_key key, bool shifted) {
   if (shifted) {
-    keyboard_press(&cpc->keyboard, KEYBOARD_SHIFT);
+    keyboard_press(&cpc->keyboard, CPC_SHIFT);
   }
   keyboard_press(&cpc->keyboard, key);
   cpc_run_frames(cpc, FRAMES_KEY_HELD);
@@ -553,26 +553,26 @@ static bool cpc_type_text(cpc_t *cpc, const char *text) {
       at++;
       switch (*at) {
         case 'n':
-          key = KEYBOARD_RETURN;
+          key = CPC_RETURN;
           break;
         case 't':
-          key = KEYBOARD_TAB;
+          key = CPC_TAB;
           break;
         case 'e':
-          key = KEYBOARD_ESCAPE;
+          key = CPC_ESCAPE;
           break;
         case 'b':
-          key = KEYBOARD_DELETE;
+          key = CPC_DELETE;
           break;
         case '\\':
-          key = keyboard_key_for_character('\\', &shifted);
+          key = cpc_key_for_character('\\', &shifted);
           break;
         default:
           fprintf(stderr, "no such escape: \\%c\n", *at);
           return false;
       }
     } else {
-      key = keyboard_key_for_character(character, &shifted);
+      key = cpc_key_for_character(character, &shifted);
       if (key == KEYBOARD_NO_KEY) {
         fprintf(stderr, "this keyboard has no '%c'\n", character);
         return false;

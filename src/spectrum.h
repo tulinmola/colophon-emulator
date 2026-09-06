@@ -81,6 +81,9 @@
 #define SPECTRUM_KEY(half_row, bit) KEYBOARD_KEY(half_row, bit)
 #define SPECTRUM_HALF_ROWS 8
 
+/* The matrix has to have room for them, as it does for a CPC's ten. */
+typedef char spectrum_keyboard_fits_the_matrix[SPECTRUM_HALF_ROWS <= KEYBOARD_MAX_LINES ? 1 : -1];
+
 /* The four keys that carry no character and so cannot be looked up by one. */
 #define SPECTRUM_CAPS_SHIFT SPECTRUM_KEY(0, 0)
 #define SPECTRUM_SYMBOL_SHIFT SPECTRUM_KEY(7, 1)

@@ -504,7 +504,7 @@ static size_t append_ppi_write(uint8_t *program, size_t length, uint8_t port, ui
    inactive, turn port A around, choose a line, read, turn back. */
 static void the_documented_scan_reads_a_line(void) {
   power_on(sizeof ram);
-  keyboard_press(&cpc.keyboard, KEYBOARD_KEY(6, 3)); /* T */
+  keyboard_press(&cpc.keyboard, CPC_KEY(6, 3)); /* T */
   uint8_t body[80];
   size_t length = 0;
   length = append_ppi_write(body, length, 0xF7, 0x82); /* port A output */
@@ -690,6 +690,76 @@ static void without_the_interface_the_ports_float(void) {
   TEST_EQUAL(cpc_peek(&cpc, 0x4000), 0xFF);
 }
 
+/* Spot checks against the matrix table, one per corner and a few in the
+   middle, so a transcription slip shows up here rather than as a wrong
+   letter three rungs later. */
+static void the_keycaps_are_where_the_matrix_table_says(void) {
+  bool shifted = false;
+  TEST_EQUAL(cpc_key_for_character('1', &shifted), CPC_KEY(8, 0));
+  TEST_CHECK(!shifted);
+  TEST_EQUAL(cpc_key_for_character('!', &shifted), CPC_KEY(8, 0));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('"', &shifted), CPC_KEY(8, 1));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('#', &shifted), CPC_KEY(7, 1));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('p', &shifted), CPC_KEY(3, 3));
+  TEST_EQUAL(cpc_key_for_character('P', &shifted), CPC_KEY(3, 3));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('z', &shifted), CPC_KEY(8, 7));
+  TEST_EQUAL(cpc_key_for_character(' ', &shifted), CPC_SPACE);
+  TEST_CHECK(!shifted);
+  TEST_EQUAL(cpc_key_for_character('+', &shifted), CPC_KEY(3, 4));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('[', &shifted), CPC_KEY(2, 1));
+  TEST_EQUAL(cpc_key_for_character(']', &shifted), CPC_KEY(2, 3));
+  TEST_EQUAL(cpc_key_for_character('@', &shifted), CPC_KEY(3, 2));
+  TEST_CHECK(!shifted);
+  /* Each of these pairs sits on one keycap, and the source table has them
+     crossed; the firmware's own translation settles it. */
+  TEST_EQUAL(cpc_key_for_character('.', &shifted), CPC_KEY(3, 7));
+  TEST_EQUAL(cpc_key_for_character('>', &shifted), CPC_KEY(3, 7));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character(',', &shifted), CPC_KEY(4, 7));
+  TEST_EQUAL(cpc_key_for_character('<', &shifted), CPC_KEY(4, 7));
+  TEST_CHECK(shifted);
+}
+
+static void a_character_the_keyboard_lacks_is_refused(void) {
+  bool shifted = false;
+  TEST_EQUAL(cpc_key_for_character('~', &shifted), KEYBOARD_NO_KEY);
+  TEST_EQUAL(cpc_key_for_character('\n', &shifted), KEYBOARD_NO_KEY);
+  TEST_EQUAL(cpc_key_for_character('\0', &shifted), KEYBOARD_NO_KEY);
+}
+
+/* Every letter and digit must be reachable, and no two keys may claim the
+   same character — the sort of thing a hand-copied table gets wrong once. */
+static void the_layout_is_complete_and_unambiguous(void) {
+  static const char *reachable = "abcdefghijklmnopqrstuvwxyz0123456789 "
+                                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                 "!\"#$%&'()_-=[]{}@|;+:*/?,<.>^\\`";
+  for (const char *character = reachable; *character != '\0'; character++) {
+    bool shifted = false;
+    if (cpc_key_for_character(*character, &shifted) == KEYBOARD_NO_KEY) {
+      TEST_FAIL("'%c' is on no key", *character);
+    }
+  }
+  for (int first = 32; first < 127; first++) {
+    bool shifted = false;
+    keyboard_key key = cpc_key_for_character((char)first, &shifted);
+    if (key == KEYBOARD_NO_KEY) {
+      continue;
+    }
+    for (int second = first + 1; second < 127; second++) {
+      bool other_shifted = false;
+      keyboard_key other = cpc_key_for_character((char)second, &other_shifted);
+      if (key == other && shifted == other_shifted && first != ' ') {
+        TEST_FAIL("'%c' and '%c' claim the same key", first, second);
+      }
+    }
+  }
+}
+
 int main(void) {
   TEST_RUN(reset_shows_both_roms_and_the_base_map);
   TEST_RUN(programs_fetch_from_the_lower_rom);
@@ -713,6 +783,9 @@ int main(void) {
   TEST_RUN(the_beam_sweeps_every_line_below_the_flyback);
   TEST_RUN(the_screen_is_read_from_the_base_ram_alone);
   TEST_RUN(the_documented_scan_reads_a_line);
+  TEST_RUN(the_keycaps_are_where_the_matrix_table_says);
+  TEST_RUN(a_character_the_keyboard_lacks_is_refused);
+  TEST_RUN(the_layout_is_complete_and_unambiguous);
   TEST_RUN(an_unpressed_keyboard_reads_high_through_the_chips);
   TEST_RUN(port_b_carries_the_links_and_the_vsync);
   TEST_RUN(port_b_follows_the_crtc_into_vsync);

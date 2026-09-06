@@ -32,6 +32,10 @@
  *   https://cpctech.cpcwiki.de/docs/8255cpc.html — what each port is wired
  *   to here: the PSG's bus on A, VSYNC and the board's links on B, the
  *   PSG's function lines and the keyboard line on C.
+ * - "Reading the keyboard and Joysticks" (Kevin Thacker's cpctech),
+ *   https://cpctech.cpcwiki.de/docs/keyboard.html — the matrix table: which
+ *   line and bit each key sits on, the UK legends printed on them, and the
+ *   two joystick lines.
  * - "Floppy disc controller and Floppy disc drives" (Kevin Thacker's
  *   cpctech), https://cpctech.cpcwiki.de/docs/fdc.html — the disc
  *   interface's decode: A10 and A7 low select it, A8 and A0 then choose
@@ -78,6 +82,35 @@
    length it likes. It is here because running "about a second" is a thing
    callers want, not because the machine guarantees it. */
 #define CPC_TICKS_PER_STANDARD_FRAME (312L * 64L * 4L)
+
+/* A key, as the line that selects it and the bit that reads it. Ten lines of
+   eight, numbered as the CPC's own documentation numbers its key codes;
+   lines past the tenth are not wired and read &FF.
+
+   Two of them carry a joystick as well. Joystick 0 has line 9 to itself, all
+   but its top bit, which is DEL; joystick 1 shares line 6 with the letters,
+   which is why its directions can be played from the keyboard and why
+   two-player games pick their keys carefully. */
+#define CPC_KEY(line, bit) KEYBOARD_KEY(line, bit)
+#define CPC_KEYBOARD_LINES 10
+
+/* The matrix has to have room for them. Nothing else would say so, and a
+   keyboard one line short loses a whole row of keys without a word. */
+typedef char cpc_keyboard_fits_the_matrix[CPC_KEYBOARD_LINES <= KEYBOARD_MAX_LINES ? 1 : -1];
+
+/* The keys a text-typing caller needs by name; the rest it finds through
+   cpc_key_for_character. */
+#define CPC_RETURN CPC_KEY(2, 2)
+#define CPC_SHIFT CPC_KEY(2, 5)
+#define CPC_SPACE CPC_KEY(5, 7)
+#define CPC_TAB CPC_KEY(8, 4)
+#define CPC_ESCAPE CPC_KEY(8, 2)
+#define CPC_DELETE CPC_KEY(9, 7)
+
+/* Where a character lives on a UK CPC keyboard, and whether shift is held to
+ * reach it. Returns KEYBOARD_NO_KEY for a character the keyboard cannot
+ * produce. */
+keyboard_key cpc_key_for_character(char character, bool *shifted);
 
 typedef struct {
   z80_t cpu;
