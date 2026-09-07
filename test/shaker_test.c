@@ -769,20 +769,26 @@ static bool keep_rasters;
 
 /* Some groups grade themselves. Where they do, the value the machine
    produced stands last before a bracket and the value real silicon
-   produced stands inside it. Longshot writes that four ways:
+   produced stands inside it. Longshot writes that five ways:
 
        >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
        RESULT:#8700 WRONG (EXP:#4E40)
        R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)
        R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
+       R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)
 
-   Two of them never write WRONG at all, so the values decide and the word
+   Three of them never write WRONG at all, so the values decide and the word
    only corroborates. They are compared as numbers because #0032 and #32
    are one measurement written two ways.
 
    A value before the bracket is what tells a grading from a legend naming
    the value a test is about to check, which carries no measurement of its
-   own. */
+   own.
+
+   A rendering seen and not yet read: "(#40 0/16 or #44)" and "(C2/C2 or
+   C5/C5 or C2/C5)" in module D's (I), where several answers are allowed and
+   one of them is a pair. Both stand right today, so reading them would add
+   a denominator and no knowledge, and misreading them would cost both. */
 #define MAX_VERDICTS 192
 typedef struct {
   char text[COLUMNS + 1];
@@ -801,14 +807,11 @@ static int verdicts_dropped;
    values that saturate agree with each other. */
 #define MAX_VALUE_DIGITS 5
 
-static bool hex_value_at(const char *at, unsigned long *value) {
-  if (*at != '#') {
-    return false;
-  }
+static bool hex_digits_at(const char *at, unsigned long *value) {
   unsigned long parsed = 0;
   int digits = 0;
-  while (isxdigit((unsigned char)at[1 + digits])) {
-    char digit = at[1 + digits];
+  while (isxdigit((unsigned char)at[digits])) {
+    char digit = at[digits];
     parsed = parsed * 16 +
              (unsigned long)(digit <= '9' ? digit - '0' : tolower((unsigned char)digit) - 'a' + 10);
     if (++digits > MAX_VALUE_DIGITS) {
@@ -820,6 +823,10 @@ static bool hex_value_at(const char *at, unsigned long *value) {
   }
   *value = parsed;
   return true;
+}
+
+static bool hex_value_at(const char *at, unsigned long *value) {
+  return *at == '#' && hex_digits_at(at + 1, value);
 }
 
 static bool matches_ignoring_case(const char *at, const char *lowercase, size_t length) {
@@ -853,6 +860,126 @@ static bool names_the_expected_value(const char *opening, const char *closing) {
   return false;
 }
 
+static bool holds_text(const char *from, const char *to, const char *lowercase) {
+  size_t length = strlen(lowercase);
+  for (const char *at = from; at + length <= to; at++) {
+    if (matches_ignoring_case(at, lowercase, length)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* A clause names the types it speaks for as the digits following the word
+   CRTC, which any of . + , - may separate: "CRTC 0.1.2", "CRTC 3+4". The
+   list ends at the first character that is neither, because Shaker's prose
+   is full of register names that would otherwise lend a clause a zero it
+   never meant — "C0io=#00" stands in a line of this very test. A clause
+   naming no types at all is not this machine's unless it gathers the rest.
+
+   applies_to_type_0 asks the same question of a group's label and answers
+   it differently: it reads the run after the word and is content with a
+   zero anywhere in the number, where a type list may hold several and each
+   must be read whole. */
+static bool clause_speaks_for_type_0(const char *from, const char *to) {
+  const char *at = from;
+  while (at + 4 <= to && !matches_ignoring_case(at, "crtc", 4)) {
+    at++;
+  }
+  if (at + 4 > to) {
+    return false;
+  }
+  for (at += 4; at < to && *at == ' '; at++) {
+  }
+  while (at < to) {
+    if (*at == '.' || *at == '+' || *at == ',' || *at == '-') {
+      at++;
+      continue;
+    }
+    if (!isdigit((unsigned char)*at)) {
+      return false;
+    }
+    bool zero = true;
+    while (at < to && isdigit((unsigned char)*at)) {
+      zero = zero && *at == '0';
+      at++;
+    }
+    if (zero) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* The value a clause names, wearing the # of a measurement or going
+   without, and set off by spaces or not. It has to end where its digits
+   end, or a word of hex letters standing where a value belongs would be
+   read as a number — DEADLOCK as #DEAD. Shaker writes that word after a
+   type list and not after a colon, so this guards a shape it has not
+   printed; the clause it does print, "3.4:#FFFF=DEADLOCK", stops at the
+   equals whether the rule is here or not. */
+static bool clause_value(const char *at, const char *end, unsigned long *value) {
+  while (at < end && *at == ' ') {
+    at++;
+  }
+  if (at < end && *at == '#') {
+    at++;
+  }
+  const char *after = at;
+  while (after < end && isxdigit((unsigned char)*after)) {
+    after++;
+  }
+  if (after == at || (after < end && isalnum((unsigned char)*after))) {
+    return false;
+  }
+  return hex_digits_at(at, value);
+}
+
+/* Some groups name silicon's value for each CRTC type rather than for the
+   machine in front of them: "(CRTC 0.3.4:3F2/CRTC 1.2:1F4)", "(CRTC 3+4:#58/
+   OTHERS:#59)". Slashes separate the clauses, each naming the types it
+   speaks for and then their value. This machine is a type 0, so the clause
+   to read is the one naming 0, or failing that the one gathering the rest —
+   and a clause that names 0 and then no value this reader can read takes
+   the whole bracket down with it, rather than letting the rest be answered
+   in its place.
+
+   Naming a type is what tells this rendering from a legend keyed by value,
+   "(00:C4ovf 01:C4=0)" or "(01:IO>=5TH NOP / 00:IO ON 4TH NOP)": a clause
+   claims this machine by the word CRTC and the digits behind it, or by
+   gathering the rest, so a legend's 00 claims nothing at all. */
+static bool value_for_this_crtc_type(const char *opening, const char *closing,
+                                     unsigned long *value) {
+  bool found = false;
+  for (const char *clause = opening + 1; clause < closing;) {
+    const char *end = clause;
+    while (end < closing && *end != '/') {
+      end++;
+    }
+    const char *colon = clause;
+    while (colon < end && *colon != ':') {
+      colon++;
+    }
+    if (colon < end) {
+      unsigned long named;
+      bool readable = clause_value(colon + 1, end, &named);
+      if (clause_speaks_for_type_0(clause, colon)) {
+        if (!readable) {
+          return false;
+        }
+        *value = named;
+        return true;
+      }
+      if (readable && !found && holds_text(clause, colon, "others")) {
+        *value = named;
+        found = true;
+      }
+    }
+    clause = end + 1;
+  }
+  return found;
+}
+
 static bool last_hex_value_before(const char *from, const char *to, unsigned long *value) {
   bool found = false;
   for (const char *at = from; at < to; at++) {
@@ -881,16 +1008,19 @@ static bool read_verdict(const char *line, bool *failed) {
     if (closing == NULL) {
       return false;
     }
-    if (!names_the_expected_value(opening, closing)) {
+    unsigned long expected;
+    if (names_the_expected_value(opening, closing)) {
+      /* A bracket naming silicon's value but carrying no number is not a
+         grading this reader knows, and reading past it would pair a later
+         bracket with a number standing inside this one. */
+      if (!first_hex_value_between(opening, closing, &expected)) {
+        return false;
+      }
+    } else if (!value_for_this_crtc_type(opening, closing, &expected)) {
       continue;
     }
-    /* A bracket naming silicon's value but carrying no number is not a
-       grading this reader knows, and reading past it would pair a later
-       bracket with a number standing inside this one. */
     unsigned long produced;
-    unsigned long expected;
-    if (!last_hex_value_before(line, opening, &produced) ||
-        !first_hex_value_between(opening, closing, &expected)) {
+    if (!last_hex_value_before(line, opening, &produced)) {
       return false;
     }
     *failed = produced != expected || strstr(line, "WRONG") != NULL;
@@ -1284,6 +1414,107 @@ static bool is_a_group_line(const char *line) {
   return line[0] >= 'A' && line[0] <= 'E' && line[1] == ' ' && line[2] == '(';
 }
 
+/* Lines Shaker printed, one of each rendering the reader knows, taken from
+   the records or from the scoreboard as it stood on a day the machine was
+   getting them wrong. */
+typedef struct {
+  const char *line;
+  bool graded;
+  bool failed;
+} verdict_case;
+
+static const verdict_case printed_lines[] = {
+    /* Silicon's value named in the bracket, four ways. */
+    {">>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG", true, true},
+    {">>>>>> DELAY TO VSYNC:#0032 (EXP:#0032)", true, false},
+    {"RESULT:#8700 WRONG (EXP:#4E40)", true, true},
+    {"R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)", true, false},
+    {"R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)", true, true},
+    /* And named for each type, where this machine reads the clause that
+       speaks for a type 0 — by its number, or by gathering the rest. */
+    {"R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)", true,
+     false},
+    {"R3h=0.UPP R3h=8 ON 9th LINE. DELAY VSYNC OFF=#03F2 (CRTC 0.3.4:3F2/CRTC 1.2:1F4)", true,
+     false},
+    {"R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)", true, false},
+    {"TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)", true, true},
+    /* A legend keyed by value rather than by type, which names no type and
+       must not be read as one. */
+    {"PREV R9=7 R4=1 >> UPD R4=3 WHEN C4=1 & C9=7 (LAST LINE):01 (00:C4ovf 01:C4=0)", false, false},
+    {"PREV R9=7 R4=1 >> UPD R4=0 WHEN C4=1 & C9=7 (UPD FROM C0vsio)(01:C4=0 00:C4 ovf)", false,
+     false},
+    /* Several answers allowed, a rendering not yet read. */
+    {"TEST INT ON INST SET n,(IX+n'):#40 (#40 0/16 or #44)", false, false},
+    {"TEST INT ON INST CP (IX+n):#C5,#C5 (C2/C2 or C5/C5 or C2/C5)", false, false},
+    /* Brackets naming the values a test is about to check, carrying no
+       measurement of their own. */
+    {"CRTC 0  1 CSYNC 4us (R2=#2E) VS 2xCSYNC 2us (2 flip/flop) (+R2=#33)", false, false},
+    {"     (NEXT FRAME +1=#0A20, +2=#1120)", false, false},
+};
+
+/* Lines built rather than found, each holding one guard that no printed
+   line reaches. They are what the guards are for: a rendering nobody prints
+   is not a rendering, but a rule nobody exercises is not a rule either. */
+static const verdict_case built_lines[] = {
+    /* A legend keyed by value, written in clean digits and with a
+       measurement before it, which the word CRTC is what keeps out: the 00
+       would otherwise read as a clause for this machine and hand back the
+       44 that belongs to the legend. */
+    {"X=#0044 (00:44 01:88)", false, false},
+    /* Only the rest are gathered, and no type is named at all. */
+    {"X=#0022 (OTHERS:#22)", true, false},
+    /* Two clauses gather the rest, which Shaker does not write; the first
+       of them answers, and this holds that tie-break where it stands. */
+    {"X=#0022 (OTHERS:#22/ OTHERS:#33)", true, false},
+    /* A register name before the colon lends the clause no type of its
+       own, whatever zeroes it carries. */
+    {"X=#0022 (CRTC 1.2 R0:#44/ OTHERS:#22)", true, false},
+    {"X=#0022 (CRTC 1.2, C0io=#00:#44/ OTHERS:#22)", true, false},
+    /* A value set off from its colon by a space is still the value. */
+    {"X=#0044 (CRTC 0: #44/ OTHERS:#22)", true, false},
+    /* A bracket that names silicon's value and then does not give it takes
+       the line down with it, rather than letting a later bracket be paired
+       with a number standing inside this one. */
+    {"X:#0032 (EXP: none) (EXP:#32)", false, false},
+    /* The word only corroborates the numbers, and it is read where they
+       agree and it does not. */
+    {"RESULT:#0032 WRONG (EXP:#0032)", true, true},
+    /* A clause naming this machine's type outranks the one gathering the
+       rest, whichever stands first. */
+    {"X=#0011 (CRTC 0:#11/ OTHERS:#22)", true, false},
+    {"X=#0011 (OTHERS:#22/ CRTC 0:#11)", true, false},
+    /* Type 10 is not type 0. */
+    {"X=#0022 (CRTC 10:#11/ OTHERS:#22)", true, false},
+    /* A bracket that speaks for no type this machine is. */
+    {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", false, false},
+    /* A clause for this machine whose value cannot be read takes the
+       bracket down rather than letting the rest answer in its place. */
+    {"X=#0058 (CRTC 0:DEADLOCK/ OTHERS:#22)", false, false},
+    {"X=#0058 (CRTC 0:/ OTHERS:#22)", false, false},
+    {"X=#0058 (CRTC 0:#FFFFFFFF/ OTHERS:#22)", false, false},
+};
+
+static void check_verdict_case(const char *provenance, const verdict_case *wanted) {
+  bool read_as_failed = false;
+  bool read_as_graded = read_verdict(wanted->line, &read_as_failed);
+  if (read_as_graded != wanted->graded) {
+    TEST_FAIL("%s: \"%s\" was %s, where it should be %s", provenance, wanted->line,
+              read_as_graded ? "graded" : "left alone", wanted->graded ? "graded" : "left alone");
+  } else if (wanted->graded && read_as_failed != wanted->failed) {
+    TEST_FAIL("%s: \"%s\" was read as %s", provenance, wanted->line,
+              read_as_failed ? "wrong" : "right");
+  }
+}
+
+static void the_verdict_reader_knows_its_renderings(void) {
+  for (size_t index = 0; index < sizeof printed_lines / sizeof printed_lines[0]; index++) {
+    check_verdict_case("printed", &printed_lines[index]);
+  }
+  for (size_t index = 0; index < sizeof built_lines / sizeof built_lines[0]; index++) {
+    check_verdict_case("built", &built_lines[index]);
+  }
+}
+
 /* A difference here is not a fault to be fixed but a reading to be judged,
    so every line that moved is counted, the first is named under its group,
    and the choice of what to keep is left to the human. */
@@ -1575,6 +1806,7 @@ int main(int argc, char **argv) {
          "%d groups run\n",
          agreeing, total_verdicts, percentage, total_groups_graded, total_groups_run);
 
+  TEST_RUN(the_verdict_reader_knows_its_renderings);
   TEST_RUN(the_scoreboard_matches_the_one_on_record);
   return TEST_REPORT("shaker");
 }

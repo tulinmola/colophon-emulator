@@ -2,9 +2,9 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-4 of them printed self-graded lines, 22 in all: 22 agree with Longshot's
-silicon and 0 do not. That is 100% of what this reader can score, and no
-measure at all of the other 60 groups.
+5 of them printed self-graded lines, 26 in all: 25 agree with Longshot's
+silicon and 1 do not. That is 96% of what this reader can score, and no
+measure at all of the other 59 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture, a legend, or a table whose rows
@@ -86,8 +86,12 @@ C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  recorded, ungraded
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's
-D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               recorded, ungraded
-D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   1 graded, 0 wrong
+D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               1 graded, 1 wrong
+    ! TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)
+D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   4 graded, 0 wrong
+      R3h=0.UPP R3h=8 ON 9th LINE. DELAY VSYNC OFF=#03F2 (CRTC 0.3.4:3F2/CRTC 1.2:1F4)
+      R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)
+      R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)
       R3h=0/R4=R7=0/ON LINE 9, R4=R7=7F: VSYNC OFF DELAY=#0032 (EXP:#32)
 D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded
 D (H)       HSYNC GATE ARRAY                                                                 recorded, ungraded
