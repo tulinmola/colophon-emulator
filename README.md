@@ -79,7 +79,7 @@ make test-exerciser    # the Z80 instruction set exerciser
 make test-all          # all five
 ```
 
-Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — and all four machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table each ROM itself carries. The 6128 also catalogues Shaker's disc through the real AMSDOS and loads a file off it, and both are checked against a reading of the image that never went near the controller.
+Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — a Spectrum's instructions take the length the published contention tables give them at 23,004 positions in its frame, and all four machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table each ROM itself carries. The 6128 also catalogues Shaker's disc through the real AMSDOS and loads a file off it, and both are checked against a reading of the image that never went near the controller.
 
 [The evidence](docs/evidence.en.md) sets out what each tier proves, what it costs, and the two suites still to come.
 

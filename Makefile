@@ -53,6 +53,7 @@ CPC_SNAPSHOT_TEST_C = test/cpc_snapshot_test.c
 CPC_TIMING_TEST_C = test/cpc_timing_test.c
 CPC_FIRMWARE_TEST_C = test/cpc_firmware_test.c
 SPECTRUM_TEST_C = test/spectrum_test.c
+SPECTRUM_TIMING_TEST_C = test/spectrum_timing_test.c
 SPECTRUM_SNAPSHOT_TEST_C = test/spectrum_snapshot_test.c
 SPECTRUM_FIRMWARE_TEST_C = test/spectrum_firmware_test.c
 Z80_SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
@@ -74,7 +75,7 @@ EXERCISER_GROUPS ?= 12
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
@@ -142,6 +143,10 @@ $(BUILD)/spectrum_firmware_test: $(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C) 
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C) -o $@
 
+$(BUILD)/spectrum_timing_test: $(SPECTRUM_CORE_C) $(SPECTRUM_TIMING_TEST_C) $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_TIMING_TEST_C) -o $@
+
 $(BUILD)/cpc_timing_test: $(CPC_CORE_C) $(CPC_TIMING_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CPC_CORE_C) $(CPC_TIMING_TEST_C) -o $@
@@ -175,7 +180,7 @@ $(BUILD)/z80_exerciser_test: $(Z80_C) $(Z80_EXERCISER_C) $(HEADERS)
 	$(CC) $(CFLAGS) -Isrc -Itest $(Z80_C) $(Z80_EXERCISER_C) -o $@
 
 # The fast tier: hermetic, no network, runs on every change.
-test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test
+test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test
 	@$(BUILD)/z80_test
 	@$(BUILD)/crtc_test
 	@$(BUILD)/gate_array_test
@@ -188,6 +193,7 @@ test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_tes
 	@$(BUILD)/ula_test
 	@$(BUILD)/spectrum_test
 	@$(BUILD)/spectrum_snapshot_test
+	@$(BUILD)/spectrum_timing_test
 	@$(BUILD)/cpc_test
 	@$(BUILD)/cpc_timing_test
 	@$(BUILD)/cpc_snapshot_test
@@ -204,7 +210,8 @@ BUILT_C = $(ALL_CORES_C) $(PNG_C) $(CLI_C) \
           $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(TAPE_TEST_C) $(TZX_TEST_C) $(ULA_TEST_C) \
           $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(CPC_TEST_C) \
           $(CPC_SNAPSHOT_TEST_C) $(CPC_TIMING_TEST_C) $(CPC_FIRMWARE_TEST_C) \
-          $(SPECTRUM_TEST_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(SPECTRUM_FIRMWARE_TEST_C) \
+          $(SPECTRUM_TEST_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(SPECTRUM_TIMING_TEST_C) \
+          $(SPECTRUM_FIRMWARE_TEST_C) \
           $(Z80_SINGLE_STEP_C) $(Z80_EXERCISER_C)
 
 sources-agree:
