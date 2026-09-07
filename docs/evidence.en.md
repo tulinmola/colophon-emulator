@@ -26,13 +26,17 @@ The **video path** is proved end to end — a screen of pixels through the whole
 
 And the **duration of seventy-odd instructions** in microseconds, against two tables of measurements made independently of each other and of us.
 
-The **cassette deck** is held to the same tables: the pilot's 8063 pulses before a header and 3223 before data, the two syncs, the two bit lengths, and the second of silence between blocks — each transcribed from the TZX specification rather than worked out from the deck.
+The **tape reader** is held to the same tables: the pilot's 8063 pulses before a header and 3223 before data, the two syncs, the two bit lengths, and the second of silence between blocks — each transcribed from the TZX specification rather than worked out from the code that plays them. The **deck** is graded apart from it, on pulses written out by hand, so what is proved there is the timing and nothing else. And the CPC's own wiring is graded: the motor line turning the reel and stopping it, and a pulse arriving at bit 7 of port B held for the longer count a 4MHz board owes it.
 
 The **ULA's charge for the bus** is held against the tables published for it: the delay owed at each T-state of a Spectrum's frame, and the length of instructions whose operands lie in the screen's memory — which fixes where each charge falls inside an instruction, including the internal T-states these ULAs charge for and the four rows by which a port is charged instead.
 
 The **disc** is graded in three parts. The medium is proved to lay a track out where a formatter would, to answer every position on it — the identity checks it computes were checked against a CRC-16 computed outside this code — and to read back as the same disc after being written out. The **µPD765** is driven through its own handshake by a loop that plays the processor, one microsecond of disc at a time, and judged against its datasheet: the bytes crossing every 32µs and the overrun when one is late, the sector found only when its identity comes round, the end of the cylinder a read without terminal count runs into, the flags for a sector that is not there and a track that has nothing on it, the seek stepping at the specified rate and the interrupt it leaves, and the change of READY that polling reports. What the datasheet leaves open was settled by the AMSDOS ROM's own listing: a read is one sector with EOT set to R, and success is an abnormal end carrying EN.
 
 It deliberately restates nothing an external suite already proves. The one place it cannot defer is timing: the corpus below runs the processor with its wait pin released throughout, so it proves nothing whatever about wait states.
+
+## The sanitized tier
+
+The fast tier again, compiled under the address and undefined-behaviour sanitizers. It is hermetic like the fast tier but slow enough to be its own target, and it exists for one class of fault the other tiers cannot see: a read that strays outside the bytes it was given. Tape images, disc images, snapshots and the firmware all arrive from outside and are none of them ours, and the checks that keep a truncated or hostile one inside its own buffer are exactly the checks a passing test agrees with — without a sanitizer, a read past the end of an image returns a number like any other. This is where those are graded.
 
 ## The machine tier
 

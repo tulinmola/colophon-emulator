@@ -46,7 +46,7 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 | `--wait N` | Frames to run after typing, for a machine that has been given something to do. The default is 0. |
 | `--sixty-hz` | A CPC's. Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |
-| `--tape PATH` | A Spectrum's. Put this TAP image in the deck. The tape turns from the moment it goes in, because a Spectrum has no motor line to stop it with. |
+| `--tape PATH` | Put this TZX, CDT or TAP image in the deck. A TAP is a Spectrum's alone: it carries that ROM's timings and nothing else, so a CPC is not handed one. A CPC turns its own motor; a Spectrum has none, so its tape starts once the typing is done. |
 | `--writes PATH` | A CPC's. Write a map of memory writes here as a PNG. |
 | `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
 | `--disc PATH` | A CPC's. Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
@@ -57,7 +57,7 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 
 `emulator --help` prints the same list, and is the copy that cannot fall behind the code.
 
-An option marked a CPC's is refused on a Spectrum rather than ignored, and `--tape` is refused on a CPC the same way; the machine says which one it will not do.
+An option marked a CPC's is refused on a Spectrum rather than ignored, and the machine says which one it will not do.
 
 `--type` takes five escapes on a CPC: `\n` for Return, `\t` for Tab, `\e` for Escape, `\b` for Del, and `\\` for a backslash itself. A Spectrum has keys for none of the middle three and takes `\n` and `\\` alone. A character the machine's keyboard cannot produce is refused rather than dropped.
 

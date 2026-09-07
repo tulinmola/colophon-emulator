@@ -1,5 +1,5 @@
 /*
- * snapshot_test — save a machine, restore it, insist it is the same one.
+ * cpc_snapshot_test — a CPC written down and picked up again.
  *
  * The round trip is the strong test here: every field the format carries
  * has to survive being written and read, and a machine restored from its

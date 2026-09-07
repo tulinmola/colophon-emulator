@@ -1,39 +1,41 @@
 /*
- * tape_test — the deck alone, timed against the published numbers.
+ * tape_test — the deck alone.
  *
- * Every length here is written out as the specification writes it, not taken
- * from the deck's own constants: a test that reads tape.h grades tape.c
- * against its own arithmetic and would agree with any mistake in it.
- *
- * Sources:
- * - "TZX format" v1.13 (Tomaz Kac, maintained by Martijn van der Heide),
- *   https://worldofspectrum.net/TZXformat.html — block ID 11 tabulates the
- *   standard ROM timings a .tap is replayed at: pilot pulses of 2168
- *   T-states, 8063 of them before a header and 3223 before data, syncs of
- *   667 and 735, bits of 855 and 1710, and a second of pause after a block.
+ * The pulses come from a list written here rather than from any image, so
+ * what is graded is the timing and nothing else: the deck holds a level for
+ * as long as it is told and then asks for the next.
  */
+#include <string.h>
+
 #include "tape.h"
 #include "test.h"
 
-/* A Spectrum's, so the pause between blocks is a Spectrum's. */
-#define TICKS_PER_MILLISECOND 3500
-
-/* Bounds, so a deck that never leaves a pulse fails the test rather than
-   hanging the tier. The longest pulse is the pause, at a second. */
-#define MOST_TICKS_IN_A_PULSE (2 * 1000 * TICKS_PER_MILLISECOND)
-#define MOST_PILOT_PULSES 20000
-#define MOST_TICKS_IN_A_TAPE 40000000L
+/* Longer than any pulse the tests below hand out, so a deck that never
+   leaves one fails the test rather than hanging the tier. */
+#define MOST_TICKS_IN_A_PULSE 100000
 
 static tape_t tape;
 
-/* Two blocks of two bytes: flag &00 marks a header and &FF data, and the
-   second byte of each is there to be watched going out. */
-static const uint8_t two_blocks[] = {0x02, 0x00, 0x00, 0xAA, 0x02, 0x00, 0xFF, 0x55};
+/* A source handing out pulses written down in the test. */
+static tape_pulse_t script[8];
+static size_t script_length;
+static size_t script_at;
 
-static void insert_and_play(const uint8_t *image, uint32_t length) {
-  const char *problem = NULL;
-  tape_init(&tape, TICKS_PER_MILLISECOND);
-  TEST_CHECK(tape_insert(&tape, image, length, &problem));
+static bool from_script(void *reader, tape_pulse_t *pulse) {
+  (void)reader;
+  if (script_at == script_length) {
+    return false;
+  }
+  *pulse = script[script_at++];
+  return true;
+}
+
+static void play(const tape_pulse_t *pulses, size_t count) {
+  memcpy(script, pulses, count * sizeof *pulses);
+  script_length = count;
+  script_at = 0;
+  tape_init(&tape);
+  tape_insert(&tape, from_script, NULL);
   tape_play(&tape);
 }
 
@@ -48,152 +50,114 @@ static uint32_t pulse(void) {
   return ticks;
 }
 
-/* One whole block: its pilot, its two syncs, and both bytes bit by bit, most
-   significant first. Leaves the head on the pause that follows. */
-static void the_block_plays(int want_pilot, uint8_t flag, uint8_t body) {
-  int pilot = 0;
-  uint32_t length = pulse();
-  while (length == 2168 && pilot < MOST_PILOT_PULSES) {
-    pilot++;
-    length = pulse();
-  }
-  TEST_EQUAL(pilot, want_pilot);
-  TEST_EQUAL(length, 667); /* the pulse that ended the pilot is the first sync */
-  TEST_EQUAL(pulse(), 735);
-
-  const uint8_t bytes[] = {flag, body};
-  for (size_t index = 0; index < sizeof bytes; index++) {
-    for (int bit = 7; bit >= 0; bit--) {
-      uint32_t want = (bytes[index] >> bit) & 1 ? 1710 : 855;
-      TEST_EQUAL(pulse(), want);
-      TEST_EQUAL(pulse(), want);
-    }
-  }
-}
-
-/* The flag byte decides which pilot a block gets, and the threshold is 128
-   rather than the &00 and &FF a header and a data block happen to use. */
-static void the_pilot_turns_on_the_flag_bytes_top_bit(void) {
-  const uint8_t just_under[] = {0x02, 0x00, 0x7F, 0x00};
-  insert_and_play(just_under, sizeof just_under);
-  TEST_EQUAL(pulse(), 1);
-  int pilot = 0;
-  while (pulse() == 2168 && pilot < MOST_PILOT_PULSES) {
-    pilot++;
-  }
-  TEST_EQUAL(pilot, 8063);
-
-  const uint8_t just_over[] = {0x02, 0x00, 0x80, 0x00};
-  insert_and_play(just_over, sizeof just_over);
-  TEST_EQUAL(pulse(), 1);
-  pilot = 0;
-  while (pulse() == 2168 && pilot < MOST_PILOT_PULSES) {
-    pilot++;
-  }
-  TEST_EQUAL(pilot, 3223);
-}
-
 static void a_deck_with_no_tape_presents_a_low_level(void) {
-  tape_init(&tape, TICKS_PER_MILLISECOND);
+  tape_init(&tape);
   TEST_CHECK(!tape_loaded(&tape));
   tape_play(&tape);
   TEST_CHECK(!tape_playing(&tape));
-  for (int tick = 0; tick < 10000; tick++) {
+  for (int tick = 0; tick < 1000; tick++) {
     tape_tick(&tape);
   }
   TEST_CHECK(!tape_level(&tape));
 }
 
-static void bytes_that_are_not_blocks_are_refused(void) {
-  const char *problem = NULL;
-  tape_init(&tape, TICKS_PER_MILLISECOND);
-
-  const uint8_t truncated[] = {0x08, 0x00, 0x00, 0xAA};
-  TEST_CHECK(!tape_insert(&tape, truncated, sizeof truncated, &problem));
-  const uint8_t empty_block[] = {0x00, 0x00};
-  TEST_CHECK(!tape_insert(&tape, empty_block, sizeof empty_block, &problem));
-  /* One byte too many is one byte the blocks do not account for. */
-  const uint8_t trailing[] = {0x02, 0x00, 0xFF, 0x55, 0x00};
-  TEST_CHECK(!tape_insert(&tape, trailing, sizeof trailing, &problem));
-  TEST_CHECK(!tape_insert(&tape, two_blocks, 0, &problem));
-  TEST_CHECK(!tape_loaded(&tape));
+static void a_pulse_is_held_for_as_long_as_it_says(void) {
+  const tape_pulse_t pulses[] = {{100, true}, {250, false}, {7, true}};
+  play(pulses, 3);
+  TEST_EQUAL(pulse(), 1); /* the level leaves low on the first tick */
+  TEST_EQUAL(pulse(), 100);
+  TEST_EQUAL(pulse(), 250);
 }
 
-/* Refusing a tape is not the same as ejecting the one already in. */
-static void a_refused_tape_leaves_the_one_in_the_deck(void) {
-  insert_and_play(two_blocks, sizeof two_blocks);
-  pulse();
-  const char *problem = NULL;
-  const uint8_t truncated[] = {0x08, 0x00, 0x00, 0xAA};
-  TEST_CHECK(!tape_insert(&tape, truncated, sizeof truncated, &problem));
-  TEST_CHECK(tape_loaded(&tape));
-  TEST_CHECK(tape_playing(&tape));
-  TEST_EQUAL(pulse(), 2168);
+/* The deck does not turn the level over; it presents what it is handed, so
+   a run of pulses at one level is a silence and not an edge. */
+static void the_deck_presents_the_level_it_is_handed(void) {
+  const tape_pulse_t pulses[] = {{50, true}, {60, true}, {70, false}};
+  play(pulses, 3);
+  tape_tick(&tape);
+  TEST_CHECK(tape_level(&tape));
+  for (int tick = 0; tick < 50 + 60 - 1; tick++) {
+    tape_tick(&tape);
+  }
+  TEST_CHECK(tape_level(&tape)); /* two pulses, one unbroken level */
+  tape_tick(&tape);
+  TEST_CHECK(!tape_level(&tape));
 }
 
 static void a_stopped_deck_stands_where_it_was(void) {
-  insert_and_play(two_blocks, sizeof two_blocks);
-  pulse();
-  const bool level = tape_level(&tape);
-  const uint32_t left = tape.pulse_ticks_left;
+  const tape_pulse_t pulses[] = {{500, true}, {40, false}};
+  play(pulses, 2);
+  tape_tick(&tape); /* into the first pulse */
+  const uint32_t left = tape.ticks_left;
   tape_stop(&tape);
   TEST_CHECK(!tape_playing(&tape));
-  /* An odd number, so a deck that kept running could not come back to the
-     level it stopped on and call it standing still. */
-  for (int tick = 0; tick < 101897; tick++) {
+  for (int tick = 0; tick < 9999; tick++) {
     tape_tick(&tape);
   }
-  TEST_EQUAL(tape_level(&tape), level);
-  TEST_EQUAL(tape.pulse_ticks_left, left);
+  TEST_CHECK(tape_level(&tape));
+  TEST_EQUAL(tape.ticks_left, left);
 
-  /* And it takes up where it left off rather than starting the pulse again. */
   tape_play(&tape);
-  TEST_EQUAL(pulse(), left);
+  TEST_EQUAL(pulse(), left); /* and takes up the rest of the pulse it was on */
 }
 
-static void the_whole_tape_plays_as_the_published_pattern(void) {
-  insert_and_play(two_blocks, sizeof two_blocks);
-  TEST_EQUAL(pulse(), 1); /* the level starts low and the first tick turns it over */
-
-  the_block_plays(8063, 0x00, 0xAA); /* a header earns the longer pilot */
-  TEST_CHECK(!tape_level(&tape));
-  TEST_EQUAL(pulse(), 1000 * TICKS_PER_MILLISECOND);
-
-  the_block_plays(3223, 0xFF, 0x55); /* and the data block behind it */
-  TEST_CHECK(!tape_level(&tape));
-
-  /* The last pause has no edge to end it, so it is counted out rather than
-     measured: the tape runs out on its last tick and the deck stops. */
-  for (uint32_t tick = 1; tick < 1000 * TICKS_PER_MILLISECOND; tick++) {
+static void the_deck_stops_when_the_source_runs_out(void) {
+  const tape_pulse_t pulses[] = {{30, true}};
+  play(pulses, 1);
+  for (int tick = 0; tick < 100 && tape_playing(&tape); tick++) {
     tape_tick(&tape);
   }
-  TEST_CHECK(tape_playing(&tape));
+  TEST_CHECK(!tape_playing(&tape));
+  TEST_CHECK(!tape_level(&tape));
+}
+
+/* A pulse of no T-states would never end, so the deck treats it as the end
+   of the tape rather than standing on it forever. */
+static void a_pulse_of_no_ticks_ends_the_tape(void) {
+  const tape_pulse_t pulses[] = {{20, true}, {0, true}, {40, false}};
+  play(pulses, 3);
+  int ticks = 0;
+  while (ticks < 100 && tape_playing(&tape)) {
+    tape_tick(&tape);
+    ticks++;
+  }
+  /* One tick takes up the first pulse and twenty hold it, so the deck reaches
+     the pulse of no length on the twenty-first and stops there — not at the
+     end of the script, which is a pulse further on. */
+  TEST_EQUAL(ticks, 21);
+  TEST_CHECK(!tape_playing(&tape));
+  TEST_CHECK(!tape_level(&tape)); /* and the pulse behind it never reached the head */
+}
+
+/* A tape put in over a running one is a new tape: the deck stops, and neither
+   the level nor the T-states left of the old one carry over. */
+static void a_tape_put_in_over_another_starts_it_stopped(void) {
+  const tape_pulse_t first[] = {{20, true}, {40, false}};
+  play(first, 2);
   tape_tick(&tape);
-  TEST_CHECK(!tape_playing(&tape));
-  TEST_CHECK(!tape_level(&tape));
-}
+  TEST_CHECK(tape_playing(&tape));
+  TEST_CHECK(tape_level(&tape));
 
-static void a_tape_played_out_does_not_start_again(void) {
-  insert_and_play(two_blocks, sizeof two_blocks);
-  for (long tick = 0; tick < MOST_TICKS_IN_A_TAPE && tape_playing(&tape); tick++) {
-    tape_tick(&tape);
-  }
+  const tape_pulse_t second[] = {{30, true}, {40, false}};
+  memcpy(script, second, sizeof second);
+  script_length = 2;
+  script_at = 0;
+  tape_insert(&tape, from_script, NULL);
   TEST_CHECK(!tape_playing(&tape));
-  tape_play(&tape);
-  TEST_CHECK(!tape_playing(&tape));
-  for (int tick = 0; tick < 10000; tick++) {
-    tape_tick(&tape);
-  }
   TEST_CHECK(!tape_level(&tape));
+
+  tape_play(&tape);
+  TEST_EQUAL(pulse(), 1);  /* low again, as an empty deck is */
+  TEST_EQUAL(pulse(), 30); /* and the new tape's first pulse, whole */
 }
 
 int main(void) {
   TEST_RUN(a_deck_with_no_tape_presents_a_low_level);
-  TEST_RUN(bytes_that_are_not_blocks_are_refused);
-  TEST_RUN(a_refused_tape_leaves_the_one_in_the_deck);
+  TEST_RUN(a_pulse_is_held_for_as_long_as_it_says);
+  TEST_RUN(the_deck_presents_the_level_it_is_handed);
   TEST_RUN(a_stopped_deck_stands_where_it_was);
-  TEST_RUN(the_whole_tape_plays_as_the_published_pattern);
-  TEST_RUN(the_pilot_turns_on_the_flag_bytes_top_bit);
-  TEST_RUN(a_tape_played_out_does_not_start_again);
+  TEST_RUN(the_deck_stops_when_the_source_runs_out);
+  TEST_RUN(a_pulse_of_no_ticks_ends_the_tape);
+  TEST_RUN(a_tape_put_in_over_another_starts_it_stopped);
   return TEST_REPORT("tape");
 }

@@ -73,8 +73,8 @@
 #define SPECTRUM_FRAMEBUFFER_HEIGHT ULA_LINES_PER_FRAME
 #define SPECTRUM_TICKS_PER_FRAME ULA_TICKS_PER_FRAME
 
-/* The board's clock is 3.5MHz — the one thing a deck has to be told about
-   the machine it is wired to. Where it comes from is in ula.h. */
+/* The board's clock is 3.5MHz, which is what a tape's timings are read
+   against. Where it comes from is in ula.h. */
 #define SPECTRUM_TICKS_PER_MILLISECOND 3500
 
 /* Half of the line's own sync, which is where the middle of that pulse lands

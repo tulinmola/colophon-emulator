@@ -25,6 +25,7 @@
 
 #include "spectrum.h"
 #include "test.h"
+#include "tzx.h"
 
 static spectrum_t spectrum;
 static uint8_t rom[SPECTRUM_ROM_SIZE];
@@ -43,6 +44,14 @@ static void rom_program(const uint8_t *bytes, size_t length) { memcpy(rom, bytes
 
 static void put_at(uint16_t address, const uint8_t *bytes, size_t length) {
   memcpy(rom + address, bytes, length);
+}
+
+/* The processor back at the top, with the rest of the machine left standing —
+   which powering on again would not do, since it takes the deck out too. */
+static void restart_the_processor(void) {
+  z80_init(&spectrum.cpu);
+  spectrum.held_ticks = 0;
+  spectrum.port_charges_left = 0;
 }
 
 /* Run until the processor halts, or give up. Returns whether it halted. */
@@ -538,20 +547,61 @@ static void the_tape_runs_on_while_the_clock_is_held(void) {
   power_on(SPECTRUM_RAM_48K);
   static const uint8_t image[] = {0x02, 0x00, 0xFF, 0x55};
   static tape_t tape;
+  static tzx_t reader;
   const char *problem = NULL;
-  tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
-  TEST_CHECK(tape_insert(&tape, image, sizeof image, &problem));
+  TEST_CHECK(tzx_open(&reader, image, sizeof image, SPECTRUM_TICKS_PER_MILLISECOND, TZX_SPECTRUM,
+                      &problem));
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
   spectrum_insert_tape(&spectrum, &tape);
   tape_play(&tape);
   spectrum_tick(&spectrum); /* the deck takes up its first pulse */
 
-  const uint32_t left = tape.pulse_ticks_left;
+  const uint32_t left = tape.ticks_left;
   spectrum.held_ticks = 200; /* as a contended access leaves it */
   for (int tick = 0; tick < 100; tick++) {
     spectrum_tick(&spectrum);
   }
-  TEST_EQUAL(spectrum.held_ticks, 100);          /* the processor stood still */
-  TEST_EQUAL(tape.pulse_ticks_left, left - 100); /* and the tape did not */
+  TEST_EQUAL(spectrum.held_ticks, 100);    /* the processor stood still */
+  TEST_EQUAL(tape.ticks_left, left - 100); /* and the tape did not */
+}
+
+/* And what the deck presents is what bit 6 reads: a tape in the deck drives
+   the socket, where `ear` answers for a machine with none. */
+static void a_tape_in_the_deck_is_what_bit_6_reads(void) {
+  power_on(SPECTRUM_RAM_48K);
+  static const uint8_t image[] = {0x02, 0x00, 0xFF, 0x55};
+  static tape_t tape;
+  static tzx_t reader;
+  const char *problem = NULL;
+  TEST_CHECK(tzx_open(&reader, image, sizeof image, SPECTRUM_TICKS_PER_MILLISECOND, TZX_SPECTRUM,
+                      &problem));
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
+  spectrum_insert_tape(&spectrum, &tape);
+  tape_play(&tape);
+
+  /* The tape starts low, and `ear` is set the other way to prove which of the
+     two the socket is hearing. */
+  spectrum.ear = true;
+  const uint8_t program[] = {0x01, 0xFE, 0xFE, 0xED, 0x78, 0x76}; /* LD BC,&FEFE : IN A,(C) */
+  rom_program(program, sizeof program);
+  spectrum_tick(&spectrum);
+  TEST_CHECK(!tape_level(&tape));
+  restart_the_processor();
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(spectrum.cpu.a & 0x40, 0x00);
+
+  /* Run the reel on to the first edge and read again. */
+  uint32_t guard = 0;
+  while (!tape_level(&tape) && guard++ < 4 * SPECTRUM_TICKS_PER_MILLISECOND) {
+    spectrum_tick(&spectrum);
+  }
+  TEST_CHECK(tape_level(&tape));
+  spectrum.ear = false;
+  restart_the_processor();
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(spectrum.cpu.a & 0x40, 0x40);
 }
 
 int main(void) {
@@ -579,5 +629,6 @@ int main(void) {
   TEST_RUN(a_hold_the_last_tstate_earned_outlives_the_instruction);
   TEST_RUN(a_port_is_charged_by_its_low_bit_and_its_high_byte);
   TEST_RUN(the_tape_runs_on_while_the_clock_is_held);
+  TEST_RUN(a_tape_in_the_deck_is_what_bit_6_reads);
   return TEST_REPORT("spectrum");
 }

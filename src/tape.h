@@ -1,41 +1,19 @@
 /*
  * tape.h — a cassette deck.
  *
- * The deck presents one bit: the level at the play head. It advances a
- * T-state at a time and knows nothing of what that level means, which is the
- * machine's business — a Spectrum reads it on bit 6 of port &FE, a CPC on
- * bit 7 of the 8255's port B.
+ * The deck turns the reel and nothing else. It presents one bit — the level
+ * at the play head — and advances a T-state at a time; what that level means
+ * is the machine's business, and what is recorded on the tape is a reader's.
+ * A Spectrum reads the head on bit 6 of port &FE, a CPC on bit 7 of the
+ * 8255's port B.
  *
- * A tape is played, not read. The image holds bytes; what reaches the head
- * are the edges those bytes were recorded as, and a loader measures the time
- * between edges rather than being handed a byte. Nothing here decodes one.
+ * A tape is played, not read. What reaches the head are the edges the bytes
+ * were recorded as, and a loader measures the time between edges rather than
+ * being handed a byte. Nothing here decodes one, and nothing here knows what
+ * a block is: the deck asks for the next pulse and times it.
  *
- * Where a disc is three files — the image, the medium, and the drive that
- * turns it — a tape is one. The blocks are read here, the pulses are made
- * here, and the reel turns here, because a .tap has no geometry to lay out
- * and there is nothing between the reel and the socket to model.
- *
- * Only .tap is understood, which is bytes at the ROM's own timings and so
- * loads only what the ROM loader loads. A tape that brought a loader of its
- * own wants a .tzx, which records the timings themselves; that format will
- * want the reading split off from the deck.
- *
- * The pulse timings below are in T-states of the machine that recorded the
- * tape, so the deck plays the numbers it is given and never converts. Only
- * the pause between blocks is a duration, which is why the deck is told the
- * machine's clock and nothing else about it.
- *
- * Sources:
- * - "Emulator file formats" (World of Spectrum FAQ),
- *   https://worldofspectrum.org/faq/reference/formats.htm — a .tap is
- *   blocks, each opening with "two bytes specifying how many bytes will
- *   follow", then "raw tape data ... including the flag and checksum bytes".
- * - "TZX format" v1.13 (Tomaz Kac, maintained by Martijn van der Heide),
- *   https://worldofspectrum.net/TZXformat.html — the standard ROM timings a
- *   .tap is replayed at, tabulated in block ID 11; that a header's pilot is
- *   8063 pulses and a data block's 3223, told apart by the flag byte; that
- *   the level starts low and every pulse turns it over; and that the format
- *   also serves "the Amstrad CPC", which is where .cdt comes from.
+ * This is the split a disc already has — the drive that turns it, and the
+ * image that says what is on it. See tzx.h for the reader that answers.
  */
 #ifndef COLOPHON_TAPE_H
 #define COLOPHON_TAPE_H
@@ -43,40 +21,33 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define TAPE_PILOT_TICKS 2168
-#define TAPE_FIRST_SYNC_TICKS 667
-#define TAPE_SECOND_SYNC_TICKS 735
-#define TAPE_ZERO_BIT_TICKS 855
-#define TAPE_ONE_BIT_TICKS 1710
-#define TAPE_HEADER_PILOT_PULSES 8063
-#define TAPE_DATA_PILOT_PULSES 3223
-#define TAPE_PAUSE_MILLISECONDS 1000
+/* One pulse: the level the head holds, and how long it holds it. */
+typedef struct {
+  uint32_t ticks;
+  bool level;
+} tape_pulse_t;
+
+/* Where the pulses come from. Returns false when there is no next pulse —
+ * because the tape has run out, or because it is marked to stop where it
+ * stands. The deck cannot tell those apart and does not try: it stops, and
+ * playing again asks the reader what comes next. A pulse of no T-states is
+ * the same as no pulse, since a deck that timed one would never reach the
+ * one behind it. */
+typedef bool (*tape_source)(void *reader, tape_pulse_t *pulse);
 
 typedef struct {
-  const uint8_t *image; /* the host's bytes, which must outlive the deck */
-  uint32_t image_length;
-  uint32_t ticks_per_millisecond;
-
-  uint32_t block_at;
-  uint32_t byte_at;
-  uint32_t data_end; /* one past the playing block's last byte */
-  uint32_t pilot_pulses_left;
-  uint32_t pulse_ticks_left;
-  uint8_t phase; /* which part of a block is playing */
-  uint8_t bit_number;
-  bool in_second_pulse; /* a bit is two pulses of one length */
+  tape_source source;
+  void *reader;
+  uint32_t ticks_left;
   bool level;
   bool playing;
 } tape_t;
 
-/* An empty deck, told how many T-states its machine spends in a
- * millisecond, which is all it ever learns about one. */
-void tape_init(tape_t *tape, uint32_t ticks_per_millisecond);
+/* An empty deck. */
+void tape_init(tape_t *tape);
 
-/* Put a tape in, rewound and stopped. Returns false having pointed `problem`
- * at a sentence saying what is wrong with the bytes, and leaves whatever was
- * in the deck where it was. */
-bool tape_insert(tape_t *tape, const uint8_t *image, uint32_t length, const char **problem);
+/* Put a tape in, stopped. The reader is the host's and must outlive it. */
+void tape_insert(tape_t *tape, tape_source source, void *reader);
 
 bool tape_loaded(const tape_t *tape);
 

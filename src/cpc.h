@@ -30,8 +30,9 @@
  *   character row across eight blocks two kilobytes apart.
  * - "8255 PPI" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/8255cpc.html — what each port is wired
- *   to here: the PSG's bus on A, VSYNC and the board's links on B, the
- *   PSG's function lines and the keyboard line on C.
+ *   to here: the PSG's bus on A, VSYNC, the board's links and the cassette's
+ *   play head on B, and the PSG's function lines, the keyboard line, the
+ *   cassette motor and the write line on C.
  * - "Reading the keyboard and Joysticks" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/keyboard.html — the matrix table: which
  *   line and bit each key sits on, the UK legends printed on them, and the
@@ -58,6 +59,7 @@
 #include "monitor.h"
 #include "ppi.h"
 #include "psg.h"
+#include "tape.h"
 #include "upd765.h"
 #include "z80.h"
 
@@ -82,6 +84,10 @@
    length it likes. It is here because running "about a second" is a thing
    callers want, not because the machine guarantees it. */
 #define CPC_TICKS_PER_STANDARD_FRAME (312L * 64L * 4L)
+
+/* The board's clock is 4MHz, which is what a tape's timings are read
+   against: the format counts them in a Spectrum's T-states. */
+#define CPC_TICKS_PER_MILLISECOND 4000
 
 /* A key, as the line that selects it and the bit that reads it. Ten lines of
    eight, numbered as the CPC's own documentation numbers its key codes;
@@ -122,6 +128,9 @@ typedef struct {
   ppi_t ppi;
   psg_t psg;
   keyboard_t keyboard;
+
+  /* The deck, host-owned as a disc is, and NULL when there is none. */
+  tape_t *tape;
 
   /* The disc interface: built into the 664 and 6128, plugged into a 464
      as the DDI-1. Absent, its ports are nobody's and float. Drive A is the
@@ -175,6 +184,12 @@ void cpc_fit_disc_interface(cpc_t *cpc, bool fitted);
 /* Put a disc in drive 0 (A) or 1 (B), or take it out with NULL. The disc
  * is borrowed: it must outlive the machine or be taken out first. */
 void cpc_insert_disc(cpc_t *cpc, uint8_t drive, floppy_t *floppy);
+
+/* Put a tape in the deck, or take it out with NULL. Bit 4 of port C is the
+ * motor, so the machine starts and stops the tape itself; bit 7 of port B is
+ * the play head. Bit 5 of port C is what the machine writes to tape, and it
+ * goes nowhere: nothing here records. */
+void cpc_insert_tape(cpc_t *cpc, tape_t *tape);
 
 /* Plug in a monitor: CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT bytes
  * of hardware colour codes, host-owned. Unplugged, the machine runs on and

@@ -23,6 +23,7 @@
 #include "spectrum.h"
 #include "tape.h"
 #include "test.h"
+#include "tzx.h"
 
 #define FONT_IN_ROM 0x3D00
 #define FIRST_CODE 32
@@ -278,12 +279,15 @@ static void a_block_loads_through_the_roms_own_loader(void) {
   image[sizeof image - 1] = checksum;
 
   static tape_t tape;
+  static tzx_t reader;
   const char *problem = NULL;
-  tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
-  if (!tape_insert(&tape, image, (uint32_t)sizeof image, &problem)) {
+  if (!tzx_open(&reader, image, (uint32_t)sizeof image, SPECTRUM_TICKS_PER_MILLISECOND,
+                TZX_SPECTRUM, &problem)) {
     TEST_FAIL("the tape was refused: %s", problem);
     return;
   }
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
   spectrum_insert_tape(&spectrum, &tape);
   tape_play(&tape);
 
@@ -354,12 +358,15 @@ static void a_program_loads_off_a_tape_and_runs(void) {
   }
 
   static tape_t tape;
+  static tzx_t reader;
   const char *problem = NULL;
-  tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
-  if (!tape_insert(&tape, image, (uint32_t)sizeof image, &problem)) {
+  if (!tzx_open(&reader, image, (uint32_t)sizeof image, SPECTRUM_TICKS_PER_MILLISECOND,
+                TZX_SPECTRUM, &problem)) {
     TEST_FAIL("the tape was refused: %s", problem);
     return;
   }
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
   spectrum_insert_tape(&spectrum, &tape);
 
   run_frames(FRAMES_TO_PROMPT);

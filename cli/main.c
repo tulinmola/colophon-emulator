@@ -19,6 +19,7 @@
 #include "spectrum.h"
 #include "spectrum_snapshot.h"
 #include "tape.h"
+#include "tzx.h"
 
 /* The 6128's boot screen stops changing at frame 42, measured by counting
    the text's pixels frame by frame; the other two settle sooner. Twice that
@@ -187,7 +188,8 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --writes PATH       write a map of memory writes here as a PNG\n");
   fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
   fprintf(out, "                      each machine writes its own; the two share a name\n");
-  fprintf(out, "  --tape PATH         put this TAP image in the deck, playing\n");
+  fprintf(out, "  --tape PATH         put this TZX, CDT or TAP image in the deck\n");
+  fprintf(out, "                        a TAP carries the Spectrum ROM's timings alone\n");
   fprintf(out, "  --disc PATH         put this DSK image in drive A\n");
   fprintf(out, "  --disc-b PATH       and this one in drive B\n");
   fprintf(out, "  --save-disc PATH    write drive A's disc here when done\n");
@@ -731,18 +733,21 @@ static int run_spectrum(const options_t *options) {
 
   int status = 0;
   tape_t tape;
+  tzx_t reader;
   uint8_t *tape_image = NULL;
+  tape_init(&tape);
   if (options->tape_path != NULL) {
     size_t size = 0;
     tape_image = read_file(options->tape_path, &size);
     const char *problem = NULL;
-    tape_init(&tape, SPECTRUM_TICKS_PER_MILLISECOND);
     if (tape_image == NULL) {
       status = 1;
-    } else if (!tape_insert(&tape, tape_image, (uint32_t)size, &problem)) {
+    } else if (!tzx_open(&reader, tape_image, (uint32_t)size, SPECTRUM_TICKS_PER_MILLISECOND,
+                         TZX_SPECTRUM, &problem)) {
       fprintf(stderr, "%s %s\n", options->tape_path, problem);
       status = 1;
     } else {
+      tape_insert(&tape, tzx_next_pulse, &reader);
       spectrum_insert_tape(spectrum, &tape);
     }
   }
@@ -802,20 +807,7 @@ static int run_spectrum(const options_t *options) {
 
 /* One machine per kind, each with its own run: they share the options, the
    rendering and the file handling, and nothing else. */
-/* The cassette is on the board — a socket on the 6128 and 664, a deck built
-   into the 464 — and nothing is wired to it here. */
-static bool cpc_refuses(const options_t *options) {
-  if (options->tape_path != NULL) {
-    fprintf(stderr, "%s does not do --tape yet\n", options->machine->name);
-    return true;
-  }
-  return false;
-}
-
 static int run_cpc(const options_t *options) {
-  if (cpc_refuses(options)) {
-    return 1;
-  }
   if (options->save_disc_path != NULL && options->disc_paths[0] == NULL) {
     fprintf(stderr, "--save-disc needs a disc in drive A to write\n");
     return 1;
@@ -863,6 +855,36 @@ static int run_cpc(const options_t *options) {
   cpc_set_links(cpc, options->fifty_hz, CPC_MANUFACTURER_AMSTRAD);
 
   int status = 0;
+  tape_t tape;
+  tzx_t reader;
+  uint8_t *tape_image = NULL;
+  tape_init(&tape);
+  if (options->tape_path != NULL) {
+    size_t size = 0;
+    tape_image = read_file(options->tape_path, &size);
+    const char *problem = NULL;
+    if (tape_image == NULL) {
+      status = 1;
+    } else if (!tzx_open(&reader, tape_image, (uint32_t)size, CPC_TICKS_PER_MILLISECOND,
+                         TZX_AMSTRAD, &problem)) {
+      fprintf(stderr, "%s %s\n", options->tape_path, problem);
+      status = 1;
+    } else {
+      tape_insert(&tape, tzx_next_pulse, &reader);
+      cpc_insert_tape(cpc, &tape);
+    }
+  }
+
+  if (status != 0) {
+    free(tape_image);
+    free(cpc_displayed);
+    free(cpc_writes);
+    free(cpc);
+    free(framebuffer);
+    free(ram);
+    return status;
+  }
+
   /* The discs. An image is read into a buffer of its own that the medium
      borrows for the run, and written back only where asked. */
   uint8_t *images[2] = {NULL, NULL};
@@ -949,6 +971,7 @@ static int run_cpc(const options_t *options) {
     status = write_screenshot(options, framebuffer);
   }
 
+  free(tape_image);
   free(images[1]);
   free(images[0]);
   free(cpc_displayed);

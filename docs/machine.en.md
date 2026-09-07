@@ -69,6 +69,14 @@ The 8255 implements mode 0 — plain input and output — which is the only mode
 
 The AY-3-8912 keeps its registers and its one port, and **makes no sound**. The tone channels, the noise generator, the mixer and the envelope are stored and not sounded. The keyboard is read through the chip regardless, which is why typing at the prompt works with no audio anywhere in the machine.
 
+### The cassette
+
+The deck is the same one a Spectrum has, wired to the pins a CPC brings it to: bit 7 of the 8255's port B is what is at the play head, and bit 4 of port C is the motor. That motor is the difference between the two machines. A CPC starts and stops the tape itself, so a program may take as long as it likes between blocks; a Spectrum has no such line and must keep up with a reel that never waits.
+
+What the machine writes to tape — port C's bit 5 — goes nowhere. Nothing here records.
+
+The format is the `.cdt`, which is a `.tzx` under another name, so one reader serves both machines and refuses the same blocks. A `.tap` is not one of them: it is bytes at the Spectrum ROM's own timings, which no CPC firmware can read, so it is refused here rather than played into a machine that will never make sense of it. No CPC tape has been loaded through the firmware here: the wiring is graded, the loading is not.
+
 ### Snapshots
 
 A machine writes itself out as an SNA snapshot and another reads it back and carries on. Versions 1, 2 and 3 are read, taking the fields they share; version 1 is written, because every emulator can read it.
@@ -103,17 +111,25 @@ A memory access is charged once, at the T-state it begins. An internal T-state t
 
 Three things are missing.
 
+**The EAR socket hears nothing the machine itself writes.** On hardware the EAR and MIC sockets and the speaker share one ULA pin, so a program that writes to bit 4 of port &FE changes what bit 6 reads back, by a path whose exact behaviour is what separates an issue 2 board from an issue 3. Here the socket hears the deck and nothing else. Loading is unaffected — the tape drives the pin — but the handful of programs that measure the machine by writing and reading their own bit will not find what they wrote.
+
 **The floating bus is not modelled.** The chip fetches ahead of the beam through a pipeline that this collapses into a single T-state, and that pipeline is exactly what a read of an unattached port observes. Software that steers by it — waiting for the beam to reach a particular place by watching what the bus happens to be carrying — will not find what it is looking for.
 
 **Nothing sounds.** The speaker bit is stored and never heard.
 
-**No tape with a loader of its own.** The deck plays a `.tap`, which is bytes at the ROM's own timings, so what loads is what the ROM loader loads. A tape that came with its own loader — which most commercial releases did, for speed and to be hard to copy — used timings a `.tap` has no way of writing down, and wants a `.tzx`.
+A tape plays, in both the formats a Spectrum's came in. A `.tap` is bytes at the ROM's own timings; a `.tzx` records the timings themselves, block by block, which is what a tape that brought a loader of its own needs — and most commercial releases brought one, for speed and to be hard to copy. Either way the deck plays the edges and the firmware measures the time between them, exactly as it did on hardware. A Spectrum has no motor line, so the tape turns from the moment it starts and the machine cannot stop it, which is why loading was always a race the program had to win.
 
-What it does read, it reads properly: the deck plays a block as the edges it was recorded as, and the firmware measures the time between them exactly as it did on hardware. A Spectrum has no motor line, so the tape turns from the moment it starts and the machine cannot stop it — which is why loading was always a race the program had to win.
+What a `.tzx` can still ask for and not get is a waveform recorded sample by sample, data built from a table of symbols, or blocks visited out of order by a jump, a loop, a call or a menu. So is a block whose identifying byte the reader does not know, because the format gives a block's length nowhere but its own table and an unknown one cannot be stepped over. All of those are refused when the tape goes in rather than played wrongly, and a refusal is the whole tape and not one block. So is an image that does not hold together — one whose blocks run off its end, or whose last byte of data claims to carry more than eight bits — because a tape read past its own bytes is worse than a tape not read.
+
+What is not refused is an element of no length: a pulse of no T-states, or a run of none. Rippers leave those in the tails of blocks and distributed tapes carry them, so they are passed over in silence, as they sound.
+
+What the machine writes to tape goes nowhere here, as on the CPC: bit 3 of a write to port &FE is the MIC socket, and it is stored and goes no further. Nothing here records.
+
+A tape can also stop before it ends: a multiload marks the point between its parts, and there the reel stops where a real one would have. Playing it again carries on from the next block — but nothing here presses PLAY a second time, so from the command line a multiload loads its first part and waits.
 
 A snapshot it keeps too: the 48K `.sna`, read and written. What that format has no room for is where the beam stood, so a machine picked up from one begins its frame again from the top — the same limitation the CPC's snapshots have, for the same reason.
 
-Two smaller declarations. Bits 5 and 7 of a keyboard read are held high, which is what an issue 2 board does and not what later ones do — a handful of 1983 titles read those bits without masking and would know the difference. And the colours are chosen rather than measured: the shape of the answer is fixed by the hardware, one line per gun and one more for brightness, but no measurement of what those lines reach was found, so the levels are the ones the field has settled on and a real reading would replace them.
+One smaller declaration. The colours are chosen rather than measured: the shape of the answer is fixed by the hardware, one line per gun and one more for brightness, but no measurement of what those lines reach was found, so the levels are the ones the field has settled on and a real reading would replace them.
 
 ## The firmware
 

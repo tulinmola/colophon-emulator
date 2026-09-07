@@ -48,12 +48,14 @@ static uint8_t read_video(const spectrum_t *spectrum, uint16_t address) {
 /* Every zero in the top half of the address selects a half-row, and the
    selected ones are wire-ANDed together — so an address with several bits
    low reads several half-rows at once, and one with none reads no keys.
-   Bits 5 and 7 carry nothing and read high, which is what an issue 2 board
-   does: "On Issue 2 Spectrums, the upper 2 bits always read 1, whereas on
-   other issue Spectrums the upper 2 bits read 0. Bit 5 can vary depending
-   on the last thing played on the tape" ("Keyboard", Sinclair Wiki). A
-   later board is therefore not this, and the handful of 1983 games that
-   read those bits without masking would know the difference. */
+   Bits 5 and 7 carry nothing and read high on every board: "Bits 5 and 7 as
+   read by INning from Port 0xfe are always one" (World of Spectrum, 48K
+   reference). The Sinclair Wiki's "Keyboard" page says instead that the upper
+   two bits read 1 on an issue 2 and 0 on later ones; that is the issue
+   difference misattributed, because what the issues differ over is bit 6 —
+   how much of a write to port &FE comes back on a read — and we follow the
+   reference. Bit 6 is the EAR socket, which is spectrum_t's `ear` here and
+   hears nothing this machine writes. */
 static uint8_t read_keyboard(const spectrum_t *spectrum, uint16_t port) {
   uint8_t keys = 0x1F;
   for (uint8_t half_row = 0; half_row < SPECTRUM_HALF_ROWS; half_row++) {

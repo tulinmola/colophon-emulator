@@ -37,13 +37,19 @@ void cpc_remap(cpc_t *cpc) {
   }
 }
 
+#define PORT_B_CASSETTE 0x80
+
 /* Port B is wired to the outside world and to the CRTC: bit 7 the cassette,
    bit 6 the printer's ready line inverted, bit 5 the expansion port, bit 4
    the refresh-rate link, bits 3-1 the manufacturer's, and bit 0 the CRTC's
-   VSYNC straight through ("8255 PPI"). Nothing is connected to the cassette
-   or the printer here, and both float high. */
+   VSYNC straight through ("8255 PPI"). Nothing is connected to the printer
+   here and reads high; the cassette reads what is at the play head, and with
+   no deck in nothing drives it, so it reads high with the other inputs. */
 static void present_port_b(cpc_t *cpc) {
   uint8_t levels = 0xE0;
+  if (cpc->tape != NULL && !tape_level(cpc->tape)) {
+    levels &= (uint8_t)~PORT_B_CASSETTE;
+  }
   if (cpc->fifty_hz) {
     levels |= 0x10;
   }
@@ -61,8 +67,12 @@ static uint8_t selected_line(const cpc_t *cpc, uint8_t line) {
   return line < CPC_KEYBOARD_LINES ? keyboard_line(&cpc->keyboard, line) : 0xFF;
 }
 
-/* Port C's low nibble selects a keyboard line and its top two bits are the
-   PSG's BDIR and BC1 ("8255 PPI"). */
+/* Port C's low nibble selects a keyboard line, bit 4 turns the cassette
+   motor, bit 5 is what the machine writes to tape, and the top two bits are
+   the PSG's BDIR and BC1 ("8255 PPI"). Nothing here records, so bit 5 goes
+   nowhere; the motor is taken up in cpc_tick, where the reel is turned. */
+#define PORT_C_MOTOR 0x10
+
 static void run_psg(cpc_t *cpc) {
   uint8_t port_c = ppi_output_of(&cpc->ppi, PPI_PORT_C);
   psg_present_port_a(&cpc->psg, selected_line(cpc, port_c & 0x0F));
@@ -219,8 +229,33 @@ uint16_t cpc_video_address(const cpc_t *cpc) {
   return (uint16_t)(((ma & 0x3000) << 2) | ((ra & 0x07) << 11) | ((ma & 0x03FF) << 1));
 }
 
+void cpc_insert_tape(cpc_t *cpc, tape_t *tape) { cpc->tape = tape; }
+
 uint64_t cpc_tick(cpc_t *cpc) {
   gate_array_advance_phase(&cpc->gate_array);
+  /* The motor line is held, not sampled: the board turns the reel for as
+     long as the bit is set, whether or not the processor is looking at the
+     8255 ("8255 PPI"). It turns for no other reason: PC4 runs through R113 to
+     the base of Q101, the motor transistor, and no pull-up is fitted anywhere
+     on that line — Amstrad fitted six on port B and none at all on port C —
+     so while the nibble is an input, which is how the 8255 comes out of
+     reset, the transistor has no base current and the reel stands still
+     (CPC464, CPC664 and CPC6128 service manuals, circuit diagrams).
+
+     PLAY is pressed here every tick the line is high rather than once, which
+     is what a motor line is. A source that stopped the tape short of its end
+     would therefore be started again on the next tick — no Amstrad block
+     stops one, and tzx.c sends both candidates to the next block instead. */
+  if (cpc->tape != NULL) {
+    const bool motor_driven =
+        !cpc->ppi.port_c_upper_input && (ppi_output_of(&cpc->ppi, PPI_PORT_C) & PORT_C_MOTOR) != 0;
+    if (motor_driven) {
+      tape_play(cpc->tape);
+    } else {
+      tape_stop(cpc->tape);
+    }
+    tape_tick(cpc->tape);
+  }
   if (gate_array_character_clock(&cpc->gate_array)) {
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
     gate_array_tick(&cpc->gate_array, (cpc->crtc_pins & CRTC_HSYNC) != 0,
