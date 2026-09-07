@@ -2,14 +2,16 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-5 of them printed self-graded lines, 26 in all: 25 agree with Longshot's
-silicon and 1 do not. That is 96% of what this reader can score, and no
-measure at all of the other 59 groups.
+6 of them printed self-graded lines, 33 in all: 27 agree with Longshot's
+silicon and 6 do not. That is 82% of what this reader can score, and no
+measure at all of the other 58 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
-said what it had to say in a picture, a legend, or a table whose rows
-carry more than one test, rather than in words this reader can score, or
-because it names silicon's value only where the machine differs from it. It
+said what it had to say in a picture or a legend rather than in words
+this reader can score, or because it names silicon's value only where the
+machine differs from it. A group can also be graded in part: where a row
+carries more than one test, the one whose value stands nearest the
+expectation is the one scored. It
 was run and kept, not skipped. A line marked ! is a test this machine
 failed: either the module said so, or the machine's value differs from the
 one Longshot's silicon produced.
@@ -56,7 +58,12 @@ B (RETURN)  R5 STORIES                                                          
 B (F0)      BOUNGA!                                                                          recorded, ungraded
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
 B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, cut off at the cap
-B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
+B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                5 graded, 5 wrong
+    ! CB 46      :#CC                         ED 57      :#CC >WRONG (Exp #C4)
+    ! DD CB 07 46:#CC                         ED 5F      :#CC >WRONG (Exp #C4)
+    ! ED A1      :#CC >WRONG (Exp #C4)        CB 86      :#CC
+    ! 2B         :#CC >WRONG (Exp #C4)        FD CB 00 16:#CC
+    ! FD 2B      :#CC >WRONG (Exp #C4)        07         :#CC
 B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
 B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
 B (T)       R3 JIT INTERACTIVE MODE ANALYZER                                                 recorded, ungraded
@@ -86,8 +93,10 @@ C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  recorded, ungraded
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's
-D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               1 graded, 1 wrong
+D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               3 graded, 1 wrong
     ! TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)
+      Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)
+      Break ED xx on Pending Int #00 (Exp#00)
 D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   4 graded, 0 wrong
       R3h=0.UPP R3h=8 ON 9th LINE. DELAY VSYNC OFF=#03F2 (CRTC 0.3.4:3F2/CRTC 1.2:1F4)
       R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)

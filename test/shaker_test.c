@@ -769,13 +769,14 @@ static bool keep_rasters;
 
 /* Some groups grade themselves. Where they do, the value the machine
    produced stands last before a bracket and the value real silicon
-   produced stands inside it. Longshot writes that five ways:
+   produced stands inside it. Longshot writes that six ways:
 
        >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
        RESULT:#8700 WRONG (EXP:#4E40)
        R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)
        R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
        R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)
+       2B         :#CC >WRONG (Exp #C4)
 
    Three of them never write WRONG at all, so the values decide and the word
    only corroborates. They are compared as numbers because #0032 and #32
@@ -838,13 +839,22 @@ static bool matches_ignoring_case(const char *at, const char *lowercase, size_t 
   return true;
 }
 
-/* The colon is what keeps module B's (R) out, and it is the only thing
-   that does: that group writes `(Exp #C4)` with neither a colon nor the
-   word, and its screen is a two-column table whose rows carry two tests
-   each, so no reader taking a row for a test can grade it and hold still.
-   The same rule declines module D's (I), which writes `(Exp#00)` around a
-   real pair. That is under-grading, and it stands until that group's own
-   convention is read off its output. */
+/* The word, then the value: with a colon between them as modules C, D and
+   E write it, spelt out as module C's (E) does, or with neither as modules
+   B and D do — `(Exp #C4)`, `(Exp#00)`. The value has to be there: what
+   keeps a heading out is the rule above, that a line carrying no
+   measurement of its own is not a grading, which is what declines module
+   D's `TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)` — a title
+   over the rows that follow it.
+
+   Module B's (R) is a two-column table whose rows carry two tests each, and
+   a row of it grades the test whose value stands nearest the bracket while
+   the other goes unread. That costs nothing today, because only a failing
+   test names a value for silicon there and no row holds two of those; what
+   takes its forty-eight tests down to the five recorded is Shaker's silence
+   on the ones that pass. The word WRONG is looked for in the whole line
+   though, so a row that ever carried both a bracket and another column's
+   failure would condemn the test it graded. No such row is printed. */
 static bool names_the_expected_value(const char *opening, const char *closing) {
   for (const char *at = opening; at + 3 < closing; at++) {
     if (!matches_ignoring_case(at, "exp", 3)) {
@@ -854,6 +864,13 @@ static bool names_the_expected_value(const char *opening, const char *closing) {
       return true;
     }
     if (closing - at >= 8 && matches_ignoring_case(at + 3, "ected", 5)) {
+      return true;
+    }
+    const char *value = at + 3;
+    while (value < closing && *value == ' ') {
+      value++;
+    }
+    if (value < closing && *value == '#') {
       return true;
     }
   }
@@ -1518,6 +1535,15 @@ static const verdict_case printed_lines[] = {
     {"RESULT:#8700 WRONG (EXP:#4E40)", true, true},
     {"R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)", true, false},
     {"R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)", true, true},
+    /* And the word with no colon at all, which modules B and D write. The
+       first is a row of a two-column table: the test whose value stands
+       nearest the bracket is the one graded, and the other goes unread. */
+    {"2B         :#CC >WRONG (Exp #C4)        FD CB 00 16:#CC", true, true},
+    {"Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)", true, false},
+    {"Break ED xx on Pending Int #00 (Exp#00)", true, false},
+    /* A title over the rows that follow it, naming what they are checked
+       against and measuring nothing itself. */
+    {"TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)", false, false},
     /* And named for each type, where this machine reads the clause that
        speaks for a type 0 — by its number, or by gathering the rest. */
     {"R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)", true,
@@ -1575,6 +1601,10 @@ static const verdict_case built_lines[] = {
     {"X=#0022 (CRTC 10:#11/ OTHERS:#22)", true, false},
     /* A bracket that speaks for no type this machine is. */
     {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", false, false},
+    /* A word that merely begins with the letters, naming a value for
+       something other than silicon, and a word that is not the word. */
+    {"X=#0044 (EXPANSION #44)", false, false},
+    {"X=#0044 (EXT #44)", false, false},
     /* A clause for this machine whose value cannot be read takes the
        bracket down rather than letting the rest answer in its place. */
     {"X=#0058 (CRTC 0:DEADLOCK/ OTHERS:#22)", false, false},
@@ -1867,9 +1897,11 @@ int main(int argc, char **argv) {
   fprintf(file, "measure at all of the other %d groups.\n\n",
           total_groups_run - total_groups_graded);
   fprintf(file, "A group stands as \"recorded, ungraded\" when it drew a screen of its own but\n");
-  fprintf(file, "said what it had to say in a picture, a legend, or a table whose rows\n");
-  fprintf(file, "carry more than one test, rather than in words this reader can score, or\n");
-  fprintf(file, "because it names silicon's value only where the machine differs from it. It\n");
+  fprintf(file, "said what it had to say in a picture or a legend rather than in words\n");
+  fprintf(file, "this reader can score, or because it names silicon's value only where the\n");
+  fprintf(file, "machine differs from it. A group can also be graded in part: where a row\n");
+  fprintf(file, "carries more than one test, the one whose value stands nearest the\n");
+  fprintf(file, "expectation is the one scored. It\n");
   fprintf(file, "was run and kept, not skipped. A line marked ! is a test this machine\n");
   fprintf(file, "failed: either the module said so, or the machine's value differs from the\n");
   fprintf(file, "one Longshot's silicon produced.\n\n");
