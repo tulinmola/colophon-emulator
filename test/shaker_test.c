@@ -1056,7 +1056,7 @@ static bool appears_in_previous_screen(const char *line) {
    carrying a glyph the table could not name is refused outright — the word
    WRONG can be lost to a bad read where the brackets survive, and a
    half-read failure must never be counted as agreement. */
-static int collect_verdicts(void) {
+static int collect_verdicts(int percentage_named) {
   /* What this screen carries, in the order Shaker wrote it. */
   verdict standing[ROWS];
   int standing_count = 0;
@@ -1097,7 +1097,27 @@ static int collect_verdicts(void) {
      same the day the machine gets them right. So a line counts as held not
      when the record holds one like it, but when it holds as many as this
      screen shows down to here. Shaker writes its verdicts downward, so that
-     count is an identity where the text alone is not. */
+     count is an identity where the text alone is not.
+
+     It is an identity only where the whole screen stands behind it. A group
+     that redraws its list from the top leaves the tail of the last pass
+     above the head of the next one until the beam has covered it, and a
+     frame caught in between shows the same test twice with unread rows in
+     the gap. Such a frame may still add a line the record has never held —
+     that is how a group's later tests are gathered at all — but it may not
+     add a second copy of one it holds.
+
+     A whole read is a filter and not a proof: a tear whose seam fell on a
+     row boundary, or one a module had blanked rather than left dirty, would
+     leave every glyph readable and be believed. And the filter costs
+     something today. Module E's (6) prints its second identical verdict on
+     partly-read screens too, where it is refused, and is recorded only
+     because the group settles on a screen read whole; a group whose screen
+     carries an unreadable band for as long as it runs could never record a
+     duplicate at all. The splice this wants in the end — each screen's run
+     of verdicts laid on the record at its longest overlap with the record's
+     tail — is deferred, not answered. */
+  bool read_whole = percentage_named == 100;
   int added = 0;
   for (int index = 0; index < standing_count; index++) {
     int shown_here = 0;
@@ -1112,7 +1132,7 @@ static int collect_verdicts(void) {
         held++;
       }
     }
-    if (held >= shown_here) {
+    if (held >= shown_here || (held > 0 && !read_whole)) {
       continue;
     }
     if (verdict_count == MAX_VERDICTS) {
@@ -1214,8 +1234,9 @@ static void run_group(const char *module, const group *entry, FILE *report) {
     run_frames(SAMPLE_STEP_FRAMES);
     frame += SAMPLE_STEP_FRAMES;
     samples++;
-    bool news = capture_screen(module, entry->key, frame, read_screen());
-    if (collect_verdicts() > 0) {
+    int percentage_named = read_screen();
+    bool news = capture_screen(module, entry->key, frame, percentage_named);
+    if (collect_verdicts(percentage_named) > 0) {
       news = true;
     }
     samples_without_news = news ? 0 : samples_without_news + 1;
@@ -1412,6 +1433,73 @@ static void module_e_is_recorded(void) {
    heading all look alike out of context. */
 static bool is_a_group_line(const char *line) {
   return line[0] >= 'A' && line[0] <= 'E' && line[1] == ' ' && line[2] == '(';
+}
+
+/* Puts a screen in front of the reader, in the previous frame as well as
+   this one, since a line is only collected once it has stood still. */
+static void show_screen(const char *const *rows, int count) {
+  memset(screen, 0, sizeof screen);
+  memset(previous_screen, 0, sizeof previous_screen);
+  for (int row = 0; row < ROWS; row++) {
+    const char *text = row < count ? rows[row] : "";
+    snprintf(screen[row], sizeof screen[row], "%s", text);
+    snprintf(previous_screen[row], sizeof previous_screen[row], "%s", text);
+  }
+}
+
+/* Two of a group's tests can agree word for word — module E's (6) prints
+   eleven verdicts and its #007F twice — and a screen read whole is the
+   warrant for recording both. A screen read in part is not: a group that
+   redraws its list leaves the tail of the last pass above the head of the
+   next, and a frame caught in between shows a test twice with unread rows
+   in the gap, as module D's (R) does. Such a frame may still bring a line
+   the record has never held, which is how a group's later tests are
+   gathered at all.
+
+   The rows below are E (6)'s own, and the gap is what an unread row reads
+   as. The percentages are handed in rather than measured, so that the line
+   between the two readings can be walked: 93 is what the frame carrying
+   the phantom read, and 100 what the frame warranting the repeat read. */
+static void a_screen_read_in_part_cannot_repeat_a_verdict(void) {
+  static const char *const settled[] = {
+      ">>>>>> DELAY TO VSYNC:#007F (EXP:#007F)",
+      ">>>>>> DELAY TO VSYNC:#009F (EXP:#009F)",
+      ">>>>>> DELAY TO VSYNC:#007F (EXP:#007F)",
+  };
+  static const char *const torn[] = {
+      ">>>>>> DELAY TO VSYNC:#007F (EXP:#007F)",
+      "????????????????????????????????????????????????????????????????????????????????",
+      ">>>>>> DELAY TO VSYNC:#007F (EXP:#007F)",
+      ">>>>>> DELAY TO VSYNC:#001B (EXP:#001B)",
+  };
+
+  /* Read whole, the two that agree are two tests and the record owes both. */
+  verdict_count = 0;
+  verdicts_dropped = 0;
+  show_screen(settled, 3);
+  TEST_EQUAL(collect_verdicts(100), 3);
+  TEST_EQUAL(collect_verdicts(100), 0);
+
+  /* Torn, the repeat is a remnant and is refused, while the line the record
+     has never held is taken. */
+  verdict_count = 0;
+  show_screen(torn, 4);
+  TEST_EQUAL(collect_verdicts(55), 2);
+
+  /* And one unread glyph in a corner is a tear as far as this goes: the
+     rule asks for the whole screen and not for most of it. */
+  verdict_count = 0;
+  show_screen(torn, 4);
+  TEST_EQUAL(collect_verdicts(99), 2);
+
+  /* The same rows read whole are three verdicts again. */
+  verdict_count = 0;
+  show_screen(torn, 4);
+  TEST_EQUAL(collect_verdicts(100), 3);
+
+  verdict_count = 0;
+  memset(screen, 0, sizeof screen);
+  memset(previous_screen, 0, sizeof previous_screen);
 }
 
 /* Lines Shaker printed, one of each rendering the reader knows, taken from
@@ -1807,6 +1895,7 @@ int main(int argc, char **argv) {
          agreeing, total_verdicts, percentage, total_groups_graded, total_groups_run);
 
   TEST_RUN(the_verdict_reader_knows_its_renderings);
+  TEST_RUN(a_screen_read_in_part_cannot_repeat_a_verdict);
   TEST_RUN(the_scoreboard_matches_the_one_on_record);
   return TEST_REPORT("shaker");
 }

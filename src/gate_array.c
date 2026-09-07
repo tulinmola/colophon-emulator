@@ -23,9 +23,14 @@ void gate_array_write(gate_array_t *gate_array, uint8_t data) {
       gate_array->mode_pending = data & 0x03;
       if (data & 0x10) {
         /* Bit 4 resets R52 and clears the pending request with it
-           ("Interrupts on the CPC/CPC+ and KC Compact"). */
+           ("Interrupts on the CPC/CPC+ and KC Compact"). One asked for by
+           the HSYNC just ended and not yet a microsecond old goes with it:
+           the source speaks of the request rather than of the delay, and
+           the alternative is an interrupt a program has just cancelled
+           arriving anyway. Nothing we can run grades the difference. */
         gate_array->r52 = 0;
         gate_array->interrupt_request = false;
+        gate_array->interrupt_due = false;
       }
       break;
     default: /* 11: the PAL's MMR — another chip's business */
@@ -33,19 +38,25 @@ void gate_array_write(gate_array_t *gate_array, uint8_t data) {
   }
 }
 
-/* R52 counts to 51 and loops; the loop raises the request (Compendium ch.
+/* R52 counts to 51 and loops; the loop asks for the request (Compendium ch.
    27.3.1). */
 static void count_hsync_end(gate_array_t *gate_array) {
   gate_array->r52 = (gate_array->r52 + 1) & 0x3F;
   if (gate_array->r52 == 52) {
     gate_array->r52 = 0;
-    gate_array->interrupt_request = true;
+    gate_array->interrupt_due = true;
   }
 }
 
 /* The other thing an HSYNC end can be: the second one after a VSYNC began,
    where the frame's own check takes the place of R52's count (Compendium
-   ch. 27.3.2). Counts those two down and is true on the second alone. */
+   ch. 27.3.2). Counts those two down and is true on the second alone.
+
+   What it asks for waits the same microsecond R52's own request waits: ch.
+   27.6.1 says an interrupt starts a microsecond after the end of the HSYNC
+   "regardless of the CRTC", and ch. 27.3.2 says nothing either way. It is
+   the same request out of the same counter, so it is given the same delay;
+   nothing we can run tells the two apart. */
 static bool vsync_check_due(gate_array_t *gate_array) {
   if (gate_array->hsyncs_until_vsync_check == 0) {
     return false;
@@ -55,6 +66,16 @@ static bool vsync_check_due(gate_array_t *gate_array) {
 }
 
 void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
+  /* What the last HSYNC end asked for rises here, a character after it was
+     asked: "an interrupt always starts 1 µsec after the end of the HSYNC
+     regardless of the CRTC" (Compendium ch. 27.6.1), and the diagrams under
+     it put the interrupt R3+1 microseconds after C0 reaches R2 for every
+     width they draw — 15 for an R3 of 14, 9 for 8, 2 for 1. */
+  if (gate_array->interrupt_due) {
+    gate_array->interrupt_request = true;
+    gate_array->interrupt_due = false;
+  }
+
   bool hsync_started = hsync && !gate_array->hsync_previous;
   bool hsync_ended = gate_array->hsync_previous && !hsync;
   bool vsync_started = vsync && !gate_array->vsync_previous;
@@ -101,15 +122,13 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
     }
 
     /* Mode changes take effect after the HSYNC ("The Gate Array"); the
-       sub-microsecond placement waits for Shaker. The interrupt request
-       likewise rises here, where on hardware it is one more microsecond
-       along (Compendium ch. 27.6.1). */
+       sub-microsecond placement waits for Shaker. */
     gate_array->mode = gate_array->mode_pending;
     if (vsync_check_due(gate_array)) {
       /* An interrupt only if bit 5 of R52 is set — the last one comfortably
          far away — and R52 returns to 0 either way. */
       if (gate_array->r52 & 0x20) {
-        gate_array->interrupt_request = true;
+        gate_array->interrupt_due = true;
       }
       gate_array->r52 = 0;
     } else {
@@ -122,6 +141,11 @@ void gate_array_advance_phase(gate_array_t *gate_array) {
   gate_array->cpu_phase = (uint8_t)((gate_array->cpu_phase + 1) & 3);
 }
 
+/* A request asked for by the HSYNC just ended is not withdrawn here, where
+   RMR's bit 4 does withdraw one: the acknowledge answers the interrupt the
+   processor was offered, and the counter has since asked for another. The
+   difference shows only for an acknowledge inside that microsecond. No
+   outside evidence settles it; a test holds each half where it stands. */
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array) {
   gate_array->interrupt_request = false;
   gate_array->r52 &= 0x1F;

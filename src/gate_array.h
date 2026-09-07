@@ -27,7 +27,10 @@
  *   https://shaker.logonsystem.eu/ACCC1.11-EN.pdf ch. 27 — the interrupt
  *   generator measured on hardware: the R52 counter and its name, the INT
  *   line maintained until acknowledged, bit 5 killed at acknowledge, and
- *   the rule two HSYNCs after VSYNC: an interrupt only if bit 5 is set.
+ *   the rule two HSYNCs after VSYNC: an interrupt only if bit 5 is set,
+ *   and the microsecond an interrupt waits after the end of the HSYNC
+ *   that asked for it (ch. 27.6.1, whose diagrams put it R3+1 after C0
+ *   reaches R2 for every width they draw).
  *   Where "The Gate Array" states that rule inverted, the Compendium is
  *   the one whose reading matches the mechanism's purpose, and the one
  *   tested on silicon.
@@ -79,6 +82,10 @@ typedef struct {
      maintained until acknowledged (ch. 27.3.1). */
   uint8_t r52;
   bool interrupt_request;
+  /* An HSYNC end that asks for an interrupt gets it a character later:
+     "an interrupt always starts 1 µsec after the end of the HSYNC"
+     (Compendium ch. 27.6.1). */
+  bool interrupt_due;
   uint8_t hsyncs_until_vsync_check; /* the two-HSYNC delay after a VSYNC
                                        starts (ch. 27.3.2); 0 = not armed */
   bool hsync_previous;

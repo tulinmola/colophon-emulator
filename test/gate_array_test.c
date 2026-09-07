@@ -9,9 +9,13 @@
 
 static gate_array_t gate_array;
 
-/* One HSYNC: assert, then end it — R52 counts the end. */
+/* One HSYNC: assert, end it, and give the line one character more. R52
+   counts the end, and what that end asks for arrives on the character
+   after it (ch. 27.6.1), so a pulse that stopped at the end would leave
+   every test here reading the moment before. */
 static void pulse_hsync(void) {
   gate_array_tick(&gate_array, true, false);
+  gate_array_tick(&gate_array, false, false);
   gate_array_tick(&gate_array, false, false);
 }
 
@@ -53,6 +57,38 @@ static void rmr_owns_roms_and_mode(void) {
   TEST_EQUAL(gate_array.mode, 1);
 }
 
+/* The end of an HSYNC asks for the interrupt; it rises a character later.
+   "An interrupt always starts 1 µsec after the end of the HSYNC regardless
+   of the CRTC", and the diagrams below that put it R3+1 microseconds after
+   C0 reaches R2 — 15 for an R3 of 14, 9 for 8, 2 for 1 (ch. 27.6.1,
+   27.6.2). */
+static void the_request_rises_a_character_after_the_hsync(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(51);
+  TEST_CHECK(!gate_array.interrupt_request);
+
+  gate_array_tick(&gate_array, true, false);
+  TEST_CHECK(!gate_array.interrupt_request);
+  gate_array_tick(&gate_array, false, false); /* the end R52 counts */
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(!gate_array.interrupt_request);
+  gate_array_tick(&gate_array, false, false);
+  TEST_CHECK(gate_array.interrupt_request);
+}
+
+/* And an interrupt asked for by an HSYNC that has just ended is cancelled
+   with the rest by RMR's bit 4, rather than arriving a character after the
+   program disowned it. */
+static void rmr_bit_4_reaches_a_request_not_yet_risen(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(51);
+  gate_array_tick(&gate_array, true, false);
+  gate_array_tick(&gate_array, false, false);
+  gate_array_write(&gate_array, 0x90); /* RMR with bit 4 */
+  gate_array_tick(&gate_array, false, false);
+  TEST_CHECK(!gate_array.interrupt_request);
+}
+
 static void r52_loops_at_52_and_holds_the_request(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(51);
@@ -89,6 +125,36 @@ static void rmr_bit_4_clears_counter_and_request(void) {
   gate_array_write(&gate_array, 0x90);
   TEST_CHECK(!gate_array.interrupt_request);
   TEST_EQUAL(gate_array.r52, 0);
+}
+
+/* The interrupt the frame's own check raises waits the same character as
+   the one R52 counts out (ch. 27.6.1, 27.3.2). */
+static void the_vsync_checks_request_waits_the_same_character(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(40);
+  gate_array_tick(&gate_array, false, true); /* VSYNC begins */
+  pulse_hsync();                             /* counts: R52 = 41 */
+
+  gate_array_tick(&gate_array, true, false);
+  gate_array_tick(&gate_array, false, false); /* the end the check falls on */
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(!gate_array.interrupt_request);
+  gate_array_tick(&gate_array, false, false);
+  TEST_CHECK(gate_array.interrupt_request);
+}
+
+/* And the acknowledge does not reach a request the last HSYNC end asked
+   for, where RMR's bit 4 does: it answers the interrupt the processor was
+   offered, and the counter has since asked for another. */
+static void an_acknowledge_leaves_a_request_not_yet_risen(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(51);
+  gate_array_tick(&gate_array, true, false);
+  gate_array_tick(&gate_array, false, false); /* the end that asks */
+  gate_array_interrupt_acknowledged(&gate_array);
+  TEST_CHECK(!gate_array.interrupt_request);
+  gate_array_tick(&gate_array, false, false);
+  TEST_CHECK(gate_array.interrupt_request);
 }
 
 static void vsync_check_interrupts_only_from_afar(void) {
@@ -349,6 +415,10 @@ int main(void) {
   TEST_RUN(r52_loops_at_52_and_holds_the_request);
   TEST_RUN(acknowledge_kills_bit_5);
   TEST_RUN(rmr_bit_4_clears_counter_and_request);
+  TEST_RUN(the_request_rises_a_character_after_the_hsync);
+  TEST_RUN(rmr_bit_4_reaches_a_request_not_yet_risen);
+  TEST_RUN(the_vsync_checks_request_waits_the_same_character);
+  TEST_RUN(an_acknowledge_leaves_a_request_not_yet_risen);
   TEST_RUN(vsync_check_interrupts_only_from_afar);
   TEST_RUN(suppression_does_not_revoke_a_held_request);
   TEST_RUN(mode_0_paints_two_fat_pixels_a_byte);

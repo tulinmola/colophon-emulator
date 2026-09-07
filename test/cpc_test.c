@@ -31,6 +31,13 @@ static void rom_program(const uint8_t *code, size_t length) { memcpy(lower_rom, 
 
 static size_t bank_start(int bank) { return (size_t)bank * 0x4000; }
 
+/* A CRTC register written the way the board writes one, without asking the
+   processor to do it. */
+static void write_crtc(uint8_t which, uint8_t value) {
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, which));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, value));
+}
+
 static bool run_to_halt(void) {
   for (int ticks = 0; ticks < 10000; ticks++) {
     if (cpc_tick(&cpc) & Z80_HALT) {
@@ -372,6 +379,45 @@ static void the_gate_array_interrupts_six_times_a_frame(void) {
   TEST_CHECK(cpc.cpu.a >= 12 && cpc.cpu.a <= 16);
 }
 
+/* Ch. 27.6.2's diagram, read for a type 0. The HSYNC begins where C0 meets
+   R2 and runs R3 characters; the interrupt falls one character after it
+   ends, which the diagram states as R3+1 microseconds after C0 reaches R2 —
+   15 for an R3 of 14, 9 for 8, 2 for 1. An R3 of 0 is no HSYNC at all on
+   this type, and the diagram says of it only "No interruption"
+   (ch. 27.6.1, 27.6.2, 27.6.3). */
+static void the_interrupt_falls_a_character_after_the_hsync(void) {
+  static const struct {
+    uint8_t r3;
+    int characters_after_r2; /* -1 where the diagram expects none at all */
+  } widths[] = {{14, 15}, {8, 9}, {1, 2}, {0, -1}};
+  static const uint8_t hsync_at = 8; /* R2, as the diagram draws it */
+
+  for (size_t index = 0; index < sizeof widths / sizeof widths[0]; index++) {
+    power_on(sizeof ram);
+    /* The ROM is filled with HALT, so the processor stops at the first
+       instruction and never acknowledges what the Gate Array raises. */
+    TEST_CHECK(run_to_halt());
+    static const uint8_t frame[][2] = {{0, 63}, {1, 40}, {4, 38}, {6, 25}, {7, 30}, {9, 7}};
+    for (size_t reg = 0; reg < sizeof frame / sizeof frame[0]; reg++) {
+      write_crtc(frame[reg][0], frame[reg][1]);
+    }
+    write_crtc(2, hsync_at);
+    write_crtc(3, widths[index].r3);
+
+    int risen_at = -1;
+    for (long tick = 0; tick < 400000 && risen_at < 0; tick++) {
+      bool standing = cpc.gate_array.interrupt_request;
+      cpc_tick(&cpc);
+      if (!standing && cpc.gate_array.interrupt_request) {
+        risen_at = cpc.crtc.c0;
+      }
+    }
+    TEST_EQUAL(risen_at, widths[index].characters_after_r2 < 0
+                             ? -1
+                             : hsync_at + widths[index].characters_after_r2);
+  }
+}
+
 static void an_unheard_interrupt_is_held(void) {
   power_on(sizeof ram);
   uint8_t body[200];
@@ -707,6 +753,7 @@ int main(void) {
   TEST_RUN(a_machine_tick_is_a_quarter_character);
   TEST_RUN(pens_and_inks_reach_the_gate_array);
   TEST_RUN(the_gate_array_interrupts_six_times_a_frame);
+  TEST_RUN(the_interrupt_falls_a_character_after_the_hsync);
   TEST_RUN(an_unheard_interrupt_is_held);
   TEST_RUN(the_display_lands_where_the_syncs_put_it);
   TEST_RUN(the_border_surrounds_the_display);
