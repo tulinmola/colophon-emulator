@@ -9,45 +9,48 @@
  * chip regardless of CCLK.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
- * (HD6845S/UM6845) performs it — its register widths, its readable set,
- * its VMA/VMA' reload rules, the counter widths a program can overrun, the
- * last line decided while C0 is 0 or 1, the vertical adjustment spent on
- * C9 — asked for by R5, taken back where R5 is cancelled in time, and
- * opened by an R4 or R9 moved under a standing last line — and the block
- * that stops one VSYNC condition serving twice. Of R8 everything but the
- * cursor's skew is read: the frame parity this chip keeps in two states
- * rather than one, the line either interlace mode adds to the end of an
- * even frame, the MID-VSYNC that holds an even frame's VSYNC back to the
- * middle of its line — which, beginning away from a line's head, then runs
- * longer than R3 asks for — and the counting of the interlace video mode,
- * where the raster address becomes C9 doubled with a parity filling the
- * bit it leaves and R9 is read up to that same parity — the doubling taken
- * up a line after the write that asks for it, the parity in the limit at
- * once, which is what leaves a row entered or left off its parity counting
- * the long way round, and what a program reads its own frame parity from
- * (ch. 19.8.1). Above those sit the SKEW-DISPTMG functions, which ch. 19.1
- * gives this type and withholds from types 1 and 2: a delay of one
- * character or two on both edges of the R1 border, or the display shut
- * outright, which takes the interlace bits with it (ch. 19.2). Nothing
- * outside this repository grades those: what stands behind them is a
- * reading of ch. 19.2's diagrams and no evidence we did not write. C0 names
- * the character being drawn and holds it for that whole microsecond, which
- * is what a positional register write needs; the last line and the
- * vertical adjustment already read it, and both are settled at the
- * characters ch. 13.2.1 settles them at rather than wherever they next
- * stand. Not yet: the cursor, its own skew and the lightpen, no host here
- * wiring those pins; the later deadline ch. 11.9 gives R8 for the
- * interlace line, which is taken here on R5's own schedule; the per-type
- * divergences; the rest of what ch. 13.2.1 gives a line's first three
- * microseconds — the counter updates those characters schedule for a later
- * one — and the VSYNC arming of ch. 13.2.2. Every other comparison is made
- * where it stands. Two of the border's rules move DISPLAY ENABLE inside a
- * character — the byte of border at C0=R0 on a line where R1 was never
- * reached and no skew stands ready to defer it to a whole character of its
- * own (ch. 17.6.2, 19.2.4), and the byte-by-byte alternation an R6 of 0
- * makes on a frame's first line (ch. 18.3.2) — and both are here, which is
- * why a tick reports that pin for each of the two bytes a character is
- * drawn from rather than once.
+ * (HD6845S/UM6845) performs it — its register widths, its readable set, its
+ * VMA/VMA' reload rules, the counter widths a program can overrun, the last
+ * line decided while C0 is 0 or 1, the vertical adjustment spent on C9 —
+ * asked for by R5, taken back where R5 is cancelled in time, and opened by
+ * an R4 or R9 moved under a standing last line — and the block that stops
+ * one VSYNC condition serving twice. Of R8 everything but the cursor's skew
+ * is read: the frame parity this chip keeps in two states rather than one,
+ * the line either interlace mode adds to the end of an even frame, the
+ * MID-VSYNC that holds an even frame's VSYNC back to the middle of its line
+ * — which, beginning away from a line's head, then runs longer than R3 asks
+ * for — and the counting of the interlace video mode, where the raster
+ * address becomes C9 doubled with a parity filling the bit it leaves and R9
+ * is read up to that same parity — the doubling taken up a line after the
+ * write that asks for it, the parity in the limit at once, which is what
+ * leaves a row entered or left off its parity counting the long way round,
+ * and what a program reads its own frame parity from (ch. 19.8.1). Above
+ * those sit the SKEW-DISPTMG functions, which ch. 19.1 gives this type and
+ * withholds from types 1 and 2: a delay of one character or two on both
+ * edges of the R1 border, or the display shut outright, which takes the
+ * interlace bits with it (ch. 19.2). Nothing outside this repository grades
+ * those: what stands behind them is a reading of ch. 19.2's diagrams and no
+ * evidence we did not write. The interlace line is asked for on the
+ * deadline of its own that ch. 11.9 gives it, later than R5's three
+ * characters and read on the last line a frame has — which may be one of
+ * R5's own, so a program may add the line or take it back from inside an
+ * adjustment, and a frame R5 asked nothing of is held open for it. Nothing
+ * outside this repository grades that deadline either. C0 names the
+ * character being drawn and holds it for that whole microsecond, which is
+ * what a positional register write needs; the last line and the vertical
+ * adjustment already read it, and both are settled at the characters ch.
+ * 13.2.1 settles them at rather than wherever they next stand. Not yet: the
+ * cursor, its own skew and the lightpen, no host here wiring those pins;
+ * the per-type divergences; the rest of what ch. 13.2.1 gives a line's
+ * first three microseconds — the counter updates those characters schedule
+ * for a later one — and the VSYNC arming of ch. 13.2.2. Every other
+ * comparison is made where it stands. Two of the border's rules move
+ * DISPLAY ENABLE inside a character — the byte of border at C0=R0 on a line
+ * where R1 was never reached and no skew stands ready to defer it to a
+ * whole character of its own (ch. 17.6.2, 19.2.4), and the byte-by-byte
+ * alternation an R6 of 0 makes on a frame's first line (ch. 18.3.2) — and
+ * both are here, which is why a tick reports that pin for each of the two
+ * bytes a character is drawn from rather than once.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -139,8 +142,11 @@ typedef struct {
      stands on, and nothing we can run grades that. */
   bool parity_frame;
   bool parity_r6;
-  /* The one line interlace adds after the R5 lines, spent once a frame
-     (ch. 19.6.1). */
+  /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a
+     microsecond before the line it decides could begin. */
+  bool interlace_line_owed;
+  /* The one line interlace adds after the R5 lines, and one to a frame
+     however the adjustment carrying it ends (ch. 11.9, 19.6.1). */
   bool interlace_line_given;
   /* The interlace video mode as the counters see it, which is not quite as
      R8 holds it: the mode a write asks for is taken up at the next C0=0,

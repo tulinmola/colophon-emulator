@@ -54,7 +54,7 @@ static bool interlace_asked(const crtc_t *crtc) {
 
 /* The line either interlace mode adds at the end of a frame is added on the
    parity R6 anticipated (ch. 19.6.1). */
-static bool interlace_line_due(const crtc_t *crtc) {
+static bool interlace_line_asked_for(const crtc_t *crtc) {
   return interlace_asked(crtc) && crtc->parity_r6;
 }
 
@@ -136,15 +136,20 @@ static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
   return c9_vma(crtc) == (interlace_video_asked(crtc) ? r9_with_parity(crtc) : crtc->registers[9]);
 }
 
-/* The adjustment is one state in two flags, and they are dropped together
-   wherever it ends. */
-static void leave_vertical_adjustment(crtc_t *crtc) {
-  crtc->in_vertical_adjustment = false;
-  crtc->interlace_line_given = false;
-}
-
 /* C3h counts VSYNC scanlines on its 4 bits, so a width of 0 runs the full 16
    (ch. 6.1.2). */
+/* A frame begins where the last one is done with, whatever the counters
+   read on the way: C4 of 127 carries the interlace line itself to a C0, C4
+   and C9 all zero, and a frame that read its own head off those would renew
+   the line under the line it had just given and never end. One interlace
+   line to a frame (ch. 11.9), and the frame it was given to is what spends
+   it, not the adjustment that carried it. */
+static void begin_frame(crtc_t *crtc) {
+  crtc->c9 = 0;
+  crtc->interlace_line_given = false;
+  enter_character_row(crtc, 0);
+}
+
 static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   if (crtc->vsync_began_mid_line) {
@@ -175,7 +180,7 @@ static void enter_scanline(crtc_t *crtc) {
     bool row_ended_on_r4 = row_is_on_its_last_scanline(crtc) && crtc->c4 == r[4];
     uint8_t next_c9 = row_ended_on_r4 ? 0 : (uint8_t)((crtc->c9 + 1) & C9_BITS);
     bool r5_lines_spent = next_c9 == r[5];
-    if (r5_lines_spent && interlace_line_due(crtc) && !crtc->interlace_line_given) {
+    if (r5_lines_spent && crtc->interlace_line_owed && !crtc->interlace_line_given) {
       /* The R5 lines are spent and interlace asks for one more, which is
          the last of them (ch. 19.6.1). C4 has already been incremented once
          for all the additional lines there are. */
@@ -185,9 +190,8 @@ static void enter_scanline(crtc_t *crtc) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       }
     } else if (r5_lines_spent || crtc->interlace_line_given) {
-      leave_vertical_adjustment(crtc);
-      crtc->c9 = 0;
-      enter_character_row(crtc, 0);
+      crtc->in_vertical_adjustment = false;
+      begin_frame(crtc);
     } else {
       crtc->c9 = next_c9;
       if (row_ended_on_r4) {
@@ -195,8 +199,7 @@ static void enter_scanline(crtc_t *crtc) {
       }
     }
   } else if (crtc->last_line) {
-    crtc->c9 = 0;
-    enter_character_row(crtc, 0);
+    begin_frame(crtc);
   } else if (row_is_on_its_last_scanline(crtc)) {
     crtc->c9 = 0;
     enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
@@ -282,28 +285,43 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
   }
   /* R5 counts on the characters C0 names 0, 1 and 2, and a write lands in
      the microsecond after the tick that named it, so the last tick that
-     sees one in time is the one naming 3 (ch. 11.2.2, 12.2, 13.2.1). The
-     line interlace adds is additional-line handling too, and asks for no R5
-     at all (ch. 19.6.1). Ch. 11.9 gives R8 a later deadline than R5 — the
-     condition "is evaluated on the last line of a frame, when C0=R0" — and
-     the group Shaker points at it, C (P), states its verdict in a picture,
-     so nothing we can run tells the two apart and R5's schedule carries
-     both. */
-  if (crtc->c0 < 4 && (r[5] != 0 || interlace_line_due(crtc)) && crtc->c4 >= r[4] &&
-      row_is_on_its_last_scanline(crtc)) {
+     sees one in time is the one naming 3 (ch. 11.2.2, 12.2, 13.2.1). */
+  if (crtc->c0 < 4 && r[5] != 0 && crtc->c4 >= r[4] && row_is_on_its_last_scanline(crtc)) {
     crtc->in_vertical_adjustment = true;
   }
   /* And the same deadline read the other way: a line armed on an R5 that
      the same line goes on to cancel is disarmed, and the last line it stood
-     in front of is simply left standing (ch. 13.2.1, 13.2.5). It reaches
-     only a line whose counters still stand on their limits, which is the
-     line the frame could end on and also the first line of an adjustment
-     begun by the clause above — the document gives no warrant for taking
-     that one back, and nothing in Shaker asks. A line the R5 arm admitted
-     with C4 already past R4 it cannot reach at all. */
-  if (crtc->c0 == 3 && r[5] == 0 && !interlace_line_due(crtc) && crtc->c4 == r[4] &&
+     in front of is simply left standing. What is tested there is both of
+     the things that ask for an additional line — "the additional management
+     state is deactivated if there was no line programmed (R5=0 or no
+     'Interlace Line'" — so a frame the interlace still asks a line of keeps
+     its state whatever R5 has become (ch. 13.2.1, 13.2.5). It reaches only
+     a line whose counters still stand on their limits, which is the line
+     the frame could end on and also the first line of an adjustment begun
+     by the clause above — the document gives no warrant for taking that one
+     back, and nothing in Shaker asks. A line the R5 arm admitted with C4
+     already past R4 it cannot reach at all. */
+  if (crtc->c0 == 3 && r[5] == 0 && !interlace_line_asked_for(crtc) && crtc->c4 == r[4] &&
       row_is_on_its_last_scanline(crtc)) {
-    leave_vertical_adjustment(crtc);
+    crtc->in_vertical_adjustment = false;
+  }
+  /* The line interlace adds is additional-line handling too, and asks for
+     no R5 at all (ch. 19.6.1). Ch. 11.9 gives it a deadline of its own,
+     later than R5's: the condition "is evaluated on the last line of a
+     frame, when C0=R0", and "this latest line can be one of the adjustment
+     lines displayed via R5" — so a program may turn the line on or off from
+     inside an adjustment, long after R5's own window has shut. The answer
+     is kept because the line it decides cannot begin until the next
+     character. A frame that would have ended here is held open for it, and
+     one already held open by R5 needs no holding. Shaker points its C (P)
+     group at this and states its verdict in a picture, so nothing we can
+     run grades the deadline: it stands on the chapter's own sentence and
+     on our tests. */
+  if (crtc->c0 == r[0]) {
+    crtc->interlace_line_owed = interlace_line_asked_for(crtc);
+    if (crtc->interlace_line_owed && crtc->last_line) {
+      crtc->in_vertical_adjustment = true;
+    }
   }
 }
 

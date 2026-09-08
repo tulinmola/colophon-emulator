@@ -612,31 +612,195 @@ static void an_r6_of_zero_keeps_the_line_on_the_even_frame(void) {
   TEST_EQUAL(frame_scanlines(), 5);
 }
 
-/* The adjustment is one state held in two flags, and a line taken back
-   drops both: a chip left thinking it had already spent its interlace line
-   would withhold a later frame's without a word (ch. 13.2.1, 19.6.1). */
-static void a_disarmed_adjustment_forgets_the_interlace_line(void) {
+/* The interlace line is not the adjustment's to give back. A frame that has
+   had its line has had it, however the adjustment carrying it ends, and a
+   frame that has not must still get one — so what spends the line is
+   renewed at a frame's first character and nowhere else. A chip that
+   renewed it on the disarm would let one frame take two lines; one that
+   never renewed it would withhold a later frame's without a word (ch. 11.9,
+   13.2.1, 19.6.1). */
+static void a_disarmed_adjustment_cannot_take_a_second_interlace_line(void) {
   program_standard();
   write_register(4, 0);
   write_register(5, 0);
   write_register(6, 0);
   write_register(9, 3);
   write_register(8, 1);
-  crtc_tick(&crtc);
+  crtc_tick(&crtc); /* the priming tick, which draws no character */
+  int characters = 0;
 
   run_scanlines(4);
+  characters += 4 * SCANLINE;
   TEST_CHECK(crtc.in_vertical_adjustment);
   TEST_CHECK(crtc.interlace_line_given);
   TEST_EQUAL(crtc.c4, 1); /* R4+1, incremented once for the whole of it */
 
-  /* R4 and R9 moved onto the counters, and the interlace asked for taken
-     back, all in time for the character C0 names 3. */
+  /* R4 and R9 moved onto the counters in time for the character C0 names 3,
+     which takes the adjustment back under a line already given. R8 is taken
+     back with them, because the disarm tests it too (ch. 13.2.1). */
   write_register(4, 1);
   write_register(9, 0);
   write_register(8, 0);
   run_characters(4);
+  characters += 4;
   TEST_CHECK(!crtc.in_vertical_adjustment);
+  TEST_CHECK(crtc.interlace_line_given);
+
+  /* So the frame ends with the one line it was owed — its own four and the
+     interlace line — where a chip that renewed the flag on the disarm would
+     ask again and go round for another. */
+  for (int character = 0; character < 4 * SCANLINE; character++) {
+    if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+      break;
+    }
+    crtc_tick(&crtc);
+    characters++;
+  }
+  TEST_EQUAL(characters, 5 * SCANLINE);
   TEST_CHECK(!crtc.interlace_line_given);
+}
+
+/* Stops on the last line a frame has, with R5's own adjustment lines
+   already behind it and the frame's parity even, which is where ch. 11.9
+   puts its question. The two frames run first settle the parity, which
+   alternates whether or not interlace is asked for. */
+static void stand_on_the_last_line_of_an_even_frame(uint8_t r5) {
+  program_standard();
+  write_register(5, r5);
+  TEST_EQUAL(frame_scanlines(), 312 + r5);
+  TEST_EQUAL(frame_scanlines(), 312 + r5);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7 + r5);
+}
+
+/* Ch. 11.9 gives the interlace line a deadline of its own, and a later one
+   than the three microseconds R5 is read in: "The adjustment condition
+   (interlace mode (IVM/non-IVM) activated and even frame) is evaluated on
+   the last line of a frame, when C0=R0, and only if R8 contains the right
+   value on the last line." So a write in force during that character
+   decides the frame, and one made during it arrives a microsecond late. */
+static void the_interlace_line_is_asked_for_at_c0_r0(void) {
+  stand_on_the_last_line_of_an_even_frame(0);
+  run_characters(62);
+  TEST_EQUAL(crtc.c0, 62);
+  write_register(8, 1); /* in force from C0=63, which is R0 */
+  run_characters(2);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 39); /* the interlace line, C4 incremented once */
+
+  stand_on_the_last_line_of_an_even_frame(0);
+  run_characters(63);
+  TEST_EQUAL(crtc.c0, 63);
+  write_register(8, 1); /* in force from C0=0, a microsecond too late */
+  run_characters(1);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 0); /* and the frame ended where it stood */
+}
+
+/* "This latest line can be one of the adjustment lines displayed via R5. It
+   is therefore possible to update R8 on one of the lines displayed via R5
+   to activate or deactivate the treatment of the interlace line" (ch.
+   11.9). The question is put afresh on every line, so what answers it is
+   the last line before the one it would add — a line R5's own window shut
+   several lines before. */
+static void an_adjustment_line_still_decides_the_interlace_line(void) {
+  /* Asked for on the last of R5's lines, and given. */
+  stand_on_the_last_line_of_an_even_frame(2);
+  TEST_EQUAL(crtc.c4, 39);
+  TEST_EQUAL(crtc.c9, 1);
+  run_characters(62);
+  write_register(8, 1);
+  run_characters(2);
+  TEST_EQUAL(crtc.c9, 2); /* the interlace line, after R5's */
+
+  /* And taken back there, though it stood through every line before. R8 is
+     set before the frames are counted, so the even one runs its 312 lines,
+     R5's two and the interlace line, and the odd one goes without. */
+  program_standard();
+  write_register(5, 2);
+  write_register(8, 1);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 315);
+  TEST_EQUAL(frame_scanlines(), 314);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(9);
+  run_characters(62);
+  write_register(8, 0);
+  run_characters(2);
+  TEST_EQUAL(crtc.c4, 0); /* the frame ended with R5's lines and no more */
+
+  /* And the deadline is the same one here as on a line of R5's own: asked
+     for during the last adjustment line's own C0=R0, it is asked too late,
+     though the line it would add begins on the very next character. */
+  stand_on_the_last_line_of_an_even_frame(2);
+  run_characters(63);
+  TEST_EQUAL(crtc.c0, 63);
+  write_register(8, 1);
+  run_characters(1);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
+/* The disarm at C0=2 tests both of the things that can ask for an
+   additional line: "the additional management state is deactivated if there
+   was no line programmed (R5=0 or no 'Interlace Line'" (ch. 13.2.1, and
+   again in 13.2.5 as "test of R5 and/or 'Interlace on even frame
+   programmed'"). So a frame the interlace still asks a line of keeps its
+   state whatever R5 has become. It must, too: the arm this would drop is
+   not the one C0=R0 can put back, because that one reads the last line as
+   it was settled while C0 was 0 and 1, and an R9 moved in between leaves
+   the two disagreeing. A chip that dropped it would lose the adjustment
+   with nothing to restore it and run C4 on past R4 for hundreds of lines. */
+static void the_disarm_tests_the_interlace_line_as_well_as_r5(void) {
+  program_standard();
+  write_register(8, 1);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7); /* the frame's last row line */
+  TEST_CHECK(crtc.parity_r6);
+  write_register(9, 8); /* in force from C0=1, where no last line is seen */
+  crtc_tick(&crtc);
+  write_register(9, 7);
+  write_register(5, 2); /* in force from C0=2 */
+  crtc_tick(&crtc);
+  write_register(5, 0); /* in force from C0=3, where the disarm looks */
+
+  int characters = 0;
+  for (int character = 0; character < 8 * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    characters++;
+    if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+      break;
+    }
+  }
+  TEST_EQUAL(characters, 126);
+}
+
+/* C4 is seven bits wide, so an R4 of 127 puts the interlace line's own
+   C4=R4+1 back at 0 — and with C9 zeroed for that line and C0 at its head,
+   the line reads exactly like a frame's first character. A chip that took
+   its frame's head from the counters rather than from the state machine
+   would renew the line under the line it had just given, and never end a
+   frame again (ch. 10.3.1.1, 12.1). */
+static void an_r4_of_127_does_not_trap_the_frame(void) {
+  program_standard();
+  write_register(4, 127);
+  write_register(9, 1);
+  write_register(8, 1);
+  int in_the_adjustment = 0;
+  bool entered = false;
+  for (long character = 0; character < 600L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.in_vertical_adjustment) {
+      entered = true;
+      in_the_adjustment++;
+    } else if (entered) {
+      break;
+    }
+  }
+  /* The whole interlace line and the C0=R0 that held the frame open for
+     it, which stands a character before the line begins. */
+  TEST_EQUAL(in_the_adjustment, SCANLINE + 1);
 }
 
 /* ParityFrame is settled before the VSYNC is looked at, which only shows
@@ -1469,7 +1633,11 @@ int main(void) {
   TEST_RUN(an_interlace_mode_adds_a_line_to_the_even_frames);
   TEST_RUN(an_interlace_mode_holds_the_even_frames_vsync_back);
   TEST_RUN(an_r6_of_zero_keeps_the_line_on_the_even_frame);
-  TEST_RUN(a_disarmed_adjustment_forgets_the_interlace_line);
+  TEST_RUN(a_disarmed_adjustment_cannot_take_a_second_interlace_line);
+  TEST_RUN(the_interlace_line_is_asked_for_at_c0_r0);
+  TEST_RUN(an_adjustment_line_still_decides_the_interlace_line);
+  TEST_RUN(the_disarm_tests_the_interlace_line_as_well_as_r5);
+  TEST_RUN(an_r4_of_127_does_not_trap_the_frame);
   TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
   TEST_RUN(the_video_mode_doubles_the_raster_address);
   TEST_RUN(a_video_mode_entered_late_overflows_c9);
