@@ -25,6 +25,13 @@ static void pulse_hsyncs(int count) {
   }
 }
 
+/* A character whose two bytes carry the same display enable, which is what
+   the chip reports unless one of the rules that part them is in play. */
+static void draw_character(bool display, uint8_t byte0, uint8_t byte1,
+                           uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
+  gate_array_video(&gate_array, display, display, byte0, byte1, samples);
+}
+
 static void reset_state(void) {
   gate_array_init(&gate_array);
   TEST_CHECK(gate_array.lower_rom_enabled);
@@ -188,8 +195,8 @@ static void inks_name_their_pens(void) {
 
 /* Serialise one character, discarding the pipeline's first output. */
 static void serialise(uint8_t byte0, uint8_t byte1, uint8_t samples[16]) {
-  gate_array_video(&gate_array, true, byte0, byte1, samples);
-  gate_array_video(&gate_array, true, 0, 0, samples);
+  draw_character(true, byte0, byte1, samples);
+  draw_character(true, 0, 0, samples);
 }
 
 static void mode_0_paints_two_fat_pixels_a_byte(void) {
@@ -263,10 +270,44 @@ static void the_border_fills_a_character_that_is_not_displayed(void) {
   gate_array_write(&gate_array, 0x10); /* PENR: the border */
   gate_array_write(&gate_array, 0x49); /* INKR: colour 9 */
   uint8_t samples[16];
-  gate_array_video(&gate_array, false, 0xFF, 0xFF, samples);
-  gate_array_video(&gate_array, false, 0xFF, 0xFF, samples);
+  draw_character(false, 0xFF, 0xFF, samples);
+  draw_character(false, 0xFF, 0xFF, samples);
   for (int sample = 0; sample < 16; sample++) {
     TEST_EQUAL(samples[sample], 9);
+  }
+}
+
+/* The display enable is read once for each of a character's two bytes, so
+   the border can take one and not the other — which is what two of the
+   CRTC's own rules do with it (ch. 17.6.2, 18.3.2). */
+static void the_border_can_take_one_byte_of_a_character(void) {
+  gate_array_init(&gate_array);
+  inks_name_their_pens();
+  gate_array_write(&gate_array, 0x8E); /* RMR: mode 2, a pixel a bit */
+  pulse_hsync();                       /* which a mode change waits for */
+  gate_array_write(&gate_array, 0x10); /* PENR: the border */
+  gate_array_write(&gate_array, 0x49); /* INKR: colour 9 */
+  uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+
+  /* Displayed first, border second: the bytes are all ones, so a displayed
+     byte reads as pen 1 and a bordered one as the border's own colour. */
+  gate_array_video(&gate_array, true, false, 0xFF, 0xFF, samples);
+  gate_array_video(&gate_array, true, false, 0xFF, 0xFF, samples);
+  for (int sample = 0; sample < 8; sample++) {
+    TEST_EQUAL(samples[sample], 1);
+  }
+  for (int sample = 8; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+    TEST_EQUAL(samples[sample], 9);
+  }
+
+  /* And the other way about. */
+  gate_array_video(&gate_array, false, true, 0xFF, 0xFF, samples);
+  gate_array_video(&gate_array, false, true, 0xFF, 0xFF, samples);
+  for (int sample = 0; sample < 8; sample++) {
+    TEST_EQUAL(samples[sample], 9);
+  }
+  for (int sample = 8; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+    TEST_EQUAL(samples[sample], 1);
   }
 }
 
@@ -276,13 +317,13 @@ static void the_beam_is_blanked_through_the_syncs(void) {
   gate_array_write(&gate_array, 0x49); /* a border that is not black */
   uint8_t samples[16];
   gate_array_tick(&gate_array, true, false); /* the CRTC's HSYNC begins */
-  gate_array_video(&gate_array, false, 0, 0, samples);
-  gate_array_video(&gate_array, false, 0, 0, samples);
+  draw_character(false, 0, 0, samples);
+  draw_character(false, 0, 0, samples);
   for (int sample = 0; sample < 16; sample++) {
     TEST_EQUAL(samples[sample], GATE_ARRAY_BLACK);
   }
   gate_array_tick(&gate_array, false, false); /* and ends */
-  gate_array_video(&gate_array, false, 0, 0, samples);
+  draw_character(false, 0, 0, samples);
   TEST_EQUAL(samples[0], 9);
 }
 
@@ -292,11 +333,11 @@ static void a_character_reaches_the_screen_a_microsecond_late(void) {
   gate_array_write(&gate_array, 0x8E); /* mode 2 */
   pulse_hsync();
   uint8_t samples[16];
-  gate_array_video(&gate_array, true, 0xFF, 0xFF, samples);
+  draw_character(true, 0xFF, 0xFF, samples);
   TEST_EQUAL(samples[0], 0); /* what was in the pipeline before */
-  gate_array_video(&gate_array, true, 0x00, 0x00, samples);
+  draw_character(true, 0x00, 0x00, samples);
   TEST_EQUAL(samples[0], 1); /* the &FF handed over last time */
-  gate_array_video(&gate_array, true, 0x00, 0x00, samples);
+  draw_character(true, 0x00, 0x00, samples);
   TEST_EQUAL(samples[0], 0);
 }
 
@@ -426,6 +467,7 @@ int main(void) {
   TEST_RUN(mode_2_paints_a_pixel_a_bit);
   TEST_RUN(mode_3_ignores_four_bits_a_byte);
   TEST_RUN(the_border_fills_a_character_that_is_not_displayed);
+  TEST_RUN(the_border_can_take_one_byte_of_a_character);
   TEST_RUN(the_beam_is_blanked_through_the_syncs);
   TEST_RUN(a_character_reaches_the_screen_a_microsecond_late);
   TEST_RUN(csync_follows_the_hsync_two_characters_behind);

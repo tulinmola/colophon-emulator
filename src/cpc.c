@@ -222,7 +222,8 @@ uint64_t cpc_tick(cpc_t *cpc) {
        banked RAM, whatever the CPU is looking at ("The Gate Array", MMR). */
     uint16_t address = cpc_video_address(cpc);
     uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
-    gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0, cpc->ram[address],
+    gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0,
+                     (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cpc->ram[address],
                      cpc->ram[address | 1], samples);
     monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
                     gate_array_csync(&cpc->gate_array));

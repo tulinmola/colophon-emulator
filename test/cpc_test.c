@@ -496,6 +496,39 @@ static void the_display_lands_where_the_syncs_put_it(void) {
   TEST_EQUAL(top, 70);
 }
 
+/* The border byte ch. 17.6.2 puts at the end of a line R1 never reached has
+   to reach the screen, not merely the pins: the Gate Array draws the two
+   bytes of a character as the display enable found each of them. R1 one
+   above R0 is the chapter's own case, and mode 2 with the screen full of
+   ones paints a displayed byte in pen 1 and a bordered one in the border's
+   own ink. */
+static void the_border_byte_reaches_the_screen(void) {
+  power_on(sizeof ram);
+  memset(framebuffer, 0xEE, sizeof framebuffer);
+  memset(ram + 0xC000, 0xFF, 0x4000);
+  cpc_connect_monitor(&cpc, framebuffer);
+  uint8_t body[200];
+  size_t length = append_standard_screen(body, 0);
+  length = append_crtc_write(body, length, 1, 64); /* R1 one above R0 */
+  length = append_gate_array_write(body, length, 0x01);
+  length = append_gate_array_write(body, length, 0x40 | 11); /* pen 1 white */
+  length = append_gate_array_write(body, length, 0x10);
+  length = append_gate_array_write(body, length, 0x40 | 4); /* border blue */
+  length = append_gate_array_write(body, length, 0x8A);     /* RMR: mode 2 */
+  body[length++] = 0x18;
+  body[length++] = 0xFE;
+  rom_program(body, length);
+  run_ticks(3 * CPC_TICKS_PER_STANDARD_FRAME);
+
+  /* A line well inside the frame. The display runs 64 characters where it
+     ran 40, so the last of them ends 384 samples further right; its second
+     byte is the eight samples before that. */
+  const int row = 150 * CPC_FRAMEBUFFER_WIDTH;
+  TEST_EQUAL(framebuffer[row + 912 + 384 - 9], 11); /* the first byte, shown */
+  TEST_EQUAL(framebuffer[row + 912 + 384 - 1], 4);  /* the second, border */
+  TEST_EQUAL(framebuffer[row + 912 + 384 - 8], 4);
+}
+
 static void the_border_surrounds_the_display(void) {
   draw_a_full_screen();
   TEST_EQUAL(framebuffer[70 * CPC_FRAMEBUFFER_WIDTH + 271], 4);  /* left of it */
@@ -756,6 +789,7 @@ int main(void) {
   TEST_RUN(the_interrupt_falls_a_character_after_the_hsync);
   TEST_RUN(an_unheard_interrupt_is_held);
   TEST_RUN(the_display_lands_where_the_syncs_put_it);
+  TEST_RUN(the_border_byte_reaches_the_screen);
   TEST_RUN(the_border_surrounds_the_display);
   TEST_RUN(the_beam_sweeps_every_line_below_the_flyback);
   TEST_RUN(the_screen_is_read_from_the_base_ram_alone);

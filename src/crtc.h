@@ -35,11 +35,11 @@
  * microseconds — the counter updates those characters schedule for a later
  * one — and the VSYNC arming
  * of ch. 13.2.2. Every other comparison is made where it stands. Two of the
- * border's rules need a finer pin than this one: the byte of border at
- * C0=R0 when R1 exceeds it (ch. 17.6.2) and the byte-by-byte alternation an
- * R6 of 0 makes on a frame's first line (ch. 18.3.2) both toggle DISPLAY
- * ENABLE inside a character, where crtc_tick reports it once per
- * character.
+ * border's rules move DISPLAY ENABLE inside a character — the byte of
+ * border at C0=R0 on a line where R1 was never reached (ch. 17.6.2) and the
+ * byte-by-byte alternation an R6 of 0 makes on a frame's first line (ch.
+ * 18.3.2) — and both are here, which is why a tick reports that pin for
+ * each of the two bytes a character is drawn from rather than once.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -64,8 +64,17 @@
  * bits 0..13  MA0..MA13 (memory address, a character/word address)
  * bits 16..23 D0..D7    (data bus, the same lanes z80.h uses)
  * bits 24..28 RA0..RA4  (raster address)
- * bits 29..   control pins, names as the datasheets print them */
-#define CRTC_DISPTMG (1ULL << 29) /* display enable */
+ * bits 29..   control pins, names as the datasheets print them, and one
+ *             this chip has no pin for (see DISPLAY ENABLE below) */
+/* DISPLAY ENABLE. The chip has one such pin, and this reports it twice: two
+ * of type 0's rules move it half a character, and the machine fetches two
+ * bytes for every character the chip names, so what a tick owes the machine
+ * is the pin as each byte finds it (ch. 17.6.2, 18.3.2). The datasheet's
+ * name is kept for the first, which is where the pin stands when the
+ * character begins; the second wears a name of its own because the
+ * datasheet has none for it. */
+#define CRTC_DISPTMG (1ULL << 29)
+#define CRTC_DISPTMG_SECOND_BYTE (1ULL << 35)
 #define CRTC_HSYNC (1ULL << 30)
 #define CRTC_VSYNC (1ULL << 31)
 #define CRTC_CS (1ULL << 32) /* input: chip select */

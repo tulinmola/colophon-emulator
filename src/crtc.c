@@ -363,11 +363,33 @@ static void throw_display_latches(crtc_t *crtc) {
   }
 }
 
+/* Two rules move DISPLAY ENABLE half a character, and both move it the same
+   way: the byte a character begins with is displayed and the byte it ends
+   with is border.
+
+   The first is the line's last character where R1 was never reached. This
+   chip runs ahead of the characters the Gate Array is drawing and sends its
+   BORDER ON "0.5 µsec too early", so one byte of border stands before C0
+   goes to 0 and the BORDER OFF follows on the next character. Where R1 was
+   reached the display is off already and there is nothing to move (ch.
+   17.6.2). Never reached is wider than R1 standing above R0: an R1 of 0
+   loses its own character to the opening (ch. 18.3.1) and so never shuts
+   the display at all, and an R1 moved out of C0's way mid-line has not shut
+   it either. The Compendium settles neither case outright, and nothing we
+   can run grades them.
+
+   The second is a frame's first line where R6 is 0. C4 reaching R6 asks for
+   the border and the new frame takes it away again; the two land a byte
+   apart, so the line comes out an alternation of displayed and bordered
+   bytes with the video pointer counting through both (ch. 18.3.2). */
 static uint64_t pins_of(const crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
   bool display = !crtc->display_r1 && !crtc->display_r6;
+  bool r6_conflict = crtc->c4 == 0 && crtc->c9 == 0 && r[6] == 0;
+  bool second_byte = display && crtc->c0 != r[0] && !r6_conflict;
   return (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)c9_vma(crtc) << 24) |
-         (display ? CRTC_DISPTMG : 0) | (crtc->hsync ? CRTC_HSYNC : 0) |
-         (crtc->vsync ? CRTC_VSYNC : 0);
+         (display ? CRTC_DISPTMG : 0) | (second_byte ? CRTC_DISPTMG_SECOND_BYTE : 0) |
+         (crtc->hsync ? CRTC_HSYNC : 0) | (crtc->vsync ? CRTC_VSYNC : 0);
 }
 
 /* ParityFrame takes what ParityR6 anticipated, at the frame's first

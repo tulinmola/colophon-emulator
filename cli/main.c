@@ -403,23 +403,29 @@ static void record_displayed(const cpc_t *cpc) {
      over its address, so the samples just painted came from the address
      fetched last time — and blanking is judged now, as the chip judges it. */
   static uint16_t pending_address;
-  static bool pending_display;
+  static bool pending_display[2];
 
   uint16_t beam_x = cpc->monitor.beam_x;
   uint16_t beam_y = cpc->monitor.beam_y;
   bool blanked = cpc->gate_array.black_hsync || cpc->gate_array.black_vsync;
-  if (pending_display && !blanked && beam_y < CPC_FRAMEBUFFER_HEIGHT &&
+  if ((pending_display[0] || pending_display[1]) && !blanked && beam_y < CPC_FRAMEBUFFER_HEIGHT &&
       beam_x >= GATE_ARRAY_SAMPLES_PER_CHARACTER) {
     uint32_t start =
         (uint32_t)beam_y * CPC_FRAMEBUFFER_WIDTH + beam_x - GATE_ARRAY_SAMPLES_PER_CHARACTER;
     for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
-      /* Two bytes make sixteen samples, eight each, whatever the mode. */
-      uint16_t address = pending_address | (sample < 8 ? 0 : 1);
-      displayed[start + sample] = (uint32_t)address + 1;
+      /* Two bytes make sixteen samples, eight each, whatever the mode — and
+         the border can have one of them without the other, which is a half
+         a byte never painted and must not be claimed for one. */
+      uint8_t half = sample < 8 ? 0 : 1;
+      if (!pending_display[half]) {
+        continue;
+      }
+      displayed[start + sample] = (uint32_t)(pending_address | half) + 1;
     }
   }
   pending_address = cpc_video_address(cpc);
-  pending_display = (cpc->crtc_pins & CRTC_DISPTMG) != 0;
+  pending_display[0] = (cpc->crtc_pins & CRTC_DISPTMG) != 0;
+  pending_display[1] = (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0;
 }
 
 static void run_frames(cpc_t *cpc, long frames) {

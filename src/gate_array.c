@@ -180,30 +180,35 @@ static uint8_t decode_pens(uint8_t mode, uint8_t byte, uint8_t pens[8]) {
   }
 }
 
-void gate_array_video(gate_array_t *gate_array, bool display, uint8_t byte0, uint8_t byte1,
+/* Each of the character's two bytes is drawn as the display enable found
+   it: the chip can put the border on one and not the other (ch. 17.6.2,
+   18.3.2). A blanked beam takes both. */
+void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool display_second_byte,
+                      uint8_t byte0, uint8_t byte1,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
   bool blanked = gate_array->black_hsync || gate_array->black_vsync;
-  if (blanked || !gate_array->latched_display) {
-    uint8_t colour = blanked ? GATE_ARRAY_BLACK : gate_array->inks[16];
-    for (uint8_t index = 0; index < GATE_ARRAY_SAMPLES_PER_CHARACTER; index++) {
-      samples[index] = colour;
+  uint8_t written = 0;
+  for (uint8_t half = 0; half < 2; half++) {
+    if (blanked || !gate_array->latched_display[half]) {
+      uint8_t colour = blanked ? GATE_ARRAY_BLACK : gate_array->inks[16];
+      for (uint8_t index = 0; index < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; index++) {
+        samples[written++] = colour;
+      }
+      continue;
     }
-  } else {
-    uint8_t written = 0;
-    for (uint8_t half = 0; half < 2; half++) {
-      uint8_t pens[8];
-      uint8_t count = decode_pens(gate_array->mode, gate_array->latched_bytes[half], pens);
-      uint8_t pixel_width = (uint8_t)(8 / count);
-      for (uint8_t pixel = 0; pixel < count; pixel++) {
-        for (uint8_t repeat = 0; repeat < pixel_width; repeat++) {
-          samples[written++] = gate_array->inks[pens[pixel]];
-        }
+    uint8_t pens[8];
+    uint8_t count = decode_pens(gate_array->mode, gate_array->latched_bytes[half], pens);
+    uint8_t pixel_width = (uint8_t)(8 / count);
+    for (uint8_t pixel = 0; pixel < count; pixel++) {
+      for (uint8_t repeat = 0; repeat < pixel_width; repeat++) {
+        samples[written++] = gate_array->inks[pens[pixel]];
       }
     }
   }
   gate_array->latched_bytes[0] = byte0;
   gate_array->latched_bytes[1] = byte1;
-  gate_array->latched_display = display;
+  gate_array->latched_display[0] = display_first_byte;
+  gate_array->latched_display[1] = display_second_byte;
 }
 
 uint32_t gate_array_rgb(uint8_t colour_code) {

@@ -106,7 +106,7 @@ typedef struct {
      hands over its address (ch. 7.1), so what it draws now is what was
      fetched last time. */
   uint8_t latched_bytes[2];
-  bool latched_display;
+  bool latched_display[2];
 
   /* Where the machine stands in the four CPU cycles that make a character.
      The real chip runs a sequencer over sixteen 16MHz ticks; counting the
@@ -172,10 +172,12 @@ static inline bool gate_array_ready(const gate_array_t *gate_array) {
 }
 
 /* Serialise one character. The two bytes are those the machine has just
- * fetched at the CRTC's address, and `display` the CRTC's display enable;
- * both are held a microsecond before they reach the screen, so this writes
- * out the pair handed over last time. */
-void gate_array_video(gate_array_t *gate_array, bool display, uint8_t byte0, uint8_t byte1,
+ * fetched at the CRTC's address, and the two flags the CRTC's display
+ * enable as each of them finds it; all four are held a microsecond before
+ * they reach the screen, so this writes out the set handed over last
+ * time. */
+void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool display_second_byte,
+                      uint8_t byte0, uint8_t byte1,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]);
 
 /* What the Gate Array's three-state RGB logic puts on the cable for a

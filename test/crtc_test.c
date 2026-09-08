@@ -899,6 +899,76 @@ static void the_video_mode_still_takes_the_adjustment_lines(void) {
   TEST_EQUAL(frame_scanlines(), 29);
 }
 
+/* Ch. 17.6.2's own example: R0 of 3 and R1 of 4, so C0 never reaches R1 and
+   the line displays throughout — except that the chip runs ahead of the
+   characters the Gate Array draws and sends its border on half a character
+   early, putting one byte of it before C0 goes to 0. */
+static void a_line_r1_never_ends_borders_its_last_byte(void) {
+  program_standard();
+  write_register(0, 3);
+  write_register(1, 4);
+  TEST_CHECK(run_to_row(1));
+  /* Two whole lines of it: every character displays, and the one C0 names 3
+     gives its second byte to the border. */
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, crtc.c0 != 3);
+  }
+
+  /* "This behaviour remains true whatever the value of R0. If R0=0, then
+     the display alternates between 1 DISP ON byte, and 1 DISP OFF byte." */
+  write_register(0, 0);
+  for (int character = 0; character < 4; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_CHECK(!(pins & CRTC_DISPTMG_SECOND_BYTE));
+  }
+}
+
+/* Ch. 18.3.2: an R6 of 0 on a frame's first line is a conflict — C4 reaching
+   R6 asks for the border and the new frame takes it away — and the two land
+   a byte apart, so that line alternates displayed and bordered bytes where
+   every other line of such a frame is border throughout. */
+static void an_r6_of_zero_alternates_the_first_lines_bytes(void) {
+  program_standard();
+  write_register(6, 0);
+  TEST_CHECK(run_to_row(0));
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_CHECK(!(pins & CRTC_DISPTMG_SECOND_BYTE));
+  }
+  /* The second line of the frame is not the first, so R6 shuts it whole. */
+  run_scanlines(1);
+  uint64_t after = crtc_tick(&crtc);
+  TEST_CHECK(!(after & CRTC_DISPTMG));
+  TEST_CHECK(!(after & CRTC_DISPTMG_SECOND_BYTE));
+
+  /* And it is the conflict that parts the bytes, not the line: an R6 above
+     0 leaves a frame's first line whole. */
+  program_standard();
+  TEST_CHECK(run_to_row(0));
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_CHECK(pins & CRTC_DISPTMG_SECOND_BYTE);
+  }
+
+  /* Nor is it any row's first line: with R9 of 0 every row is one line long,
+     and C4 leaves R6 behind after the first of them, so the conflict is the
+     frame's own and the rows after it are whole. */
+  program_standard();
+  write_register(6, 0);
+  write_register(9, 0);
+  TEST_CHECK(run_to_row(1));
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, crtc.c0 != 63);
+  }
+}
+
 static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
   /* The firmware's other table, at &5D5 of the 6128 OS ROM: 32 rows of 8
      scanlines and six adjustment lines (ch. 11.2.2). */
@@ -1070,6 +1140,8 @@ int main(void) {
   TEST_RUN(an_odd_row_of_an_odd_frame_takes_its_vsync_late);
   TEST_RUN(the_video_pointer_still_steps_a_row_at_a_time);
   TEST_RUN(the_video_mode_still_takes_the_adjustment_lines);
+  TEST_RUN(a_line_r1_never_ends_borders_its_last_byte);
+  TEST_RUN(an_r6_of_zero_alternates_the_first_lines_bytes);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);
