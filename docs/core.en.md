@@ -8,7 +8,7 @@ The core is a machine, not an application. It has no `main`, it never asks the o
 
 Two rules produce all of that, and they are worth stating before anything else.
 
-**The core allocates nothing.** Every buffer it uses is handed to it: the RAM, the ROM images, the framebuffer. It holds them by pointer and never copies them, so they must outlive the machine and must not move.
+**The core allocates nothing.** Every buffer it uses is handed to it: the RAM, the ROM images, the framebuffer, the disc images, the tape. It holds them by pointer and never copies them, so they must outlive the machine and must not move. The tape adds a function to that list — the deck asks the host for the next pulse rather than reading an image itself — and the reader behind it, and its bytes, are the host's to keep alive for as long as the machine runs.
 
 **The core does no I/O.** Nothing in `src/` opens a file or writes to a stream. That is what lets the same C run behind a command line and inside a browser without either host inheriting the other's assumptions.
 
@@ -48,6 +48,8 @@ The names are the datasheets'. A pin, a register or a counter that has a page in
 
 ## Building a machine
 
+Each machine is built by its own name, and what it asks for is what its board asked for. A CPC wants two ROM images and the links soldered on it:
+
 ```c
 cpc_t cpc;
 cpc_init(&cpc, ram, ram_size, lower_rom);
@@ -56,11 +58,21 @@ cpc_connect_monitor(&cpc, framebuffer);
 cpc_set_links(&cpc, true, CPC_MANUFACTURER_AMSTRAD);
 ```
 
-The RAM's size is the machine's identity as far as the board is concerned: 64K means no PAL is fitted and banking commands die on the empty socket, 128K makes it a 6128. An upper ROM socket left empty resolves to ROM 0 when something selects it, as it does on the hardware.
+A Spectrum wants one ROM and has no links at all:
 
-The framebuffer is `CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT` bytes of hardware colour codes — the whole raster, not the picture. Left unplugged, the machine runs on and draws into the void, as it would with the cable out.
+```c
+spectrum_t spectrum;
+spectrum_init(&spectrum, ram, ram_size, rom);
+spectrum_connect_monitor(&spectrum, framebuffer);
+```
 
-The links are the ones soldered on the board: the refresh rate, which decides which of two tables in the firmware the machine programs the 6845 from, and the manufacturer, which software reads and cannot change.
+On a CPC the RAM's size is the machine's identity as far as the board is concerned: 64K means no PAL is fitted and banking commands die on the empty socket, 128K makes it a 6128. An upper ROM socket left empty resolves to ROM 0 when something selects it, as it does on the hardware.
+
+A Spectrum's is read the same way: sixteen kilobytes makes a 16K and forty-eight a 48K, and the firmware works out which it has by writing to the top of the address space and reading back.
+
+The framebuffer is the machine's own raster in colour codes — the whole beam path, not the picture — and its size is the machine's to say. Left unplugged, either machine runs on and draws into the void, as it would with the cable out.
+
+A CPC's links are the ones soldered on its board: the refresh rate, which decides which of two tables in the firmware the machine programs the 6845 from, and the manufacturer, which software reads and cannot change. A Spectrum has none to read.
 
 ## Reading and writing a machine
 
@@ -76,11 +88,11 @@ A host that sets the registers behind the memory map from outside — restoring 
 
 ## What is a chip and what is a machine
 
-A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `crtc.c`, `ppi.c`, `psg.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word. A comment may name a machine to justify a decision, and two in `z80.c` do — why the processor implements the NMOS parity bug, and why it leaves the general case of interrupt mode 0 alone — but that is the comment explaining a choice, not the code making one.
+A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `crtc.c`, `ppi.c`, `psg.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word. Nor does a chip hold a machine's data. The key matrix is a grid of switches and nothing more — how many lines a machine wires to it, which key sits where, and what is printed on the keycap all live with the machine whose keyboard it is, and the chip declares only how much room to reserve for them. A comment may name a machine to justify a decision, and two in `z80.c` do — why the processor implements the NMOS parity bug, and why it leaves the general case of interrupt mode 0 alone — but that is the comment explaining a choice, not the code making one.
 
-The machine wiring gets its own file, and it is the only one that knows these chips are soldered into a CPC: the memory map, the I/O decode, the board's video address wiring, the motor line that runs from a port of its own to the drives, and the clock that divides between the chips. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it. Nor is the disc: the controller is the µPD765 the Spectrum +3 also used, the drive answers the Shugart lines any such controller reads, and the medium is the shape any of them finds, so all three would go into a second machine as they are.
+Each machine's wiring gets a file of its own, and that file is the only one that knows what its chips are soldered into: its memory map, its I/O decode, and whatever else its board did — a CPC's file also holds the video address wiring, the motor line running from a port of its own to the drives, and the clock that divides between the chips, none of which a Spectrum has. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it. Nor is the disc: the controller is the µPD765 the Spectrum +3 also used, the drive answers the Shugart lines any such controller reads, and the medium is the shape any of them finds, so all three would go into a second machine as they are.
 
-The practical result is that a second machine built around the same parts inherits them unchanged.
+That is no longer a claim. A ZX Spectrum was built beside the CPC out of the same processor, the same monitor and the same key matrix, none of which changed to accommodate it; what it needed of its own was one chip and one file of wiring. Whatever comes third should cost about the same.
 
 ## What this interface promises
 

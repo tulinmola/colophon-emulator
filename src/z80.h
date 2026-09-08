@@ -141,4 +141,21 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins);
  * modifies has run. */
 bool z80_instruction_complete(const z80_t *cpu);
 
+/* What the next tick puts on the bus, asked before the tick that does it. A
+ * machine that takes the bus from the processor by holding its clock has to
+ * decide beforehand, and the pins do not say in time: the first T-state of a
+ * read looks on them exactly like the last. */
+typedef enum {
+  Z80_CYCLE_NONE,      /* the tick carries on a machine cycle already begun */
+  Z80_CYCLE_MEMORY,    /* a fetch, a read or a write begins */
+  Z80_CYCLE_PORT,      /* an I/O access begins */
+  Z80_CYCLE_INTERNAL,  /* the processor works without the bus: no request is
+                          driven, and the last address stands on it */
+  Z80_CYCLE_INTERRUPT, /* the maskable interrupt is acknowledged: an M1 cycle
+                          answered on IORQ, with no memory request in it */
+} z80_cycle;
+
+/* Which of those the next tick begins. */
+z80_cycle z80_next_cycle(const z80_t *cpu);
+
 #endif

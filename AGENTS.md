@@ -1,6 +1,6 @@
 # Colophon — agent instructions
 
-Colophon is an Amstrad CPC emulator built for game archaeology: it instruments games from the inside and writes the note that was never written. Understanding, evidence, and a record that outlasts us — not "the best emulator in the world". Read `README.md` for the full prologue.
+Colophon emulates old machines for game archaeology: it instruments games from the inside and writes the note that was never written. An Amstrad CPC came first and is the fullest of them; a ZX Spectrum stands beside it; there will be more. None of them is the machine the project is about, and nothing in the code, the documentation or the command line may treat one as the ordinary case and the other as the exception. Understanding, evidence, and a record that outlasts us — not "the best emulator in the world". Read `README.md` for the full prologue.
 
 ## Documentation
 

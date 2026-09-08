@@ -11,6 +11,7 @@
 
 #include "cpc.h"
 #include "test.h"
+#include "tzx.h"
 
 static uint8_t ram[0x20000];
 static uint8_t lower_rom[0x4000];
@@ -102,10 +103,7 @@ static void reset_shows_both_roms_and_the_base_map(void) {
 
 static void programs_fetch_from_the_lower_rom(void) {
   power_on(sizeof ram);
-  const uint8_t program[] = {
-      0x3E, 0x42, /* LD A,&42 */
-      0x76,       /* HALT */
-  };
+  const uint8_t program[] = {0x3E, 0x42, 0x76}; /* LD A,&42 : HALT */
   rom_program(program, sizeof program);
   TEST_CHECK(run_to_halt());
   TEST_EQUAL(cpc.cpu.a, 0x42);
@@ -504,7 +502,7 @@ static size_t append_ppi_write(uint8_t *program, size_t length, uint8_t port, ui
    inactive, turn port A around, choose a line, read, turn back. */
 static void the_documented_scan_reads_a_line(void) {
   power_on(sizeof ram);
-  keyboard_press(&cpc.keyboard, KEYBOARD_KEY(6, 3)); /* T */
+  keyboard_press(&cpc.keyboard, CPC_KEY(6, 3)); /* T */
   uint8_t body[80];
   size_t length = 0;
   length = append_ppi_write(body, length, 0xF7, 0x82); /* port A output */
@@ -562,6 +560,7 @@ static void port_b_carries_the_links_and_the_vsync(void) {
   TEST_EQUAL(cpc.cpu.a & 0x10, 0x10);
   TEST_EQUAL((cpc.cpu.a >> 1) & 0x07, CPC_MANUFACTURER_AMSTRAD);
   TEST_EQUAL(cpc.cpu.a & 0x01, (cpc.crtc_pins & CRTC_VSYNC) ? 1 : 0);
+  TEST_EQUAL(cpc.cpu.a & 0x80, 0x80); /* nothing drives the cassette bit */
 
   power_on(sizeof ram);
   cpc_set_links(&cpc, false, 5); /* 60Hz, Schneider */
@@ -690,6 +689,203 @@ static void without_the_interface_the_ports_float(void) {
   TEST_EQUAL(cpc_peek(&cpc, 0x4000), 0xFF);
 }
 
+/* Spot checks against the matrix table, one per corner and a few in the
+   middle, so a transcription slip shows up here rather than as a wrong
+   letter three rungs later. */
+static void the_keycaps_are_where_the_matrix_table_says(void) {
+  bool shifted = false;
+  TEST_EQUAL(cpc_key_for_character('1', &shifted), CPC_KEY(8, 0));
+  TEST_CHECK(!shifted);
+  TEST_EQUAL(cpc_key_for_character('!', &shifted), CPC_KEY(8, 0));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('"', &shifted), CPC_KEY(8, 1));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('#', &shifted), CPC_KEY(7, 1));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('p', &shifted), CPC_KEY(3, 3));
+  TEST_EQUAL(cpc_key_for_character('P', &shifted), CPC_KEY(3, 3));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('z', &shifted), CPC_KEY(8, 7));
+  TEST_EQUAL(cpc_key_for_character(' ', &shifted), CPC_SPACE);
+  TEST_CHECK(!shifted);
+  TEST_EQUAL(cpc_key_for_character('+', &shifted), CPC_KEY(3, 4));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character('[', &shifted), CPC_KEY(2, 1));
+  TEST_EQUAL(cpc_key_for_character(']', &shifted), CPC_KEY(2, 3));
+  TEST_EQUAL(cpc_key_for_character('@', &shifted), CPC_KEY(3, 2));
+  TEST_CHECK(!shifted);
+  /* Each of these pairs sits on one keycap, and the source table has them
+     crossed; the firmware's own translation settles it. */
+  TEST_EQUAL(cpc_key_for_character('.', &shifted), CPC_KEY(3, 7));
+  TEST_EQUAL(cpc_key_for_character('>', &shifted), CPC_KEY(3, 7));
+  TEST_CHECK(shifted);
+  TEST_EQUAL(cpc_key_for_character(',', &shifted), CPC_KEY(4, 7));
+  TEST_EQUAL(cpc_key_for_character('<', &shifted), CPC_KEY(4, 7));
+  TEST_CHECK(shifted);
+}
+
+static void a_character_the_keyboard_lacks_is_refused(void) {
+  bool shifted = false;
+  TEST_EQUAL(cpc_key_for_character('~', &shifted), KEYBOARD_NO_KEY);
+  TEST_EQUAL(cpc_key_for_character('\n', &shifted), KEYBOARD_NO_KEY);
+  TEST_EQUAL(cpc_key_for_character('\0', &shifted), KEYBOARD_NO_KEY);
+}
+
+/* Every letter and digit must be reachable, and no two keys may claim the
+   same character — the sort of thing a hand-copied table gets wrong once. */
+static void the_layout_is_complete_and_unambiguous(void) {
+  static const char *reachable = "abcdefghijklmnopqrstuvwxyz0123456789 "
+                                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                 "!\"#$%&'()_-=[]{}@|;+:*/?,<.>^\\`";
+  for (const char *character = reachable; *character != '\0'; character++) {
+    bool shifted = false;
+    if (cpc_key_for_character(*character, &shifted) == KEYBOARD_NO_KEY) {
+      TEST_FAIL("'%c' is on no key", *character);
+    }
+  }
+  for (int first = 32; first < 127; first++) {
+    bool shifted = false;
+    keyboard_key key = cpc_key_for_character((char)first, &shifted);
+    if (key == KEYBOARD_NO_KEY) {
+      continue;
+    }
+    for (int second = first + 1; second < 127; second++) {
+      bool other_shifted = false;
+      keyboard_key other = cpc_key_for_character((char)second, &other_shifted);
+      if (key == other && shifted == other_shifted && first != ' ') {
+        TEST_FAIL("'%c' and '%c' claim the same key", first, second);
+      }
+    }
+  }
+}
+
+/* Set a fresh program going without powering the machine down, which would
+   take the tape out of the deck with it. */
+static void restart_the_processor(void) { z80_init(&cpc.cpu); }
+
+/* Driven at the 8255 rather than through a program: what is under test is
+   the line, not the decode. */
+static void set_motor(bool on) {
+  ppi_write(&cpc.ppi, PPI_CONTROL, 0x82); /* A output, B input, C output */
+  ppi_write(&cpc.ppi, PPI_PORT_C, on ? 0x10 : 0x00);
+}
+
+/* The whole of port B, read the way a program reads it. */
+static uint8_t port_b(void) {
+  static const uint8_t program[] = {
+      0x01, 0x00, 0xF5, /* LD BC,&F500 — port B */
+      0xED, 0x78,       /* IN A,(C) */
+      0x76,             /* HALT */
+  };
+  rom_program(program, sizeof program);
+  restart_the_processor();
+  TEST_CHECK(run_to_halt());
+  return cpc.cpu.a;
+}
+
+/* Bit 7 of port B, read the way a program reads it. */
+static bool port_b_bit_7(void) { return (port_b() & 0x80) != 0; }
+
+/* A CPC turns its own tape: bit 4 of port C is the motor, and bit 7 of port
+   B is what is at the play head. The pulses below are long enough that the
+   handful of T-states a read costs cannot fall across an edge. */
+static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
+  power_on(sizeof ram);
+  /* A .tzx of one tone: eight pulses of 50000 T-states. Those are a
+     Spectrum's, as every timing in the format is, so on a 4MHz board each
+     lasts 50000 * 4000 / 3500 of its own. */
+  static const uint8_t image[] = {'Z', 'X', 'T',  'a',  'p',  'e',  '!', 0x1A,
+                                  1,   20,  0x12, 0x50, 0xC3, 0x08, 0x00};
+  static const uint32_t pulse_ticks = 57142;
+  static tape_t tape;
+  static tzx_t reader;
+  const char *problem = NULL;
+  TEST_CHECK(
+      tzx_open(&reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem));
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
+  cpc_insert_tape(&cpc, &tape);
+
+  /* Nothing has written to port C yet, so its upper nibble is still an input
+     — and an input port reads &FF. The reel stands still all the same: PC4
+     drives the motor transistor's base and no pull-up drives PC4. */
+  for (uint32_t tick = 0; tick < 1000; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(!tape_playing(&tape));
+  TEST_EQUAL(tape.ticks_left, 0);
+
+  /* With the motor off the head does not move, and reads low. */
+  set_motor(false);
+  for (uint32_t tick = 0; tick < pulse_ticks; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(!tape_playing(&tape));
+  TEST_CHECK(!tape_level(&tape));
+  TEST_CHECK(!port_b_bit_7());
+
+  /* Turned on, the reel runs. The tape starts low, and the pulse lasts
+     exactly as long as the format's timing scaled to this board's clock. */
+  set_motor(true);
+  cpc_tick(&cpc); /* the board sees the line on its next tick, not the write */
+  TEST_CHECK(tape_playing(&tape));
+
+  uint32_t guard = 0;
+  while (!tape_level(&tape) && guard++ < 4 * pulse_ticks) {
+    cpc_tick(&cpc); /* the tape starts low; run on to the first edge */
+  }
+  TEST_CHECK(tape_level(&tape));
+
+  /* Edge to edge is the pulse itself, and it lasts the format's timing
+     scaled to this board's clock. Nothing may run a program in here: the
+     T-states one costs would be counted against the pulse. */
+  uint32_t ticks = 0;
+  while (tape_level(&tape) && ticks < 4 * pulse_ticks) {
+    cpc_tick(&cpc);
+    ticks++;
+  }
+  TEST_EQUAL(ticks, pulse_ticks);
+
+  /* At the head of a pulse a program's T-states cannot carry the read over
+     an edge, so port B can be set against the head twice. */
+  TEST_CHECK(!port_b_bit_7());
+  guard = 0;
+  while (!tape_level(&tape) && guard++ < 4 * pulse_ticks) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(port_b_bit_7());
+
+  /* And it takes bit 7 and nothing else: the links, the manufacturer and the
+     VSYNC read the same with the head high as with it low. */
+  const uint8_t high = port_b();
+  TEST_EQUAL(high & 0x80, 0x80);
+  guard = 0;
+  while (tape_level(&tape) && guard++ < 4 * pulse_ticks) {
+    cpc_tick(&cpc);
+  }
+  const uint8_t low = port_b();
+  TEST_EQUAL(low & 0x80, 0x00);
+  TEST_EQUAL(low & 0x7E, high & 0x7E); /* everything but bit 0, which is VSYNC */
+  TEST_EQUAL(high & 0x10, 0x10);       /* the 50Hz link is still there under it */
+  TEST_EQUAL((high >> 1) & 0x07, CPC_MANUFACTURER_AMSTRAD);
+
+  /* Stopped mid-pulse the head stands where it was, and the pin holds what
+     the head holds: a program that stops the motor on a high pulse goes on
+     reading it high. */
+  guard = 0;
+  while (!tape_level(&tape) && guard++ < 4 * pulse_ticks) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(tape_level(&tape));
+  set_motor(false);
+  for (uint32_t tick = 0; tick < 4 * pulse_ticks; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(!tape_playing(&tape));
+  TEST_CHECK(tape_level(&tape));
+  TEST_CHECK(port_b_bit_7());
+}
+
 int main(void) {
   TEST_RUN(reset_shows_both_roms_and_the_base_map);
   TEST_RUN(programs_fetch_from_the_lower_rom);
@@ -713,9 +909,13 @@ int main(void) {
   TEST_RUN(the_beam_sweeps_every_line_below_the_flyback);
   TEST_RUN(the_screen_is_read_from_the_base_ram_alone);
   TEST_RUN(the_documented_scan_reads_a_line);
+  TEST_RUN(the_keycaps_are_where_the_matrix_table_says);
+  TEST_RUN(a_character_the_keyboard_lacks_is_refused);
+  TEST_RUN(the_layout_is_complete_and_unambiguous);
   TEST_RUN(an_unpressed_keyboard_reads_high_through_the_chips);
   TEST_RUN(port_b_carries_the_links_and_the_vsync);
   TEST_RUN(port_b_follows_the_crtc_into_vsync);
+  TEST_RUN(the_cassette_motor_turns_the_tape_and_port_b_reads_it);
   TEST_RUN(poke_lands_beneath_the_rom);
   TEST_RUN(in_a_writes_the_crtc_register_the_accumulator_holds);
   TEST_RUN(the_disc_interface_decodes_its_two_ports);

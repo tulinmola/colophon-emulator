@@ -30,8 +30,13 @@
  *   character row across eight blocks two kilobytes apart.
  * - "8255 PPI" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/8255cpc.html — what each port is wired
- *   to here: the PSG's bus on A, VSYNC and the board's links on B, the
- *   PSG's function lines and the keyboard line on C.
+ *   to here: the PSG's bus on A, VSYNC, the board's links and the cassette's
+ *   play head on B, and the PSG's function lines, the keyboard line, the
+ *   cassette motor and the write line on C.
+ * - "Reading the keyboard and Joysticks" (Kevin Thacker's cpctech),
+ *   https://cpctech.cpcwiki.de/docs/keyboard.html — the matrix table: which
+ *   line and bit each key sits on, the UK legends printed on them, and the
+ *   two joystick lines.
  * - "Floppy disc controller and Floppy disc drives" (Kevin Thacker's
  *   cpctech), https://cpctech.cpcwiki.de/docs/fdc.html — the disc
  *   interface's decode: A10 and A7 low select it, A8 and A0 then choose
@@ -54,6 +59,7 @@
 #include "monitor.h"
 #include "ppi.h"
 #include "psg.h"
+#include "tape.h"
 #include "upd765.h"
 #include "z80.h"
 
@@ -79,6 +85,38 @@
    callers want, not because the machine guarantees it. */
 #define CPC_TICKS_PER_STANDARD_FRAME (312L * 64L * 4L)
 
+/* The board's clock is 4MHz, which is what a tape's timings are read
+   against: the format counts them in a Spectrum's T-states. */
+#define CPC_TICKS_PER_MILLISECOND 4000
+
+/* A key, as the line that selects it and the bit that reads it. Ten lines of
+   eight, numbered as the CPC's own documentation numbers its key codes;
+   lines past the tenth are not wired and read &FF.
+
+   Two of them carry a joystick as well. Joystick 0 has line 9 to itself, all
+   but its top bit, which is DEL; joystick 1 shares line 6 with the letters,
+   which is why its directions can be played from the keyboard and why
+   two-player games pick their keys carefully. */
+#define CPC_KEY(line, bit) KEYBOARD_KEY(line, bit)
+#define CPC_KEYBOARD_LINES 10
+
+/* A matrix one line short loses a whole row of keys without a word. */
+typedef char cpc_keyboard_fits_the_matrix[CPC_KEYBOARD_LINES <= KEYBOARD_MAX_LINES ? 1 : -1];
+
+/* The keys a text-typing caller needs by name; the rest it finds through
+   cpc_key_for_character. */
+#define CPC_RETURN CPC_KEY(2, 2)
+#define CPC_SHIFT CPC_KEY(2, 5)
+#define CPC_SPACE CPC_KEY(5, 7)
+#define CPC_TAB CPC_KEY(8, 4)
+#define CPC_ESCAPE CPC_KEY(8, 2)
+#define CPC_DELETE CPC_KEY(9, 7)
+
+/* Where a character lives on a UK CPC keyboard, and whether shift is held to
+ * reach it. Returns KEYBOARD_NO_KEY for a character the keyboard cannot
+ * produce. */
+keyboard_key cpc_key_for_character(char character, bool *shifted);
+
 typedef struct {
   z80_t cpu;
   uint64_t pins; /* the bus between ticks */
@@ -90,6 +128,9 @@ typedef struct {
   ppi_t ppi;
   psg_t psg;
   keyboard_t keyboard;
+
+  /* The deck, host-owned as a disc is, and NULL when there is none. */
+  tape_t *tape;
 
   /* The disc interface: built into the 664 and 6128, plugged into a 464
      as the DDI-1. Absent, its ports are nobody's and float. Drive A is the
@@ -143,6 +184,12 @@ void cpc_fit_disc_interface(cpc_t *cpc, bool fitted);
 /* Put a disc in drive 0 (A) or 1 (B), or take it out with NULL. The disc
  * is borrowed: it must outlive the machine or be taken out first. */
 void cpc_insert_disc(cpc_t *cpc, uint8_t drive, floppy_t *floppy);
+
+/* Put a tape in the deck, or take it out with NULL. Bit 4 of port C is the
+ * motor, so the machine starts and stops the tape itself; bit 7 of port B is
+ * the play head. Bit 5 of port C is what the machine writes to tape, and it
+ * goes nowhere: nothing here records. */
+void cpc_insert_tape(cpc_t *cpc, tape_t *tape);
 
 /* Plug in a monitor: CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT bytes
  * of hardware colour codes, host-owned. Unplugged, the machine runs on and
