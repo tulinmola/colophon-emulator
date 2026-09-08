@@ -203,12 +203,16 @@ uint64_t spectrum_tick(spectrum_t *spectrum) {
   return spectrum->pins;
 }
 
+bool spectrum_instruction_complete(const spectrum_t *spectrum) {
+  return z80_instruction_complete(&spectrum->cpu) && spectrum->held_ticks == 0;
+}
+
 void spectrum_finish_instruction(spectrum_t *spectrum) {
   /* Longer than the longest instruction, the charges it can earn along a
      line of the picture and an interrupt taken at the end of it, so the loop
      is bounded whatever state the machine is in. */
   for (int guard = 0; guard < 256; guard++) {
-    if (z80_instruction_complete(&spectrum->cpu) && spectrum->held_ticks == 0) {
+    if (spectrum_instruction_complete(spectrum)) {
       return;
     }
     spectrum_tick(spectrum);

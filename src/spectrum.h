@@ -185,11 +185,15 @@ void spectrum_insert_tape(spectrum_t *spectrum, tape_t *tape);
  * watch. */
 uint64_t spectrum_tick(spectrum_t *spectrum);
 
-/* Tick until the processor is between instructions and owes the ULA nothing.
- * A snapshot has nowhere to record a half-executed instruction, nor a hold
- * still to be served — an instruction whose last T-state was a charged one
- * leaves the clock stopped past its end — so anything about to take one owes
- * the machine this call first. */
+/* Between instructions and owing the ULA nothing. A held T-state is one the
+ * processor does not run, so an instruction whose last T-state was a charged
+ * one leaves the clock stopped past its end: the processor has finished and
+ * the machine has not. */
+bool spectrum_instruction_complete(const spectrum_t *spectrum);
+
+/* Tick until it is. A snapshot has nowhere to record a half-executed
+ * instruction, nor a hold still to be served, so anything about to take one
+ * owes the machine this call first. */
 void spectrum_finish_instruction(spectrum_t *spectrum);
 
 /* The processor's view without the processor: a peek under the ROM sees the

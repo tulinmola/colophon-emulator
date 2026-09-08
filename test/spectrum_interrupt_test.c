@@ -105,7 +105,7 @@ static acceptance run(void) {
       answer.taken = true;
       answer.acknowledged_at = (int)now;
     }
-    if (answer.taken && z80_instruction_complete(&spectrum.cpu) && spectrum.held_ticks == 0) {
+    if (answer.taken && spectrum_instruction_complete(&spectrum)) {
       answer.tstates++;
       break;
     }

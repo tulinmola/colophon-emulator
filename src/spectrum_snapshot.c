@@ -119,8 +119,10 @@ bool spectrum_snapshot_save(const spectrum_t *spectrum, uint8_t *bytes, size_t c
     *problem = "needs 49179 bytes to write into";
     return false;
   }
-  if (!z80_instruction_complete(&spectrum->cpu)) {
-    *problem = "cannot be taken mid-instruction";
+  if (!spectrum_instruction_complete(spectrum)) {
+    *problem = z80_instruction_complete(&spectrum->cpu)
+                   ? "would lose the T-states the ULA is still holding the clock for"
+                   : "cannot be taken mid-instruction";
     return false;
   }
 

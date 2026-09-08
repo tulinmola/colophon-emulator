@@ -404,8 +404,7 @@ static int measured_tstates(const timing *entry, uint32_t at) {
   do {
     spectrum_tick(&spectrum);
     tstates++;
-  } while ((!z80_instruction_complete(&spectrum.cpu) || spectrum.held_ticks > 0) &&
-           tstates < MOST_TSTATES);
+  } while (!spectrum_instruction_complete(&spectrum) && tstates < MOST_TSTATES);
   return tstates;
 }
 

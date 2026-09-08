@@ -398,8 +398,7 @@ static int tstates_at(uint16_t address, uint32_t frame_tick) {
   do {
     spectrum_tick(&spectrum);
     tstates++;
-  } while ((!z80_instruction_complete(&spectrum.cpu) || spectrum.held_ticks > 0) &&
-           tstates < MAX_TSTATES);
+  } while (!spectrum_instruction_complete(&spectrum) && tstates < MAX_TSTATES);
   return tstates;
 }
 
@@ -495,6 +494,10 @@ static void a_hold_the_last_tstate_earned_outlives_the_instruction(void) {
   put_at(PROGRAM_ADDRESS, block, sizeof block);
   spectrum.cpu.pc = PROGRAM_ADDRESS;
   ula_seek(&spectrum.ula, 14320);
+  /* The processor's half of it alone, deliberately: this is the one test that
+     has to stand between the two, where the processor has finished and the
+     machine has not. Anywhere else spectrum_instruction_complete is the
+     question worth asking. */
   do {
     spectrum_tick(&spectrum);
   } while (!z80_instruction_complete(&spectrum.cpu));

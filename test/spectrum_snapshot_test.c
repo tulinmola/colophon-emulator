@@ -96,6 +96,33 @@ static void a_half_done_instruction_cannot_be_saved(void) {
   TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
 }
 
+/* And neither can a machine whose processor has finished while the ULA still
+   holds its clock: the format has nowhere to put the T-states still owed, so
+   a snapshot taken there would resume a machine that had skipped them. */
+static void a_hold_still_owed_cannot_be_saved_either(void) {
+  power_on(&saved, saved_ram, SPECTRUM_RAM_48K);
+  /* LDI reading from outside the screen and writing into it, arranged so its
+     last internal T-state lands where the chip owes six. */
+  static const uint8_t block[] = {0xED, 0xA0};
+  memcpy(rom + 0x0100, block, sizeof block);
+  saved.cpu.pc = 0x0100;
+  saved.cpu.h = 0x80;
+  saved.cpu.d = 0x40;
+  ula_seek(&saved.ula, 14320);
+  do {
+    spectrum_tick(&saved);
+  } while (!z80_instruction_complete(&saved.cpu));
+
+  TEST_EQUAL(saved.held_ticks, 6);
+  TEST_CHECK(!spectrum_instruction_complete(&saved));
+  const char *problem = NULL;
+  TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+  TEST_CHECK(problem != NULL && strstr(problem, "holding the clock") != NULL);
+
+  spectrum_finish_instruction(&saved);
+  TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+}
+
 /* The format has nowhere to put a hold in progress, so a machine given a
    snapshot stops serving whatever the machine it replaced was serving. */
 static void a_hold_does_not_survive_a_load(void) {
@@ -344,6 +371,7 @@ int main(void) {
   TEST_RUN(a_stack_the_program_counter_could_not_reach_is_refused);
   TEST_RUN(the_border_byte_cannot_drive_the_speaker);
   TEST_RUN(a_half_done_instruction_cannot_be_saved);
+  TEST_RUN(a_hold_still_owed_cannot_be_saved_either);
   TEST_RUN(a_machine_survives_the_round_trip);
   TEST_RUN(a_hold_does_not_survive_a_load);
   TEST_RUN(a_restored_machine_goes_on_running_from_a_fresh_frame);
