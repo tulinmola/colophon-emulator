@@ -39,18 +39,25 @@
  * character being drawn and holds it for that whole microsecond, which is
  * what a positional register write needs; the last line and the vertical
  * adjustment already read it, and both are settled at the characters ch.
- * 13.2.1 settles them at rather than wherever they next stand. Not yet: the
- * cursor, its own skew and the lightpen, no host here wiring those pins;
- * the per-type divergences; the rest of what ch. 13.2.1 gives a line's
- * first three microseconds — the counter updates those characters schedule
- * for a later one — and the VSYNC arming of ch. 13.2.2. Every other
- * comparison is made where it stands. Two of the border's rules move
- * DISPLAY ENABLE inside a character — the byte of border at C0=R0 on a line
- * where R1 was never reached and no skew stands ready to defer it to a
- * whole character of its own (ch. 17.6.2, 19.2.4), and the byte-by-byte
- * alternation an R6 of 0 makes on a frame's first line (ch. 18.3.2) — and
- * both are here, which is why a tick reports that pin for each of the two
- * bytes a character is drawn from rather than once.
+ * 13.2.1 settles them at rather than wherever they next stand. A VSYNC is
+ * authorized by the state ch. 13.2.2 has the chip raise at C0=2 and cancel
+ * at the next C0=0, so a line too short to reach C0=2 costs the next one
+ * its VSYNC and spends the equality besides; and an equality made by hand
+ * at a line's head is a blocked VSYNC rather than a VSYNC, where past C0=1
+ * it triggers where it stands (ch. 16.4.1.1). Not yet: the cursor, its own
+ * skew and the lightpen, no host here wiring those pins; the per-type
+ * divergences; the rest of what ch. 13.2.1 gives a line's first three
+ * microseconds — the counter updates those characters schedule for a later
+ * one. the freezes an R0 of 0 works on the counters (ch. 13.2.3, 13.2.4,
+ * 16.4.1.2), so that a VSYNC begun on such a line ends on R3's count here
+ * where the chip's would not end at all. Every other comparison is made
+ * where it stands. Two of the border's rules move DISPLAY ENABLE inside a
+ * character — the byte of border at C0=R0 on a line where R1 was never
+ * reached and no skew stands ready to defer it to a whole character of its
+ * own (ch. 17.6.2, 19.2.4), and the byte-by-byte alternation an R6 of 0
+ * makes on a frame's first line (ch. 18.3.2) — and both are here, which is
+ * why a tick reports that pin for each of the two bytes a character is
+ * drawn from rather than once.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -160,6 +167,11 @@ typedef struct {
   /* One C4/R7 equality raises one VSYNC: the comparison must change, by C4
      moving or R7 being written, before it raises another (ch. 16.3). */
   bool vsync_blocked;
+  /* The state ch. 13.2.2 has the chip raise at C0=2 so that the next C0=0
+     may read C4 against R7. No line has run at power-on and nothing has
+     raised it, so this chip wakes holding it, which is the state a chip
+     that has been running is in. */
+  bool vsync_armed;
   /* A VSYNC can begin anywhere in a line — where R7 is written the value C4
      already holds, and on every even frame of an interlace mode. C3h is
      then initialized at the next C0=0 instead of being advanced there, so
@@ -192,7 +204,8 @@ typedef struct {
 } crtc_t;
 
 /* Power-on. Real silicon leaves the register file undefined; zeroes here,
- * for determinism, which leaves the chip before a line's first character. */
+ * for determinism, which leaves the chip before a line's first character —
+ * with the VSYNC's authorization the one state that wakes standing. */
 void crtc_init(crtc_t *crtc);
 
 /* Advance one character clock. Returns the output pins. */

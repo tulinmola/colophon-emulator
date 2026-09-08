@@ -803,6 +803,165 @@ static void an_r4_of_127_does_not_trap_the_frame(void) {
   TEST_EQUAL(in_the_adjustment, SCANLINE + 1);
 }
 
+/* Ch. 13.2.2 puts a state between the C4/R7 equality and the VSYNC it
+   raises: "Each time C0=2, a state validates the update of C4=R7 on the
+   next C0=0. This state is cancelled when C0=0." A line that never reaches
+   C0=2 therefore leaves the next line's equality unread, and R0 below 2 is
+   how a program arranges it — "if R0 is modified with a value lower than 2
+   on the line preceding the equivalence C4=R7 (On the line where C9=R9 and
+   C4=R7-1), the VSYNC will not be authorized on C0=0". Shaker calls this
+   one LOST VSYNC ON R0=0 and LOST VSYNC ON R0=1, asks it of both, and reads
+   the sync back off PPI port B on each of the twelve lines it prints: bit 0
+   clear, where before this state was here it stood. */
+static void a_line_too_short_to_reach_c0_2_costs_the_next_its_vsync(void) {
+  for (uint8_t narrow_r0 = 0; narrow_r0 <= 1; narrow_r0++) {
+    program_standard();
+    TEST_CHECK(run_to_row(29));
+    run_scanlines(7); /* the line before C4 reaches R7, C9 already at R9 */
+    TEST_EQUAL(crtc.c4, 29);
+    TEST_EQUAL(crtc.c9, 7);
+    write_register(0, narrow_r0);
+    /* 256 characters is a hundred and twenty-eight of these short lines,
+       well past where C4 walks onto R7 and off it again. */
+    for (int character = 0; character < 256; character++) {
+      TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
+    }
+  }
+}
+
+/* And the state is a state, not a rule read afresh: R0 put back before the
+   line has passed C0=2 arms it after all, and the VSYNC comes as it would
+   have. */
+static void an_r0_restored_before_c0_2_keeps_the_vsync(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(29));
+  run_scanlines(7);
+  write_register(0, 1);
+  crtc_tick(&crtc);      /* draws C0=1, the last character an R0 of 1 allows */
+  write_register(0, 63); /* in force from C0=2, which therefore arrives */
+  int vsync_characters = 0;
+  for (int character = 0; character < 12 * SCANLINE; character++) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE);
+}
+
+/* The equality is not merely missed but spent: "This will also cause the
+   VSYNC to block for the value C4=R7", so a program that widens R0 again
+   on the same line does not get the VSYNC back, and only the liftings of
+   ch. 16.3 — a C4 that moves, or an R7 written — bring it round again. The
+   widening here comes two short lines later, on a later line of the same
+   row, which is as long as C4 stands still. */
+static void a_vsync_lost_to_a_short_line_stays_lost_for_that_row(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(29));
+  run_scanlines(7);
+  write_register(0, 1);
+  run_characters(2 * 2); /* two of the two-character lines */
+  write_register(0, 63);
+  for (int character = 0; character < 4 * SCANLINE; character++) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
+  }
+  /* R7 written lifts the block, and the equality serves again (ch. 16.3).
+     Begun away from the head of a line, the pulse runs R3's eight lines and
+     the rest of the line it began in besides (ch. 16.4.1). */
+  while (crtc.c0 != 2) {
+    crtc_tick(&crtc);
+  }
+  write_register(7, crtc.c4);
+  int vsync_characters = 0;
+  for (int character = 0; character < 12 * SCANLINE; character++) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE + (63 - 2));
+}
+
+/* "A value lower than 2" is the whole of the condition, and 2 itself is on
+   the safe side of it: a line of three characters reaches C0=2 and arms, a
+   line of two does not (ch. 13.2.2). */
+static void a_line_of_three_characters_still_arms_the_vsync(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(29));
+  run_scanlines(7);
+  write_register(0, 2);
+  int vsync_characters = 0;
+  for (int character = 0; character < 30 * 3; character++) { /* thirty lines */
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * 3); /* R3's eight lines, three characters each */
+}
+
+/* Ch. 16.3's own degenerate case: "if R7=0, then a VSYNC occurs when C4=0.
+   If R4 is 0, then C4 remains at 0 ... C4 is therefore 0 during the VSYNC
+   but also after the end of the VSYNC. In this context, there is no more
+   VSYNC." Exactly one, then — which is also what says the chip wakes with
+   ch. 13.2.2's state standing, since C4 never moves to lift a block, and a
+   chip that woke without it would give none at all. */
+static void an_r7_and_r4_of_zero_give_one_vsync_and_no_more(void) {
+  crtc_init(&crtc);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(3, 0x8E);
+  write_register(4, 0);
+  write_register(9, 3);
+  /* R7 is left at the zero power-on gives it, so the equality is never made
+     by hand — and C4, which an R4 of 0 never moves, never lifts a block. */
+  int vsync_characters = 0;
+  for (long character = 0; character < 200L * SCANLINE; character++) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE);
+}
+
+/* Ch. 16.4.1.1 gives the equality made by hand a rule of its own, which is
+   not the arming of ch. 13.2.2: "the VSYNC is triggered immediately if it
+   was not already in progress, except if this modification occurs when
+   C0vs=0 or C0vs=1. If the modification of R7 with the value of C4 took
+   place when C0vs<2, we are in a BLOCKED VSYNC." The chapter reads it off
+   the PPI six microseconds after the write, and finds the sync inactive. */
+static void an_r7_written_at_a_lines_head_blocks_instead_of_triggering(void) {
+  for (uint8_t at = 0; at <= 2; at++) {
+    program_standard();
+    write_register(7, 100); /* beyond C4's reach, so nothing walks into it */
+    TEST_CHECK(run_to_row(10));
+    while (crtc.c0 != at) {
+      crtc_tick(&crtc);
+    }
+    write_register(7, crtc.c4);
+    bool sync = false;
+    for (int character = 0; character < 6; character++) {
+      sync = sync || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+    }
+    TEST_EQUAL(sync, at == 2);
+  }
+}
+
+/* And that is the whole of the condition on it: a line that never armed
+   still takes the VSYNC an R7 write makes on it, because the arming governs
+   the equality C4 walks into, while "when R7=C4 with C0vs>1, the VSYNC is
+   'triggered' during the line" carries no such clause (ch. 16.4.1.1). */
+static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
+  program_standard();
+  write_register(7, 100);
+  TEST_CHECK(run_to_row(10));
+  write_register(0, 1);
+  run_characters(2); /* a line of two characters, which never reaches C0=2 */
+  write_register(0, 63);
+  while (crtc.c0 != 10) {
+    crtc_tick(&crtc);
+  }
+  write_register(7, crtc.c4);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
+}
+
 /* ParityFrame is settled before the VSYNC is looked at, which only shows
    where R7 is 0 and the two fall on the same character: the frame that has
    just become even takes a MID-VSYNC in its own first line (ch. 19.7.2). */
@@ -810,15 +969,19 @@ static void the_parity_settles_before_an_r7_of_zero_is_read(void) {
   vsync_seen seen;
 
   program_standard();
+  /* R7 is written where C4 is not 0, so the equality is left for the frame
+     to walk into rather than made by hand (ch. 16.4.1.1). */
+  TEST_CHECK(run_to_row(1));
+  run_characters(2);
   write_register(7, 0);
   write_register(8, 1);
   TEST_CHECK(next_vsync(&seen));
-  TEST_CHECK(!seen.odd_frame);
-  TEST_EQUAL(seen.character, 31);
-
-  TEST_CHECK(next_vsync(&seen));
   TEST_CHECK(seen.odd_frame);
   TEST_EQUAL(seen.character, 0);
+
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(!seen.odd_frame);
+  TEST_EQUAL(seen.character, 31);
 }
 
 /* Ch. 19.8.1's counting tables for R9=6, transcribed. From the line after
@@ -1485,27 +1648,33 @@ static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
 
 static void one_vsync_per_equality_of_c4_and_r7(void) {
   /* R7 given the value C4 already holds starts a VSYNC where the beam
-     stands. The same equality cannot start a second: C4 must move, or R7
-     must be written again (ch. 16.3, 16.4.1). */
+     stands, so long as the line is past its second character — the head of
+     a line has a rule of its own (ch. 16.4.1.1). The same equality cannot
+     start a second: C4 must move, or R7 must be written again (ch. 16.3,
+     16.4.1). */
   program_standard();
   write_register(9, 31); /* rows long enough to hold a whole VSYNC */
   TEST_CHECK(run_to_row(1));
   TEST_CHECK(!crtc.vsync);
 
+  run_characters(2); /* past C0=1, where a hand-made equality is blocked */
   write_register(7, 1);
   crtc_tick(&crtc);
   TEST_CHECK(crtc.vsync);
-  /* Begun at C0=1 rather than at the head of the line, so the counter is
-     initialized at the head of the next one and R3's eight lines are
-     counted from there — the rest of this line runs on top of them (ch.
-     16.4.1). */
-  run_characters(8 * SCANLINE + (SCANLINE - 1) - 1);
+  /* Begun away from the head of the line, so the counter is initialized at
+     the head of the next one and R3's eight lines are counted from there —
+     the rest of this line runs on top of them. "The total duration of the
+     VSYNC is increased by the number of µsec corresponding to the
+     calculation R0 - C0vs", which is 63 less the 2 the write landed on
+     (ch. 16.4.1, 16.4.1.1). */
+  run_characters(8 * SCANLINE + (63 - 2) - 1);
   TEST_CHECK(crtc.vsync);
   run_characters(1);
   TEST_CHECK(!crtc.vsync);
   run_scanlines(10); /* still row 1, and still no second VSYNC */
   TEST_CHECK(!crtc.vsync);
 
+  run_characters(2);
   write_register(7, 1);
   crtc_tick(&crtc);
   TEST_CHECK(crtc.vsync);
@@ -1638,6 +1807,13 @@ int main(void) {
   TEST_RUN(an_adjustment_line_still_decides_the_interlace_line);
   TEST_RUN(the_disarm_tests_the_interlace_line_as_well_as_r5);
   TEST_RUN(an_r4_of_127_does_not_trap_the_frame);
+  TEST_RUN(a_line_too_short_to_reach_c0_2_costs_the_next_its_vsync);
+  TEST_RUN(an_r0_restored_before_c0_2_keeps_the_vsync);
+  TEST_RUN(a_vsync_lost_to_a_short_line_stays_lost_for_that_row);
+  TEST_RUN(a_line_of_three_characters_still_arms_the_vsync);
+  TEST_RUN(an_r7_and_r4_of_zero_give_one_vsync_and_no_more);
+  TEST_RUN(an_r7_written_at_a_lines_head_blocks_instead_of_triggering);
+  TEST_RUN(an_r7_written_on_an_unarmed_line_still_triggers);
   TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
   TEST_RUN(the_video_mode_doubles_the_raster_address);
   TEST_RUN(a_video_mode_entered_late_overflows_c9);

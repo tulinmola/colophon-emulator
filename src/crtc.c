@@ -20,7 +20,10 @@ static const uint8_t writable_bits[18] = {
 #define C4_BITS 0x7F
 #define C9_BITS 0x1F
 
-void crtc_init(crtc_t *crtc) { *crtc = (crtc_t){0}; }
+void crtc_init(crtc_t *crtc) {
+  *crtc = (crtc_t){0};
+  crtc->vsync_armed = true;
+}
 
 /* Moving C4 lifts the VSYNC block, because the comparison with R7 has
    changed; setting it to the value it already held does not (ch. 16.3). */
@@ -343,6 +346,32 @@ static void move_video_pointer(crtc_t *crtc) {
   }
 }
 
+/* The equality both ch. 13.2.2 and ch. 16.3 turn on. */
+static bool c4_stands_on_r7(const crtc_t *crtc) { return crtc->c4 == crtc->registers[7]; }
+
+/* "Each time C0=2, a state validates the update of C4=R7 on the next C0=0.
+   This state is cancelled when C0=0" (ch. 13.2.2). It governs the equality
+   C4 walks into and nothing else: "the counter C0 needs to reach the value
+   2 on the line preceding that where C4=R7 for a VSYNC to be considered ...
+   the VSYNC will be blocked for the condition C4=R7, as if it had had
+   place" (ch. 16.4.1.2). Unread is therefore spent, and the block is what
+   carries it, so the comparison itself is left to stand as it stands and
+   only the liftings of ch. 16.3 bring it round again. C4 cannot move inside
+   a line, and where it does move the block is lifted with it. */
+static void authorize_vsync(crtc_t *crtc) {
+  if (crtc->c0 == 2) {
+    crtc->vsync_armed = true;
+    return;
+  }
+  if (crtc->c0 != 0) {
+    return;
+  }
+  if (!crtc->vsync_armed) {
+    crtc->vsync_blocked = true;
+  }
+  crtc->vsync_armed = false;
+}
+
 /* HSYNC begins on the character where C0 meets R2 (ch. 6.1.2). A width of
    zero is no HSYNC at all on this type — the 16 the other types read there
    is what a program uses to tell them apart (ch. 14.1, 14.5, 28.1.5). VSYNC
@@ -372,7 +401,7 @@ static void begin_syncs(crtc_t *crtc) {
      Compendium describes neither. */
   bool late_vsync =
       crtc->interlace_video_mode && (r[9] & 1) != 0 && (crtc->c4 & 1) != 0 && crtc->parity_frame;
-  if (crtc->c4 == r[7] && !crtc->vsync && !crtc->vsync_blocked &&
+  if (c4_stands_on_r7(crtc) && !crtc->vsync && !crtc->vsync_blocked &&
       (!mid_vsync || crtc->c0 == r[0] / 2) && (!late_vsync || c9_vma(crtc) == 2)) {
     crtc->vsync = true;
     crtc->vsync_blocked = true;
@@ -498,6 +527,7 @@ uint64_t crtc_tick(crtc_t *crtc) {
   decide_last_line(crtc);
   begin_vertical_adjustment(crtc);
   move_video_pointer(crtc);
+  authorize_vsync(crtc);
   begin_syncs(crtc);
   throw_display_latches(crtc);
   return pins_of(crtc);
@@ -529,9 +559,14 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     if (mask != 0) {
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
       if (crtc->address_register == 7) {
-        /* The other half of the block: writing R7 changes the comparison
-           whatever the value written, so it can serve again (ch. 16.3). */
-        crtc->vsync_blocked = false;
+        /* Writing R7 changes the comparison whatever the value written, so
+           it can serve again (ch. 16.3) — except that an equality made by
+           hand at the head of a line is not a VSYNC but a blocked one: "the
+           VSYNC is triggered immediately if it was not already in progress,
+           except if this modification occurs when C0vs=0 or C0vs=1. If the
+           modification of R7 with the value of C4 took place when C0vs<2,
+           we are in a BLOCKED VSYNC" (ch. 16.4.1.1). */
+        crtc->vsync_blocked = crtc->c0 < 2 && c4_stands_on_r7(crtc);
       }
     }
   }
