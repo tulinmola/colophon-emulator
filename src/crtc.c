@@ -5,8 +5,9 @@
 
 /* Type 0 — Compendium ch. 4.3. R3 carries the VSYNC width in its high
    nibble and the HSYNC width in its low one; of R8 the two interlace bits
-   are read and the skew bits are stored and no more. R16/R17 are the lightpen
-   latches, read-only. */
+   and the two that skew the display are read, and the cursor's own skew is
+   stored and no more, no host here wiring that pin. R16/R17 are the
+   lightpen latches, read-only. */
 static const uint8_t writable_bits[18] = {
     0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x1F, 0x7F, 0x7F, 0xF3,
     0x1F, 0x7F, 0x1F, 0x3F, 0xFF, 0x3F, 0xFF, 0x00, 0x00,
@@ -31,16 +32,38 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
   crtc->c4 = next;
 }
 
-/* Either interlace mode is asked for by R8's low bit, and the line it adds
-   at the end of a frame is added on the parity R6 anticipated (ch. 19.6.1). */
+/* R8's bits 5 and 4 carry the SKEW-DISPTMG field. Ch. 19.1's table gives
+   it to types 0, 3 and 4 and withholds it from 1 and 2, and names its four
+   values: Non Skew, one-character skew, two-character skew, and the
+   Non-output that ch. 19.2 calls the BORDER ON function. */
+#define SKEW_NONE 0
+#define SKEW_ONE_CHARACTER 1
+#define SKEW_TWO_CHARACTERS 2
+#define SKEW_BORDER_ON 3
+
+static uint8_t display_skew(const crtc_t *crtc) { return (crtc->registers[8] >> 4) & 3; }
+
+/* Either interlace mode is asked for by R8's low bit, and the BORDER ON
+   function takes that half of the register with it: "if the BORDER ON
+   function is activated, the INTERLACE function on the 2 least significant
+   bits is not considered", which ch. 19.2 marks as wanting further
+   investigation and no evidence from outside this repository grades. */
+static bool interlace_asked(const crtc_t *crtc) {
+  return display_skew(crtc) != SKEW_BORDER_ON && (crtc->registers[8] & 1) != 0;
+}
+
+/* The line either interlace mode adds at the end of a frame is added on the
+   parity R6 anticipated (ch. 19.6.1). */
 static bool interlace_line_due(const crtc_t *crtc) {
-  return (crtc->registers[8] & 1) != 0 && crtc->parity_r6;
+  return interlace_asked(crtc) && crtc->parity_r6;
 }
 
 /* The interlace video mode as R8 holds it, which is not always as the
    counters have it: R8's two low bits both set ask for it, and the chip
    takes it up at the head of the next line (ch. 19.1, 19.8.1). */
-static bool interlace_video_asked(const crtc_t *crtc) { return (crtc->registers[8] & 3) == 3; }
+static bool interlace_video_asked(const crtc_t *crtc) {
+  return interlace_asked(crtc) && (crtc->registers[8] & 2) != 0;
+}
 
 /* ParityC9, which fills bit 0 of the raster address in the interlace video
    mode: "ParityC9 = C4.0 xor ParityFrame" (ch. 19.5.2). Where R9 is odd the
@@ -320,7 +343,7 @@ static void begin_syncs(crtc_t *crtc) {
      the C4/R7 equality does not start it where it falls, but where C0
      reaches R0/2, which is the half line the second field is raised by
      (ch. 19.7.2). */
-  bool mid_vsync = (r[8] & 1) != 0 && !crtc->parity_frame;
+  bool mid_vsync = interlace_asked(crtc) && !crtc->parity_frame;
   /* And where the video mode gives a row an odd number of lines, an odd C4
      of an odd frame starts its VSYNC a line late, at C9.VMA=2 rather than
      at the row's own first line: the two frames' rows are of unequal length
@@ -340,6 +363,30 @@ static void begin_syncs(crtc_t *crtc) {
   }
 }
 
+/* The character the R1 border is raised on: where C0 meets R1, or where C0
+   meets R0 having not met R1 all line, since "the condition C0=R1 not being
+   met during the line ... the condition C0=R0 therefore replaces the
+   condition C0=R1" (ch. 19.2.4). R1 standing beyond the line's end is the
+   common way to miss it, but not the only one: an R1 of 0 loses to the
+   opening on the character they share (ch. 18.3.1), and an R1 moved behind
+   C0 is never met again either, so what is read here is the latch rather
+   than the registers.
+
+   The substitution needs somewhere for the border to go. Only a delay gives
+   it a character of its own; with none the chip sends the half character of
+   ch. 17.6.2 early instead and this latch is left alone, and the BORDER ON
+   function is no delay and gets no character either. Where the border is
+   handed out is a separate question, which the skew answers. */
+static bool border_r1_begins_here(const crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  if (crtc->c0 == r[1]) {
+    return true;
+  }
+  uint8_t skew = display_skew(crtc);
+  bool delayed = skew == SKEW_ONE_CHARACTER || skew == SKEW_TWO_CHARACTERS;
+  return delayed && !crtc->display_r1 && crtc->c0 == r[0];
+}
+
 /* DISPLAY ENABLE is two latches the equalities throw rather than two
    comparisons standing (ch. 6.1.3, 17.1, 18.1). R1's opens where the line
    begins and shuts where C0 meets R1; when R1 is 0 both fall on the same
@@ -350,7 +397,15 @@ static void begin_syncs(crtc_t *crtc) {
 static void throw_display_latches(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   bool first_line = crtc->c4 == 0 && crtc->c9 == 0;
-  if (crtc->c0 == r[1]) {
+  /* A skew holds the signal back on its way out rather than moving the
+     equalities that throw it, so the latch is thrown where the registers
+     say and read out a character or two later. That is what leaves the line
+     whole when a delay is taken off after the border it deferred: the
+     opening was recorded where the equality fell, and the skew only chooses
+     which character hands it to the pin (ch. 19.2.3, 19.2.5.3). */
+  crtc->display_r1_earlier[1] = crtc->display_r1_earlier[0];
+  crtc->display_r1_earlier[0] = crtc->display_r1;
+  if (border_r1_begins_here(crtc)) {
     crtc->display_r1 = true;
   }
   if (crtc->c0 == 0 && crtc->c0_reached_r0) {
@@ -384,9 +439,21 @@ static void throw_display_latches(crtc_t *crtc) {
    bytes with the video pointer counting through both (ch. 18.3.2). */
 static uint64_t pins_of(const crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
-  bool display = !crtc->display_r1 && !crtc->display_r6;
+  /* The BORDER ON function is not a count and takes no place among the
+     delays: it shuts the display where it stands and leaves the video
+     pointer and the R6 border carrying on as they were (ch. 19.2.1). */
+  uint8_t skew = display_skew(crtc);
+  bool border_r1 = crtc->display_r1;
+  if (skew == SKEW_ONE_CHARACTER || skew == SKEW_TWO_CHARACTERS) {
+    border_r1 = crtc->display_r1_earlier[skew - 1];
+  }
+  bool display = !border_r1 && !crtc->display_r6 && skew != SKEW_BORDER_ON;
   bool r6_conflict = crtc->c4 == 0 && crtc->c9 == 0 && r[6] == 0;
-  bool second_byte = display && crtc->c0 != r[0] && !r6_conflict;
+  /* Where a delay is programmed the border of a line R1 never reached is a
+     character of its own at the deferred place, not the half character the
+     chip would otherwise send early (ch. 17.6.2, 19.2.4). */
+  bool border_takes_the_second_byte = skew == SKEW_NONE && crtc->c0 == r[0];
+  bool second_byte = display && !border_takes_the_second_byte && !r6_conflict;
   return (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)c9_vma(crtc) << 24) |
          (display ? CRTC_DISPTMG : 0) | (second_byte ? CRTC_DISPTMG_SECOND_BYTE : 0) |
          (crtc->hsync ? CRTC_HSYNC : 0) | (crtc->vsync ? CRTC_VSYNC : 0);

@@ -969,6 +969,344 @@ static void an_r6_of_zero_alternates_the_first_lines_bytes(void) {
   }
 }
 
+/* R8's bits 5 and 4 are the SKEW-DISPTMG delays, which ch. 19.1's table
+   gives this type and withholds from types 1 and 2: one character or two
+   on the R1 border's two edges. Ch. 19.2.3 states each delay as its own
+   pair of rules. Of one microsecond: "The BORDER is deactivated on the 2nd
+   character after that or C0=R0 (C0=1)" and "The BORDER is activated on
+   the 1st character after the one where C0=R1". Of two: the 3rd character
+   (C0=2) and the 2nd. Both are read here from the display window's two
+   ends, and the window is walked round C0=0 so that the opening is
+   evidence and not only the closing. */
+static void the_skew_delays_the_border_at_both_ends(void) {
+  static const struct {
+    uint8_t r8;
+    int opens_at;  /* the first character of the line that displays */
+    int closes_at; /* the first that does not */
+  } functions[] = {{0x00, 0, 40}, {0x10, 1, 41}, {0x20, 2, 42}};
+
+  for (size_t index = 0; index < sizeof functions / sizeof functions[0]; index++) {
+    program_standard();
+    write_register(8, functions[index].r8);
+    TEST_CHECK(run_to_row(1));
+    /* run_to_row leaves the character C0 names 0 already drawn, so the line
+       is walked from the one after it and C0 read back off the chip. */
+    for (int character = 1; character <= 64; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      bool shown = crtc.c0 >= functions[index].opens_at && crtc.c0 < functions[index].closes_at;
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, shown);
+    }
+  }
+}
+
+/* Ch. 19.2.3's note: "If R1=R0, then the BORDER is activated on C0=0" — the
+   delay carries the closing round the line's end, so the border is the
+   line's first character and every other one displays. */
+static void a_skew_carries_the_border_round_the_lines_end(void) {
+  for (uint8_t skew = 1; skew <= 2; skew++) {
+    program_standard();
+    write_register(1, 63);
+    write_register(8, (uint8_t)(skew << 4));
+    TEST_CHECK(run_to_row(1));
+    for (int character = 1; character <= 127; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, crtc.c0 != skew - 1);
+    }
+  }
+}
+
+/* And where R1 was never reached, a delay turns the half character the chip
+   sends early into a whole one at the deferred place (ch. 19.2.4). */
+static void a_skew_makes_the_early_border_a_whole_character(void) {
+  for (uint8_t skew = 1; skew <= 2; skew++) {
+    program_standard();
+    write_register(0, 3);
+    write_register(1, 4);
+    write_register(8, (uint8_t)(skew << 4));
+    TEST_CHECK(run_to_row(1));
+    for (int character = 1; character <= 15; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      /* R0 stands in for R1, so the border is the character the delay
+         carries it to — C0=0 for one, C0=1 for two — and every other
+         character is displayed whole. */
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, crtc.c0 != skew - 1);
+      TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, crtc.c0 != skew - 1);
+    }
+  }
+}
+
+/* Ch. 19.2.1: the BORDER ON function shuts the display where it stands, and
+   the video pointer goes on counting under it. */
+static void the_border_on_function_shuts_the_display(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  run_characters(4);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  uint16_t before = crtc.vma;
+  write_register(8, 0x30);
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG_SECOND_BYTE));
+  TEST_EQUAL(crtc.vma, before + 2);
+  write_register(8, 0x00);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+/* Ch. 19.2.5.3's first row, which is what tells a held-back signal from a
+   moved comparison: the delay is taken off after the character it deferred
+   the border to has already passed. A chip that moved its comparisons would
+   never reach the opening and would lose the rest of the line; one that
+   holds the signal back reads out the latch as it stood and opens on time.
+   R0 and R1 are both 63, as that section has them. */
+static void a_skew_taken_off_late_does_not_cost_the_line(void) {
+  program_standard();
+  write_register(1, 63);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 60) {
+    crtc_tick(&crtc);
+  }
+  write_register(8, 0x10);                        /* in force from C0=61 */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* 61 */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* 62 */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* 63, the border deferred */
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* 0, and here it is */
+  write_register(8, 0x00);                        /* in force from C0=1 */
+  for (int character = 1; character <= 20; character++) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  }
+}
+
+/* And the BORDER ON function is not a count: it shuts the display where it
+   stands and leaves the R1 border where the registers put it, so a line it
+   is lifted from resumes as that border says, and not three characters late
+   as it would if its value were read as a count. Ch. 19.2.1 says only that
+   the function does not affect the R6 border; that it leaves the R1 one
+   alone as well is read from ch. 19.1's table, where it is the fourth value
+   of the skew field and named Non-output rather than a third delay. */
+static void the_border_on_function_moves_no_comparison(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  write_register(8, 0x30);
+  while (crtc.c0 != 40) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  }
+  write_register(8, 0x00); /* in force from C0=41, past R1 */
+  for (int character = 41; character <= 63; character++) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  }
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=0 opens the next line */
+}
+
+/* Ch. 19.2 gives the BORDER ON function the whole register: "if the BORDER
+   ON function is activated, the INTERLACE function on the 2 least
+   significant bits is not considered", and adds that the point wants
+   further investigation. Read literally it silences all three of the things
+   those bits ask for, and all three are read here. */
+static void the_border_on_function_silences_the_interlace_bits(void) {
+  vsync_seen seen;
+
+  /* No added line: an interlace mode lengthens an even frame by one, and
+     under BORDER ON it does not (ch. 19.6.1). */
+  program_standard();
+  write_register(8, 0x01);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 313);
+  program_standard();
+  write_register(8, 0x31);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 312);
+
+  /* No MID-VSYNC: every frame's VSYNC begins at the head of its line and
+     runs the eight lines R3 asks for, rather than eight and a part. */
+  program_standard();
+  write_register(8, 0x31);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
+  bool first_parity = seen.odd_frame;
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(seen.odd_frame != first_parity); /* the frames alternate still */
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
+
+  /* No doubled raster address either: the counting is the plain one, an R9
+     of 6 giving seven scanlines a row and RA following C9. */
+  recorded_line got[MAX_RECORDED_LINES];
+  static const r8_update border_on_with_the_video_mode[] = {{0, 0x33}};
+  static const uint8_t undoubled[8][3] = {{0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 3},
+                                          {0, 4, 4}, {0, 5, 5}, {0, 6, 6}, {1, 0, 0}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, border_on_with_the_video_mode, 1);
+  check_lines("R8=#33 on C9=0, even frame", got, undoubled, 8);
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, border_on_with_the_video_mode, 1);
+  check_lines("R8=#33 on C9=0, odd frame", got, undoubled, 8);
+}
+
+/* Ch. 19.2.3 exempts the video pointer from the delay outright: "The video
+   pointer assignment when C9=R9 does not change regardless of the
+   programmed delay: VMA is always assigned with VMA' when C0 reaches R1".
+   So a row below a delayed line begins where an undelayed one would, and
+   the extra characters a delay shows on the right are, in the chapter's
+   words, "the characters whose address will be reloaded at the beginning of
+   the line". */
+static void a_skew_does_not_move_the_video_pointer(void) {
+  uint16_t rows[3];
+  for (int index = 0; index < 3; index++) {
+    program_standard();
+    write_register(8, (uint8_t)(index << 4));
+    TEST_CHECK(run_to_row(2));
+    rows[index] = crtc.vma;
+  }
+  TEST_EQUAL(rows[1], rows[0]);
+  TEST_EQUAL(rows[2], rows[0]);
+}
+
+/* Ch. 19.2.4 keys the substitution on "the condition C0=R1 not being met
+   during the line", and ch. 19.2.5 repeats it: "The condition C0=R1 is just
+   replaced by the condition C0=R0 in this case." R1 standing beyond the
+   line's end is the plainest way to miss the condition but not the only
+   one — an R1 of 0 loses to the opening on the character they share (ch.
+   18.3.1) — and a line that misses it any way earns the same border: half a
+   character early with no delay, a whole one at the deferred place with
+   one. */
+static void every_way_of_missing_r1_borders_alike(void) {
+  static const uint8_t missing_r1[] = {64, 0};
+
+  for (size_t way = 0; way < sizeof missing_r1 / sizeof missing_r1[0]; way++) {
+    for (uint8_t skew = 0; skew <= 2; skew++) {
+      program_standard();
+      write_register(1, missing_r1[way]);
+      write_register(8, (uint8_t)(skew << 4));
+      TEST_CHECK(run_to_row(1));
+      for (int character = 1; character <= 64; character++) {
+        uint64_t pins = crtc_tick(&crtc);
+        bool border = skew != 0 && crtc.c0 == skew - 1;
+        bool half = skew == 0 && crtc.c0 == 63;
+        TEST_EQUAL((pins & CRTC_DISPTMG) != 0, !border);
+        TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, !border && !half);
+      }
+    }
+  }
+}
+
+/* An R1 moved behind C0 is missed for the rest of that line just as surely,
+   and the chip has no memory of the value it held (ch. 19.2.5's "the last
+   value programmed on the line is the one present when the 1st OUT is
+   performed on the following line"). */
+static void an_r1_moved_behind_c0_earns_the_missed_border(void) {
+  program_standard();
+  write_register(8, 0x10);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 30) {
+    crtc_tick(&crtc);
+  }
+  write_register(1, 20); /* behind C0, and never met again this line */
+  while (crtc.c0 != 63) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  }
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=0, the deferred byte */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+/* Ch. 19.2.5.1, the row where the cancelling write lands latest: "SKEW
+   DISP+1 is cancelled on C0<=63. BORDER management is handled with the 2nd
+   OUT. The programming of the 1st OUT (R8=#10) is ignored." So a delay
+   cancelled while C0=63 is drawn leaves the border on C0=63, where no delay
+   would have put it. One microsecond later is 19.2.5.2 instead, and the
+   byte disappears altogether — which is what that chapter is named for. */
+static void a_skew_cancelled_in_time_leaves_the_border_where_it_was(void) {
+  program_standard();
+  write_register(1, 63);
+  write_register(8, 0x10);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 62) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  }
+  write_register(8, 0x00);                        /* in force from C0=63 */
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=63 borders */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* and C0=0 does not */
+}
+
+/* Ch. 19.2.1: BORDER ON "does not affect the BORDER R6 state (when C4=R6)
+   and it is therefore possible to switch to one of the 3 other available
+   states". So an R6 border thrown while the display was shut is still
+   thrown when the function is lifted, and nothing but a new frame opens it
+   (ch. 18.2.2). Ch. 19.2.2 asks the question the other way round — whether
+   R8=0 can cancel a BORDER R6 — and marks it "To be tested"; here it
+   cannot, which is our reading and not the documentation's answer. */
+static void the_border_on_function_leaves_the_r6_border_standing(void) {
+  program_standard();
+  write_register(8, 0x30);
+  TEST_CHECK(run_to_row(26)); /* past R6, where the R6 border is thrown */
+  run_characters(4);
+  write_register(8, 0x00);
+  for (int character = 0; character < 8; character++) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  }
+  TEST_CHECK(run_to_row(0));
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+/* The substitution needs a character to put the border in, and only a delay
+   provides one. Whether the BORDER ON function provides one too is asked
+   nowhere: while it stands the display is shut, so on the line itself the
+   two readings agree. They part on the line's last character, where a
+   substitution would raise a latch that a delay written at C0=0 then hands
+   out. We read the function as ch. 19.1's table names it — Non-output, the
+   fourth value of the field rather than a third delay — so it earns no
+   character, and a line it stood on opens like any other. */
+static void the_border_on_function_earns_no_deferred_character(void) {
+  for (uint8_t standing = 0x00; standing <= 0x30; standing = (uint8_t)(standing + 0x30)) {
+    program_standard();
+    write_register(1, 64); /* C0 never meets R1 */
+    write_register(8, standing);
+    TEST_CHECK(run_to_row(1));
+    while (crtc.c0 != 63) {
+      crtc_tick(&crtc);
+    }
+    write_register(8, 0x10);                     /* a delay, in force from C0=0 */
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=0 displays all the same */
+  }
+}
+
+/* Ch. 19.2.5, where the delay is a rule read afresh at every character and
+   not a countdown held: a border asked for and then taken back before its
+   character arrives never comes, and one asked for too late to stop arrives
+   twice. R0 and R1 are both 63, as those diagrams have them. */
+static void a_skew_written_late_can_cancel_or_double_the_border(void) {
+  /* 19.2.5.2: the delay defers the border from C0=63 to C0=0, and R8 put
+     back to 0 on C0=0 defines the opening there instead — "it is considered
+     immediately and cancels the C0=R1 condition". */
+  program_standard();
+  write_register(1, 63);
+  write_register(8, 0x10);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 62) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=63, deferred */
+  write_register(8, 0x00);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=0, the opening wins */
+
+  /* 19.2.5.4: with no delay the border comes on at C0=63, and a delay
+     written there is "considered for the following character, which results
+     in an additional BORDER byte". The section draws that write inside the
+     character it names while 19.2.5.1 draws its writes at the head of the
+     next one; the two cannot both be read literally, so the harness writes
+     where every other test here writes — after the tick that named the
+     character — and the sentence above is what grades it. */
+  program_standard();
+  write_register(1, 63);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 62) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=63, the border */
+  write_register(8, 0x10);
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=0, one more of it */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
 static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
   /* The firmware's other table, at &5D5 of the 6128 OS ROM: 32 rows of 8
      scanlines and six adjustment lines (ch. 11.2.2). */
@@ -1142,6 +1480,20 @@ int main(void) {
   TEST_RUN(the_video_mode_still_takes_the_adjustment_lines);
   TEST_RUN(a_line_r1_never_ends_borders_its_last_byte);
   TEST_RUN(an_r6_of_zero_alternates_the_first_lines_bytes);
+  TEST_RUN(the_skew_delays_the_border_at_both_ends);
+  TEST_RUN(a_skew_carries_the_border_round_the_lines_end);
+  TEST_RUN(a_skew_makes_the_early_border_a_whole_character);
+  TEST_RUN(the_border_on_function_shuts_the_display);
+  TEST_RUN(a_skew_taken_off_late_does_not_cost_the_line);
+  TEST_RUN(the_border_on_function_moves_no_comparison);
+  TEST_RUN(the_border_on_function_silences_the_interlace_bits);
+  TEST_RUN(a_skew_does_not_move_the_video_pointer);
+  TEST_RUN(every_way_of_missing_r1_borders_alike);
+  TEST_RUN(an_r1_moved_behind_c0_earns_the_missed_border);
+  TEST_RUN(a_skew_cancelled_in_time_leaves_the_border_where_it_was);
+  TEST_RUN(the_border_on_function_leaves_the_r6_border_standing);
+  TEST_RUN(the_border_on_function_earns_no_deferred_character);
+  TEST_RUN(a_skew_written_late_can_cancel_or_double_the_border);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);
