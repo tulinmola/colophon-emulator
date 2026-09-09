@@ -53,21 +53,35 @@
  * per line and goes on counting. R4 and R9 written under a frozen chip are
  * read here, where ch. 13.2.1 says they are no longer considered and ch.
  * 13.2.4 then wants them for the last line it assesses at C0=0; the chapter
- * is in two minds and this is our reading. Not yet: what a frame does on
- * coming out of that freeze, where ch. 13.2.4 has C9 measured against R5
- * rather than R9 for the rest of it because C0=2 never came to cancel the
- * additional management; the two-microsecond adjustment an R0 of 1 gives
- * instead (ch. 13.2.1); the cursor, its own skew and the lightpen, no host
- * here wiring those pins; the per-type divergences; the rest of what ch.
- * 13.2.1 gives a line's first three microseconds — the counter updates
- * those characters schedule for a later one. Every other comparison is made
- * where it stands. Two of the border's rules move DISPLAY ENABLE inside a
- * character — the byte of border at C0=R0 on a line where R1 was never
- * reached and no skew stands ready to defer it to a whole character of its
- * own (ch. 17.6.2, 19.2.4), and the byte-by-byte alternation an R6 of 0
- * makes on a frame's first line (ch. 18.3.2) — and both are here, which is
- * why a tick reports that pin for each of the two bytes a character is
- * drawn from rather than once.
+ * is in two minds and this is our reading. The adjustment is armed here by
+ * an R5 above 0, by the interlace line, or by the exception of ch.
+ * 10.3.1.2, where ch. 12.1 gives the chip a window — "this management of
+ * additional line(s) is managed when C0<2" — in which ch. 13.2.5 has it arm
+ * by default on any last line and disarm at C0=2 "in particular by testing
+ * the value of R5"; ch. 11.2.2 gives what follows, including that the
+ * adjustment "can also become true ... if C0 can never reach 2 because R0 <
+ * 2". The two arrangements agree wherever C0 reaches 2 and part company
+ * where it cannot, so a line of one or two characters keeps an adjustment
+ * this chip never gives it — and an attempt at that owes care, because the
+ * disarm here sits at the character after the chip's and would leave a
+ * three-character line holding one too. What such an adjustment then does
+ * is a second thing owed and a narrower one: ch. 13.2.1 and ch. 13.2.5 give
+ * the line and then stop — "the additional management then lasts 1 line of
+ * 2 usec before ceasing (C4+1, C9=0)" — where this chip tests before giving
+ * and so gives none. The comparison itself is not in doubt: ch. 13.2.4's
+ * reminder governs it, and Shaker's graded E (1) and E (6) hold it to that,
+ * the first on the branch where C9 is zeroed and the second where it
+ * climbs. Not yet, then: both of those; the cursor, its own skew and the
+ * lightpen, no host here wiring those pins; the per-type divergences; the
+ * rest of what ch. 13.2.1 gives a line's first three microseconds — the
+ * counter updates those characters schedule for a later one. Every other
+ * comparison is made where it stands. Two of the border's rules move
+ * DISPLAY ENABLE inside a character — the byte of border at C0=R0 on a line
+ * where R1 was never reached and no skew stands ready to defer it to a
+ * whole character of its own (ch. 17.6.2, 19.2.4), and the byte-by-byte
+ * alternation an R6 of 0 makes on a frame's first line (ch. 18.3.2) — and
+ * both are here, which is why a tick reports that pin for each of the two
+ * bytes a character is drawn from rather than once.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
