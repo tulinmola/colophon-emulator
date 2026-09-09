@@ -23,6 +23,7 @@ static const uint8_t writable_bits[18] = {
 void crtc_init(crtc_t *crtc) {
   *crtc = (crtc_t){0};
   crtc->vsync_armed = true;
+  crtc->c9_processing_managed = true;
 }
 
 /* Moving C4 lifts the VSYNC block, because the comparison with R7 has
@@ -139,8 +140,6 @@ static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
   return c9_vma(crtc) == (interlace_video_asked(crtc) ? r9_with_parity(crtc) : crtc->registers[9]);
 }
 
-/* C3h counts VSYNC scanlines on its 4 bits, so a width of 0 runs the full 16
-   (ch. 6.1.2). */
 /* A frame begins where the last one is done with, whatever the counters
    read on the way: C4 of 127 carries the interlace line itself to a C0, C4
    and C9 all zero, and a frame that read its own head off those would renew
@@ -153,8 +152,29 @@ static void begin_frame(crtc_t *crtc) {
   enter_character_row(crtc, 0);
 }
 
+/* A line that never reaches C0=1 leaves C9's management disabled, and then
+   "all of the CRTC counters are frozen as long as R0=0" (ch. 13.2.1) — the
+   VSYNC's line counter with them, which is why a VSYNC begun there "is not
+   deactivated if R3h was worth 1" (ch. 16.4.1.2). One thing still lands:
+   the C4 increment the last managed boundary armed, and once only, because
+   "this increment is deactivated because it has taken place" (ch. 13.2.4).
+   In a line that does reach C0=1 the arming and the landing fall on the
+   same boundary, so nothing here is felt. */
 static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
+  if (!crtc->c9_processing_managed) {
+    if (crtc->c4_increment_armed) {
+      crtc->c4_increment_armed = false;
+      enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
+    }
+    /* The one register the freeze does not shut out: "updates to registers
+       R4, R5 and R9 are no longer considered as long as R0=0. On the other
+       hand, R8 continues to be considered each time C0=0" (ch. 13.2.1). */
+    crtc->interlace_video_mode = interlace_video_asked(crtc);
+    return;
+  }
+  /* C3h counts VSYNC scanlines on its 4 bits, so a width of 0 runs the full
+     16 (ch. 6.1.2). */
   if (crtc->vsync_began_mid_line) {
     /* A VSYNC that began away from the head of a line has its counter
        initialized at the next C0=0 rather than advanced there, which leaves
@@ -215,6 +235,16 @@ static void enter_scanline(crtc_t *crtc) {
      the C9/R9 test of the line" (ch. 19.8.1), which is what keeps the
      raster address from moving under a line already being drawn. */
   crtc->interlace_video_mode = interlace_video_asked(crtc);
+
+  /* What the next boundary would do to C4, tested here as the chip tests it
+     on the characters C0 names 0, 1 and 2, and kept against a boundary that
+     finds C9 frozen (ch. 13.2.4). It must ask what the body above asks, or
+     it does not predict it: an adjustment moves C4 once for all its lines
+     together, "and in additional management one only once if C4 was worth
+     R4" (ch. 13.2.1). */
+  crtc->c4_increment_armed =
+      row_is_on_its_last_scanline(crtc) && (!crtc->in_vertical_adjustment || crtc->c4 == r[4]);
+  crtc->c9_processing_managed = false;
 }
 
 /* C0 names the character being drawn and holds it for the whole of that
@@ -240,6 +270,11 @@ static void enter_character(crtc_t *crtc) {
   }
   if (crtc->c0 != r[0]) {
     crtc->c0++;
+    if (crtc->c0 == 1) {
+      /* "C9 processing management ... would in principle be activated on
+         C0=1 if C0 succeeded in reaching this value" (ch. 13.2.4). */
+      crtc->c9_processing_managed = true;
+    }
     if (crtc->c0 == 0) {
       /* R0 was moved under C0 and the counter came back the long way. */
       crtc->c0_reached_r0 = false;
@@ -513,9 +548,11 @@ static uint64_t pins_of(const crtc_t *crtc) {
    over VSYNC management" — the case that turns on it is an R7 of 0, where
    the equality and the switch fall on the same character (ch. 19.7.2). */
 static void settle_parity(crtc_t *crtc) {
-  if (crtc->c0 == 0 && crtc->c4 == 0 && crtc->c9 == 0) {
+  bool on_the_frame_head = crtc->c0 == 0 && crtc->c4 == 0 && crtc->c9 == 0;
+  if (on_the_frame_head && !crtc->stood_on_the_frame_head) {
     crtc->parity_frame = crtc->parity_r6;
   }
+  crtc->stood_on_the_frame_head = on_the_frame_head;
   if (crtc->c4 == crtc->registers[6]) {
     crtc->parity_r6 = !crtc->parity_frame;
   }

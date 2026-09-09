@@ -44,13 +44,23 @@
  * at the next C0=0, so a line too short to reach C0=2 costs the next one
  * its VSYNC and spends the equality besides; and an equality made by hand
  * at a line's head is a blocked VSYNC rather than a VSYNC, where past C0=1
- * it triggers where it stands (ch. 16.4.1.1). Not yet: the cursor, its own
- * skew and the lightpen, no host here wiring those pins; the per-type
- * divergences; the rest of what ch. 13.2.1 gives a line's first three
- * microseconds — the counter updates those characters schedule for a later
- * one. the freezes an R0 of 0 works on the counters (ch. 13.2.3, 13.2.4,
- * 16.4.1.2), so that a VSYNC begun on such a line ends on R3's count here
- * where the chip's would not end at all. Every other comparison is made
+ * it triggers where it stands (ch. 16.4.1.1). A line of one character never
+ * reaches C0=1, so "C9 processing management" is never enabled again and
+ * C4, C9 and the VSYNC's own line count freeze where they stand, which is
+ * why a pulse begun there never ends; the arming the last managed line made
+ * still lands, and a C4 increment is all of it that can, once (ch. 13.2.1,
+ * 13.2.4, 16.4.1.2). The HSYNC's width is counted per character rather than
+ * per line and goes on counting. R4 and R9 written under a frozen chip are
+ * read here, where ch. 13.2.1 says they are no longer considered and ch.
+ * 13.2.4 then wants them for the last line it assesses at C0=0; the chapter
+ * is in two minds and this is our reading. Not yet: what a frame does on
+ * coming out of that freeze, where ch. 13.2.4 has C9 measured against R5
+ * rather than R9 for the rest of it because C0=2 never came to cancel the
+ * additional management; the two-microsecond adjustment an R0 of 1 gives
+ * instead (ch. 13.2.1); the cursor, its own skew and the lightpen, no host
+ * here wiring those pins; the per-type divergences; the rest of what ch.
+ * 13.2.1 gives a line's first three microseconds — the counter updates
+ * those characters schedule for a later one. Every other comparison is made
  * where it stands. Two of the border's rules move DISPLAY ENABLE inside a
  * character — the byte of border at C0=R0 on a line where R1 was never
  * reached and no skew stands ready to defer it to a whole character of its
@@ -147,6 +157,11 @@ typedef struct {
      C4/R6 comparison is read for DISPLAY ENABLE (ch. 18.2.1); the two part
      company only for an R6 written mid-frame onto the row the chip already
      stands on, and nothing we can run grades that. */
+  /* Whether the chip stood on a frame's first character last time it was
+     asked. ParityFrame turns as that character is entered (ch. 19.5.2), and
+     a chip frozen on it enters nothing: without this the parity would turn
+     under a still picture every microsecond. */
+  bool stood_on_the_frame_head;
   bool parity_frame;
   bool parity_r6;
   /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a
@@ -172,6 +187,16 @@ typedef struct {
      raised it, so this chip wakes holding it, which is the state a chip
      that has been running is in. */
   bool vsync_armed;
+  /* "C9 processing management", which ch. 13.2.4 has the chip disable at
+     C0=0 and enable again at C0=1, so that a line of one character leaves
+     it disabled and C4, C9 and the VSYNC's line count frozen where they
+     stand. It wakes standing for the same reason the one above does. */
+  bool c9_processing_managed;
+  /* And the one thing that still lands while it is disabled: "if C9 had
+     reached R9 on the first C0=0, then the reset of C9 had been armed as
+     well as the increment to C4. With C9 being frozen, only C4 will
+     increment" (ch. 13.2.4). */
+  bool c4_increment_armed;
   /* A VSYNC can begin anywhere in a line — where R7 is written the value C4
      already holds, and on every even frame of an interlace mode. C3h is
      then initialized at the next C0=0 instead of being advanced there, so
@@ -205,7 +230,8 @@ typedef struct {
 
 /* Power-on. Real silicon leaves the register file undefined; zeroes here,
  * for determinism, which leaves the chip before a line's first character —
- * with the VSYNC's authorization the one state that wakes standing. */
+ * with the VSYNC's authorization and the management of C9 the two states
+ * that wake standing. */
 void crtc_init(crtc_t *crtc);
 
 /* Advance one character clock. Returns the output pins. */

@@ -1901,10 +1901,11 @@ int main(int argc, char **argv) {
   fprintf(file, "this reader can score, or because it names silicon's value only where the\n");
   fprintf(file, "machine differs from it. A group can also be graded in part: where a row\n");
   fprintf(file, "carries more than one test, the one whose value stands nearest the\n");
-  fprintf(file, "expectation is the one scored. It\n");
-  fprintf(file, "was run and kept, not skipped. A line marked ! is a test this machine\n");
-  fprintf(file, "failed: either the module said so, or the machine's value differs from the\n");
-  fprintf(file, "one Longshot's silicon produced.\n\n");
+  fprintf(file, "expectation is the one scored. A group that got no further than its\n");
+  fprintf(file, "module's menu stands as \"showed only the menu\": it was run and kept, not\n");
+  fprintf(file, "skipped. A line marked ! is a test this machine failed: either the\n");
+  fprintf(file, "module said so, or the machine's value differs from the one Longshot's\n");
+  fprintf(file, "silicon produced.\n\n");
   fprintf(file, "That last kind is worth knowing about: such a group grades itself while the\n");
   fprintf(file, "machine is wrong and prints its measurement alone once it is right, so it\n");
   fprintf(file, "leaves the tally above by being agreed with. A group falling out of that\n");

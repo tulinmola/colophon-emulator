@@ -962,6 +962,165 @@ static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
   TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
 }
 
+/* The management has no more defined a start than the VSYNC's permission
+   does, and this chip wakes holding it — a chip that has been running has
+   passed C0=1 more times than anyone can count. It shows only where R0 is
+   0 from the first character, which is what power-on leaves it: one
+   boundary lands, and then the freeze. */
+static void the_chip_wakes_with_its_counters_managed(void) {
+  crtc_init(&crtc);
+  write_register(9, 7); /* a row of eight lines, so C9 is what the boundary moves */
+  for (int character = 0; character < 16; character++) { /* a dozen and more */
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c9, 1);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
+/* A line of one character never reaches C0=1, so "C9 processing management"
+   is never enabled again and "all of the CRTC counters are frozen as long as
+   R0=0" (ch. 13.2.1, 13.2.4). What the last managed line had already decided
+   still lands, and only one part of it can: "if C9 had reached R9 on the
+   first C0=0, then the reset of C9 had been armed as well as the increment
+   to C4. With C9 being frozen, only C4 will increment", and once only,
+   "because it has taken place". */
+static void a_line_of_one_character_freezes_the_counters(void) {
+  static const struct {
+    uint8_t from_c9; /* the row's scanline when R0 is taken to 0 */
+    uint8_t at_c0;   /* and the character the write is made on */
+    uint8_t settles_c4;
+    uint8_t settles_c9;
+  } cases[] = {
+      /* Past C0=1, so the management still stands and one boundary runs
+         managed before the freeze takes. */
+      {3, 5, 10, 4},
+      {6, 5, 11, 7},
+      /* And on C0=0 itself, where no boundary runs managed at all and the
+         armed increment is the whole of what happens. */
+      {7, 0, 11, 7},
+  };
+
+  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
+    program_standard();
+    TEST_CHECK(run_to_row(10));
+    run_scanlines(cases[index].from_c9);
+    run_characters(cases[index].at_c0);
+    write_register(0, 0);
+    if (cases[index].at_c0 != 0) {
+      /* C0 stood past 0 when R0 became 0, so it climbs to its own top and
+         comes back the long way; that wrap is the first C0=0 with R0=0. */
+      for (int character = 0; character < 400 && crtc.c0 != 0; character++) {
+        crtc_tick(&crtc);
+      }
+      TEST_CHECK(crtc.c0 == 0);
+    }
+    for (int character = 0; character < 8; character++) { /* well past a second */
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c4, cases[index].settles_c4);
+    TEST_EQUAL(crtc.c9, cases[index].settles_c9);
+  }
+}
+
+/* The VSYNC's line counter is frozen with the rest of them, which is what
+   leaves a pulse begun on such a line running for ever: "the VSYNC line
+   counter C3h is frozen, and the VSYNC is not deactivated if R3h was worth
+   1 (because C3h can no longer reach R3h)". A line of two characters keeps
+   its management, so there C3h counts and the pulse "will have lasted 2
+   µsec in total" (ch. 16.4.1.2). */
+static void a_line_of_one_character_leaves_a_vsync_running_where_two_do_not(void) {
+  for (uint8_t narrow_r0 = 0; narrow_r0 <= 1; narrow_r0++) {
+    program_standard();
+    /* R3h of 1: one line of VSYNC, over the HSYNC width R3l already held. */
+    write_register(3, 0x1E);
+    uint64_t pins;
+    do {
+      pins = crtc_tick(&crtc);
+    } while (!(pins & CRTC_VSYNC) || crtc.c0 != 0);
+    write_register(0, narrow_r0);
+    if (narrow_r0 == 0) {
+      /* Eight times over the one line R3h asked for, and still running. */
+      for (int character = 0; character < 8 * SCANLINE; character++) {
+        TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
+      }
+    } else {
+      TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC); /* the second of its two */
+      TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
+    }
+  }
+}
+
+/* The freeze shuts out the registers that feed the counters — "updates to
+   registers R4, R5 and R9 are no longer considered as long as R0=0" — but
+   not R8: "on the other hand, R8 continues to be considered each time
+   C0=0" (ch. 13.2.1). So the interlace video mode's doubling is taken up
+   under a frozen chip, and the raster address moves though no counter
+   does. */
+static void a_frozen_chip_still_reads_r8(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(10));
+  run_scanlines(3);
+  run_characters(5);
+  write_register(0, 0);
+  for (int character = 0; character < 400 && crtc.c0 != 0; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(crtc.c0 == 0);
+  TEST_EQUAL(crtc_ra(crtc_tick(&crtc)), 4); /* C9, frozen where it landed */
+  write_register(8, 3);
+  uint8_t raster = 0;
+  for (int character = 0; character < 8; character++) {
+    raster = crtc_ra(crtc_tick(&crtc));
+  }
+  TEST_EQUAL(raster, 8); /* the same C9, doubled */
+}
+
+/* An adjustment moves C4 once for all its lines together, "and in
+   additional management one only once if C4 was worth R4" (ch. 13.2.1), so
+   what the freeze keeps against the next boundary has to ask the same
+   question the boundary itself asks. A chip that armed on the row's last
+   scanline alone would move C4 a second time under a still picture. */
+static void a_frozen_adjustment_moves_c4_no_further(void) {
+  program_standard();
+  write_register(5, 20);
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.in_vertical_adjustment && crtc.c9 == 7 && crtc.c4 == 39 && crtc.c0 == 0) {
+      break;
+    }
+  }
+  TEST_EQUAL(crtc.c4, 39); /* R4+1, and there it stays for the whole of it */
+  write_register(0, 0);
+  for (int character = 0; character < 8; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c4, 39);
+}
+
+/* ParityFrame turns as a frame's first character is entered (ch. 19.5.2),
+   which is an event and not a comparison standing: a chip frozen on that
+   character enters nothing more, and its parity — which the raster address
+   and the VSYNC's placement both read — must hold with the counters. */
+static void a_chip_frozen_on_a_frame_head_keeps_its_parity(void) {
+  program_standard();
+  write_register(6, 0);
+  write_register(8, 3);
+  crtc_tick(&crtc); /* the priming tick draws no character */
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c4 == 0 && crtc.c9 == 0 && crtc.c0 == 0) {
+      break;
+    }
+  }
+  TEST_EQUAL(crtc.c0, 0);
+  write_register(0, 0);
+  bool parity = crtc.parity_frame;
+  for (int character = 0; character < 20; character++) {
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.parity_frame, parity);
+  }
+}
+
 /* ParityFrame is settled before the VSYNC is looked at, which only shows
    where R7 is 0 and the two fall on the same character: the frame that has
    just become even takes a MID-VSYNC in its own first line (ch. 19.7.2). */
@@ -1811,6 +1970,12 @@ int main(void) {
   TEST_RUN(an_r0_restored_before_c0_2_keeps_the_vsync);
   TEST_RUN(a_vsync_lost_to_a_short_line_stays_lost_for_that_row);
   TEST_RUN(a_line_of_three_characters_still_arms_the_vsync);
+  TEST_RUN(the_chip_wakes_with_its_counters_managed);
+  TEST_RUN(a_line_of_one_character_freezes_the_counters);
+  TEST_RUN(a_line_of_one_character_leaves_a_vsync_running_where_two_do_not);
+  TEST_RUN(a_frozen_chip_still_reads_r8);
+  TEST_RUN(a_frozen_adjustment_moves_c4_no_further);
+  TEST_RUN(a_chip_frozen_on_a_frame_head_keeps_its_parity);
   TEST_RUN(an_r7_and_r4_of_zero_give_one_vsync_and_no_more);
   TEST_RUN(an_r7_written_at_a_lines_head_blocks_instead_of_triggering);
   TEST_RUN(an_r7_written_on_an_unarmed_line_still_triggers);
