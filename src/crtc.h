@@ -12,11 +12,12 @@
  * (HD6845S/UM6845) performs it — its register widths, its readable set, its
  * VMA/VMA' reload rules, the counter widths a program can overrun, the last
  * line decided while C0 is 0 or 1, the vertical adjustment spent on C9 —
- * asked for by R5, taken back where R5 is cancelled in time, and opened by
- * an R4 or R9 moved under a standing last line — and the block that stops
- * one VSYNC condition serving twice. Of R8 everything but the cursor's skew
- * is read: the frame parity this chip keeps in two states rather than one,
- * the line either interlace mode adds to the end of an even frame, the
+ * armed on every last line, taken back where R5 is cancelled in time or the
+ * last line itself is unmade, opened by an R4 or R9 moved under a standing
+ * last line, and past taking back once begun — and the block that stops one
+ * VSYNC condition serving twice. Of R8 everything but the cursor's skew is
+ * read: the frame parity this chip keeps in two states rather than one, the
+ * line either interlace mode adds to the end of an even frame, the
  * MID-VSYNC that holds an even frame's VSYNC back to the middle of its line
  * — which, beginning away from a line's head, then runs longer than R3 asks
  * for — and the counting of the interlace video mode, where the raster
@@ -53,27 +54,37 @@
  * per line and goes on counting. R4 and R9 written under a frozen chip are
  * read here, where ch. 13.2.1 says they are no longer considered and ch.
  * 13.2.4 then wants them for the last line it assesses at C0=0; the chapter
- * is in two minds and this is our reading. The adjustment is armed here by
- * an R5 above 0, by the interlace line, or by the exception of ch.
- * 10.3.1.2, where ch. 12.1 gives the chip a window — "this management of
- * additional line(s) is managed when C0<2" — in which ch. 13.2.5 has it arm
- * by default on any last line and disarm at C0=2 "in particular by testing
- * the value of R5"; ch. 11.2.2 gives what follows, including that the
- * adjustment "can also become true ... if C0 can never reach 2 because R0 <
- * 2". The two arrangements agree wherever C0 reaches 2 and part company
- * where it cannot, so a line of one or two characters keeps an adjustment
- * this chip never gives it — and an attempt at that owes care, because the
- * disarm here sits at the character after the chip's and would leave a
- * three-character line holding one too. What such an adjustment then does
- * is a second thing owed and a narrower one: ch. 13.2.1 and ch. 13.2.5 give
- * the line and then stop — "the additional management then lasts 1 line of
- * 2 usec before ceasing (C4+1, C9=0)" — where this chip tests before giving
- * and so gives none. The comparison itself is not in doubt: ch. 13.2.4's
- * reminder governs it, and Shaker's graded E (1) and E (6) hold it to that,
- * the first on the branch where C9 is zeroed and the second where it
- * climbs. Not yet, then: both of those; the cursor, its own skew and the
- * lightpen, no host here wiring those pins; the per-type divergences; the
- * rest of what ch. 13.2.1 gives a line's first three microseconds — the
+ * is in two minds and this is our reading. The adjustment is armed as the
+ * chip arms it: ch. 12.1 gives the window, "this management of additional
+ * line(s) is managed when C0<2", ch. 13.2.5 has the chip "assess whether it
+ * is on the last line, and if so, arm an internal flag by default" there,
+ * and leaves C0=2 to "assess the conditions for disarming ... in particular
+ * by testing the value of R5". That assessment takes an arm back on R5
+ * alone, so a last line unmade at C0=0 unmakes the arming with it (ch.
+ * 12.2) — the interlace line is left out, its question being put "on the
+ * last line of a frame" (ch. 11.9) and this one no longer being one, which
+ * is our reading and ungraded; an R5 above 0 still admits a line whose C4
+ * has gone past R4, which the assessment cannot see; and an adjustment
+ * already begun is past both (ch. 13.2.6), which is what keeps ch.
+ * 10.3.1.2's exception alive now the disarm asks only what ch. 13.2.5 says
+ * it asks. A line too short to reach the disarm keeps what it was armed
+ * with, as ch. 11.2.2 and ch. 12.2 have it at "R0 < 2" — the disarm being
+ * read at C0=3, where a write made at C0=2 has landed, and again at the
+ * head of the line after one of three characters, which has no such
+ * character of its own. Not yet: what such a line then draws. Ch. 13.2.1
+ * and ch. 13.2.5 give the line and stop after it — "the additional
+ * management then lasts 1 line of 2 usec before ceasing (C4+1, C9=0)" —
+ * where this chip tests before giving and so gives none; the comparison
+ * itself is ch. 13.2.4's and is not in doubt, Shaker's graded E (1) and E
+ * (6) holding it to that. Nor yet ch. 13.2.6's own worked table, where an
+ * adjustment armed under an R0 of 0 survives the widening: marking it begun
+ * where the frozen C4 increment lands reproduces the table, and takes
+ * Shaker's graded C (P) line with it — but that line is lost to boot phase
+ * rather than to the model, a thousand idle characters before the disc is
+ * read losing it just as surely on an unaltered chip, so what stands in the
+ * way is the record and not the reading. Also: the cursor, its own skew and
+ * the lightpen, no host here wiring those pins; the per-type divergences;
+ * the rest of what ch. 13.2.1 gives a line's first three microseconds — the
  * counter updates those characters schedule for a later one. Every other
  * comparison is made where it stands. Two of the border's rules move
  * DISPLAY ENABLE inside a character — the byte of border at C0=R0 on a line
@@ -81,7 +92,8 @@
  * whole character of its own (ch. 17.6.2, 19.2.4), and the byte-by-byte
  * alternation an R6 of 0 makes on a frame's first line (ch. 18.3.2) — and
  * both are here, which is why a tick reports that pin for each of the two
- * bytes a character is drawn from rather than once.
+ * bytes a character is drawn from rather than
+ * once.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -156,7 +168,13 @@ typedef struct {
      rest of the line, so a register written afterwards cannot take it back
      (ch. 10.3.1.2). */
   bool last_line;
-  bool in_vertical_adjustment;
+  bool vertical_adjustment_armed;
+  /* Whether an adjustment has actually begun, as against being armed for
+     one: "the additional management being in progress, it can no longer be
+     cancelled on C0=2" (ch. 13.2.6), which is the character this file reads
+     at C0=3, where a write made at C0=2 has landed, and again at the head of
+     the line after one of three characters. */
+  bool vertical_adjustment_in_progress;
 
   /* Frame parity, which the Compendium keeps in two states rather than one
      (ch. 19.5.2). ParityFrame is this frame's, taken from ParityR6 at the

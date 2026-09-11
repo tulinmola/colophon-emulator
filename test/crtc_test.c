@@ -616,10 +616,10 @@ static void an_r6_of_zero_keeps_the_line_on_the_even_frame(void) {
    had its line has had it, however the adjustment carrying it ends, and a
    frame that has not must still get one — so what spends the line is
    renewed at a frame's first character and nowhere else. A chip that
-   renewed it on the disarm would let one frame take two lines; one that
+   renewed it when the adjustment ended would let one frame take two lines; one that
    never renewed it would withhold a later frame's without a word (ch. 11.9,
    13.2.1, 19.6.1). */
-static void a_disarmed_adjustment_cannot_take_a_second_interlace_line(void) {
+static void an_adjustment_in_progress_keeps_its_interlace_line(void) {
   program_standard();
   write_register(4, 0);
   write_register(5, 0);
@@ -631,23 +631,27 @@ static void a_disarmed_adjustment_cannot_take_a_second_interlace_line(void) {
 
   run_scanlines(4);
   characters += 4 * SCANLINE;
-  TEST_CHECK(crtc.in_vertical_adjustment);
+  TEST_CHECK(crtc.vertical_adjustment_armed);
   TEST_CHECK(crtc.interlace_line_given);
   TEST_EQUAL(crtc.c4, 1); /* R4+1, incremented once for the whole of it */
 
   /* R4 and R9 moved onto the counters in time for the character C0 names 3,
-     which takes the adjustment back under a line already given. R8 is taken
-     back with them, because the disarm tests it too (ch. 13.2.1). */
+     R4 and R9 are moved back onto the counters and R8 with them, so that
+     every condition the disarm tests is in place and only the adjustment
+     already begun stands in its way. */
   write_register(4, 1);
   write_register(9, 0);
   write_register(8, 0);
   run_characters(4);
   characters += 4;
-  TEST_CHECK(!crtc.in_vertical_adjustment);
+  /* Past cancelling: "the additional management being in progress, it can
+     no longer be cancelled on C0=2" (ch. 13.2.6). A line earlier the same
+     writes would have taken the arming back; here nothing does. */
+  TEST_CHECK(crtc.vertical_adjustment_armed);
   TEST_CHECK(crtc.interlace_line_given);
 
   /* So the frame ends with the one line it was owed — its own four and the
-     interlace line — where a chip that renewed the flag on the disarm would
+     interlace line — where a chip that renewed the flag when the adjustment ended would
      ask again and go round for another. */
   for (int character = 0; character < 4 * SCANLINE; character++) {
     if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
@@ -787,20 +791,22 @@ static void an_r4_of_127_does_not_trap_the_frame(void) {
   write_register(4, 127);
   write_register(9, 1);
   write_register(8, 1);
-  int in_the_adjustment = 0;
+  int armed_characters = 0;
   bool entered = false;
   for (long character = 0; character < 600L * SCANLINE; character++) {
     crtc_tick(&crtc);
-    if (crtc.in_vertical_adjustment) {
+    if (crtc.vertical_adjustment_armed) {
       entered = true;
-      in_the_adjustment++;
+      armed_characters++;
     } else if (entered) {
       break;
     }
   }
-  /* The whole interlace line and the C0=R0 that held the frame open for
-     it, which stands a character before the line begins. */
-  TEST_EQUAL(in_the_adjustment, SCANLINE + 1);
+  /* The interlace line and the last line before it: the chip assesses the
+     last line at C0=0 and C0=1 and "arms an internal flag by default" there
+     (ch. 12.1, 13.2.5), so the flag stands for the whole of the last line
+     and not only from the C0=R0 that asks for the interlace line. */
+  TEST_EQUAL(armed_characters, 2 * SCANLINE);
 }
 
 /* Ch. 13.2.2 puts a state between the C4/R7 equality and the VSYNC it
@@ -977,6 +983,59 @@ static void the_chip_wakes_with_its_counters_managed(void) {
   TEST_EQUAL(crtc.c4, 0);
 }
 
+/* Every last line is armed for an adjustment, whether or not anything wants
+   one — "the CRTC assesses whether it is on the last line, and if so, arms
+   an internal flag by default", C0=2 being left to "assess the conditions
+   for disarming ... in particular by testing the value of R5" (ch. 12.1,
+   13.2.5). The same assessment takes it back where the last line is unmade
+   under it: ch. 12.2 has that state "overridden if R4 or R9 is modified to
+   C0==0 so that C4 becomes different from R4", and that the arming goes with
+   it is our reading of that rather than its own words. */
+static void every_last_line_is_armed_and_an_unmade_one_disarmed(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);                           /* the last line, C0=0 drawn */
+  TEST_CHECK(crtc.vertical_adjustment_armed); /* armed, though R5 asks nothing */
+  run_characters(3);                          /* past the C0=3 the disarm reads */
+  TEST_CHECK(!crtc.vertical_adjustment_armed);
+
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  write_register(4, 39); /* in force from C0=1, unmaking the last line */
+  crtc_tick(&crtc);
+  TEST_CHECK(!crtc.vertical_adjustment_armed);
+}
+
+/* A line of three characters still reaches its disarm, though the character
+   this file reads it at does not exist there: ch. 11.2.2 and ch. 12.2 part
+   the narrow lines at "R0 < 2", so an R0 of 2 is on the wide side and the
+   frame ends where it would have ended. */
+static void a_line_of_three_characters_still_reaches_its_disarm(void) {
+  program_standard();
+  write_register(4, 1);
+  write_register(5, 0);
+  write_register(9, 1);
+  TEST_CHECK(run_to_row(1));
+  run_scanlines(1); /* C4=1=R4, C9=1=R9: the frame's last line */
+  write_register(0, 2);
+  run_characters(2);
+  write_register(4, 0); /* so the counters cannot end the frame on their own */
+  int lines = 0;
+  for (int character = 0; character < 200; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c0 == 0) {
+      lines++;
+      if (crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+  }
+  TEST_EQUAL(lines, 1); /* the next line is the frame's first */
+}
+
 /* A line of one character never reaches C0=1, so "C9 processing management"
    is never enabled again and "all of the CRTC counters are frozen as long as
    R0=0" (ch. 13.2.1, 13.2.4). What the last managed line had already decided
@@ -1085,7 +1144,7 @@ static void a_frozen_adjustment_moves_c4_no_further(void) {
   write_register(5, 20);
   for (long character = 0; character < 400L * SCANLINE; character++) {
     crtc_tick(&crtc);
-    if (crtc.in_vertical_adjustment && crtc.c9 == 7 && crtc.c4 == 39 && crtc.c0 == 0) {
+    if (crtc.vertical_adjustment_armed && crtc.c9 == 7 && crtc.c4 == 39 && crtc.c0 == 0) {
       break;
     }
   }
@@ -1961,7 +2020,7 @@ int main(void) {
   TEST_RUN(an_interlace_mode_adds_a_line_to_the_even_frames);
   TEST_RUN(an_interlace_mode_holds_the_even_frames_vsync_back);
   TEST_RUN(an_r6_of_zero_keeps_the_line_on_the_even_frame);
-  TEST_RUN(a_disarmed_adjustment_cannot_take_a_second_interlace_line);
+  TEST_RUN(an_adjustment_in_progress_keeps_its_interlace_line);
   TEST_RUN(the_interlace_line_is_asked_for_at_c0_r0);
   TEST_RUN(an_adjustment_line_still_decides_the_interlace_line);
   TEST_RUN(the_disarm_tests_the_interlace_line_as_well_as_r5);
@@ -1971,6 +2030,8 @@ int main(void) {
   TEST_RUN(a_vsync_lost_to_a_short_line_stays_lost_for_that_row);
   TEST_RUN(a_line_of_three_characters_still_arms_the_vsync);
   TEST_RUN(the_chip_wakes_with_its_counters_managed);
+  TEST_RUN(every_last_line_is_armed_and_an_unmade_one_disarmed);
+  TEST_RUN(a_line_of_three_characters_still_reaches_its_disarm);
   TEST_RUN(a_line_of_one_character_freezes_the_counters);
   TEST_RUN(a_line_of_one_character_leaves_a_vsync_running_where_two_do_not);
   TEST_RUN(a_frozen_chip_still_reads_r8);

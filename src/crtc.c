@@ -147,6 +147,7 @@ static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
    line to a frame (ch. 11.9), and the frame it was given to is what spends
    it, not the adjustment that carried it. */
 static void begin_frame(crtc_t *crtc) {
+  crtc->vertical_adjustment_in_progress = false;
   crtc->c9 = 0;
   crtc->interlace_line_given = false;
   enter_character_row(crtc, 0);
@@ -162,6 +163,14 @@ static void begin_frame(crtc_t *crtc) {
    same boundary, so nothing here is felt. */
 static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
+  /* The disarm is read at C0=3 because a write made at C0=2 lands there, and
+     a line of three characters has no C0=3 to read it at — so it is read
+     here, where that write has landed just the same. The chip parts its
+     narrow lines at "R0 < 2" (ch. 11.2.2, 12.2) and so does this. */
+  if (r[0] == 2 && r[5] == 0 && !interlace_line_asked_for(crtc) &&
+      !crtc->vertical_adjustment_in_progress) {
+    crtc->vertical_adjustment_armed = false;
+  }
   if (!crtc->c9_processing_managed) {
     if (crtc->c4_increment_armed) {
       crtc->c4_increment_armed = false;
@@ -190,7 +199,7 @@ static void enter_scanline(crtc_t *crtc) {
     }
   }
 
-  if (crtc->in_vertical_adjustment) {
+  if (crtc->vertical_adjustment_armed) {
     /* R5 is a quantity of lines, and C9 is compared with R9 before its
        increment: the line the chip would move to becomes the adjustment's
        own unless that line has reached R5 (ch. 13.2.4). Once C4 has left R4
@@ -208,14 +217,16 @@ static void enter_scanline(crtc_t *crtc) {
          the last of them (ch. 19.6.1). C4 has already been incremented once
          for all the additional lines there are. */
       crtc->interlace_line_given = true;
+      crtc->vertical_adjustment_in_progress = true;
       crtc->c9 = next_c9;
       if (row_ended_on_r4) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       }
     } else if (r5_lines_spent || crtc->interlace_line_given) {
-      crtc->in_vertical_adjustment = false;
+      crtc->vertical_adjustment_armed = false;
       begin_frame(crtc);
     } else {
+      crtc->vertical_adjustment_in_progress = true;
       crtc->c9 = next_c9;
       if (row_ended_on_r4) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
@@ -243,7 +254,7 @@ static void enter_scanline(crtc_t *crtc) {
      together, "and in additional management one only once if C4 was worth
      R4" (ch. 13.2.1). */
   crtc->c4_increment_armed =
-      row_is_on_its_last_scanline(crtc) && (!crtc->in_vertical_adjustment || crtc->c4 == r[4]);
+      row_is_on_its_last_scanline(crtc) && (!crtc->vertical_adjustment_armed || crtc->c4 == r[4]);
   crtc->c9_processing_managed = false;
 }
 
@@ -319,13 +330,34 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      comparator makes it so everywhere. */
   if (crtc->c0 == 2 && crtc->last_line &&
       (crtc->c4 != r[4] || !row_is_on_its_last_scanline(crtc))) {
-    crtc->in_vertical_adjustment = true;
+    /* "The current line becomes the 'first' adjustment line" (ch. 10.3.1.2),
+       and a line already begun is past the disarm below (ch. 13.2.6). The
+       arming itself was done on the characters C0 named 0 and 1. */
+    crtc->vertical_adjustment_in_progress = true;
   }
-  /* R5 counts on the characters C0 names 0, 1 and 2, and a write lands in
-     the microsecond after the tick that named it, so the last tick that
-     sees one in time is the one naming 3 (ch. 11.2.2, 12.2, 13.2.1). */
+  /* The chip arms on any last line and asks what it is for afterwards: ch.
+     12.1 gives the window, "this management of additional line(s) is managed
+     when C0<2", ch. 13.2.5 what happens in it — "the CRTC assesses whether
+     it is on the last line, and if so, arms an internal flag by default" —
+     and leaves C0=2 to "assess the conditions for disarming ... in
+     particular by testing the value of R5". The assessment takes an arm back
+     on R5 alone, which is what lets a last line unmade at C0=0 unmake the
+     arming with it (ch. 12.2). The interlace line is left out: its own
+     question is put "on the last line of a frame" (ch. 11.9), and a line
+     whose last-line state has just been unmade is not one. That reading is
+     ours, and nothing we can run grades it. */
+  if (crtc->c0 < 2 && crtc->last_line) {
+    crtc->vertical_adjustment_armed = true;
+  } else if (crtc->c0 < 2 && r[5] == 0 && !crtc->vertical_adjustment_in_progress) {
+    crtc->vertical_adjustment_armed = false;
+  }
+  /* R5 admits a line whose C4 has already gone past R4, which that
+     assessment cannot see. It counts on the characters C0 names 0, 1 and 2,
+     and a write lands in the microsecond after the tick that named it, so
+     the last tick that sees one in time is the one naming 3 (ch. 11.2.2,
+     12.2, 13.2.1). */
   if (crtc->c0 < 4 && r[5] != 0 && crtc->c4 >= r[4] && row_is_on_its_last_scanline(crtc)) {
-    crtc->in_vertical_adjustment = true;
+    crtc->vertical_adjustment_armed = true;
   }
   /* And the same deadline read the other way: a line armed on an R5 that
      the same line goes on to cancel is disarmed, and the last line it stood
@@ -333,15 +365,14 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      the things that ask for an additional line — "the additional management
      state is deactivated if there was no line programmed (R5=0 or no
      'Interlace Line'" — so a frame the interlace still asks a line of keeps
-     its state whatever R5 has become (ch. 13.2.1, 13.2.5). It reaches only
-     a line whose counters still stand on their limits, which is the line
-     the frame could end on and also the first line of an adjustment begun
-     by the clause above — the document gives no warrant for taking that one
-     back, and nothing in Shaker asks. A line the R5 arm admitted with C4
-     already past R4 it cannot reach at all. */
-  if (crtc->c0 == 3 && r[5] == 0 && !interlace_line_asked_for(crtc) && crtc->c4 == r[4] &&
-      row_is_on_its_last_scanline(crtc)) {
-    crtc->in_vertical_adjustment = false;
+     its state whatever R5 has become (ch. 13.2.1, 13.2.5). It asks nothing
+     of the counters, so it reaches a line the R5 arm admitted with C4
+     already past R4 as readily as any other. What it cannot reach is an
+     adjustment already begun (ch. 13.2.6), which is the work the counter
+     test that stood here before was doing by accident. */
+  if (crtc->c0 == 3 && r[5] == 0 && !interlace_line_asked_for(crtc) &&
+      !crtc->vertical_adjustment_in_progress) {
+    crtc->vertical_adjustment_armed = false;
   }
   /* The line interlace adds is additional-line handling too, and asks for
      no R5 at all (ch. 19.6.1). Ch. 11.9 gives it a deadline of its own,
@@ -358,7 +389,7 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
   if (crtc->c0 == r[0]) {
     crtc->interlace_line_owed = interlace_line_asked_for(crtc);
     if (crtc->interlace_line_owed && crtc->last_line) {
-      crtc->in_vertical_adjustment = true;
+      crtc->vertical_adjustment_armed = true;
     }
   }
 }
