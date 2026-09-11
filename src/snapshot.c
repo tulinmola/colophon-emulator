@@ -146,6 +146,9 @@ bool snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const char *
     crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, bytes[AT_CRTC_REGISTERS + index]));
   }
   crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
+  /* Restoring R3 is not a write made on a character, and leaving the chip
+     believing it was would let a HSYNC through on the first tick back. */
+  cpc->crtc.r3_written_for_this_character = false;
 
   /* The control word first, because setting it clears the output latches.
      The format stores inputs for A and B, outputs for C. */

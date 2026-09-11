@@ -96,23 +96,36 @@
  * after one line is the R0=1 case's own; a line of one character keeps its
  * run instead, and "it is then R5 which controls the end ... To stop this
  * management, program R5 with C9+1" (ch. 13.2.6). Absent for want of a pin:
- * the cursor, its own skew and the light pen, which no host here wires. Not
- * yet: the two HSYNCs ch. 15.3 will not let this type place back to back —
- * "two HSYNC's cannot be contiguous if position C0=R2 is encountered when
- * C3l reaches R3l, and R3l has not been modified on this position" — nor
- * the restart that a R3l written there does allow, with C3l left standing;
- * the R0 of ch. 13.7.2 enlarged on the character C0 names 1, where the old
- * value ends the line and the new one counts C0 on; the per-type
- * divergences; the rest of what ch. 13.2.1 gives a line's first three
- * microseconds — the counter updates those characters schedule for a later
- * one. Every other comparison is made where it stands. Two of the border's
- * rules move DISPLAY ENABLE inside a character — the byte of border at
- * C0=R0 on a line where R1 was never reached and no skew stands ready to
- * defer it to a whole character of its own (ch. 17.6.2, 19.2.4), and the
- * byte-by-byte alternation an R6 of 0 makes on a frame's first line (ch.
- * 18.3.2) — and both are here, which is why a tick reports that pin for
- * each of the two bytes a character is drawn from rather than
- * once.
+ * the cursor, its own skew and the light pen, which no host here wires. Two
+ * HSYNCs cannot be contiguous on this type — "if position C0=R2 is
+ * encountered when C3l reaches R3l, and R3l has not been modified on this
+ * position" — which is what keeps a line shorter than its own sync out of
+ * the endless HSYNC the other types fall into (ch. 15.3.1, 15.3.2). A write to
+ * R3 there is the exception, taken as the modification whatever value it
+ * carries, and the sync it lets through carries the old count on rather than
+ * starting from nothing, which is where a R2.JIT HSYNC begins (ch. 15.3.3).
+ * That chapter's own example moves R2 as well and comes out right without the
+ * exception being reached at all, the new R3l carrying the old sync past its
+ * ending comparison on its own. R3l updated during a HSYNC is here in both of
+ * its halves: the write of the value C3l already holds, which stops the sync
+ * where it stands, and the smaller value, which overflows C3l instead and runs
+ * the sync round to it (ch. 14.5, 14.5.4). Not yet: the gap the R2.JIT leaves,
+ * the chip beginning the second sync "around 3.5 Pixel-M2 after the one that
+ * has just ended" where a pin reported once per character can only stay high,
+ * so the Gate Array is given one sync here where the chip gives it two; a
+ * write that changes R3l on that character, seen here by the comparison that
+ * ends the sync as well, where the chip's is not; the R0 of ch. 13.7.2
+ * enlarged on the character C0 names 1, where the old value ends the line and
+ * the new one counts C0 on; the per-type divergences; the rest of what
+ * ch. 13.2.1 gives a line's first three microseconds — the counter updates
+ * those characters schedule for a later one. Every other comparison is made
+ * where it stands. Two of the border's rules move DISPLAY ENABLE inside a
+ * character — the byte of border at C0=R0 on a line where R1 was never reached
+ * and no skew stands ready to defer it to a whole character of its own
+ * (ch. 17.6.2, 19.2.4), and the byte-by-byte alternation an R6 of 0 makes on a
+ * frame's first line (ch. 18.3.2) — and both are here, which is why a tick
+ * reports that pin for each of the two bytes a character is drawn from rather
+ * than once.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -282,6 +295,14 @@ typedef struct {
   uint16_t vma_;
 
   bool hsync;
+  /* Whether the character being drawn is the one an HSYNC ended on: "two
+     HSYNC's cannot be contiguous if position C0=R2 is encountered when C3l
+     reaches R3l, and R3l has not been modified on this position"
+     (ch. 15.3.1). */
+  bool hsync_ended_here;
+  /* Whether R3 was written in time to be read on that character, which is
+     the modification that same sentence exempts. */
+  bool r3_written_for_this_character;
   bool vsync;
 } crtc_t;
 

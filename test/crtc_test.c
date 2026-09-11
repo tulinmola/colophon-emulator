@@ -1166,6 +1166,108 @@ static void a_run_begun_under_a_stopped_picture_ends_on_r5(void) {
   TEST_EQUAL(crtc.c9, 0);
 }
 
+/* Ch. 15.3.1: "On CRTC 0, two HSYNC's cannot be contiguous if position
+   C0=R2 is encountered when C3l reaches R3l, and R3l has not been modified
+   on this position." It is what keeps a line shorter than its own sync out
+   of the endless HSYNC the other types fall into — ch. 15.3.2 sets R0=0,
+   R2=0 and R3l=1 and says "on a CRTC 0, the HSYNC will not take place. It
+   will occur on the 3rd C0=0", so the syncs alternate with the characters
+   between them. */
+static void two_hsyncs_cannot_be_contiguous(void) {
+  crtc_init(&crtc);
+  write_register(0, 0);
+  write_register(2, 0);
+  write_register(3, 0x01);
+  write_register(4, 4);
+  write_register(9, 1);
+  for (int character = 0; character < 16; character++) {
+    TEST_EQUAL((crtc_tick(&crtc) & CRTC_HSYNC) != 0, character % 2 == 0);
+  }
+
+  /* A sync four characters wide on a line of four ends where it began, so
+     the same block holds it to every other line. */
+  crtc_init(&crtc);
+  write_register(0, 3);
+  write_register(2, 0);
+  write_register(3, 0x04);
+  write_register(4, 4);
+  write_register(9, 1);
+  for (int character = 0; character < 16; character++) {
+    TEST_EQUAL((crtc_tick(&crtc) & CRTC_HSYNC) != 0, (character / 4) % 2 == 0);
+  }
+}
+
+/* And the exception, which is where a R2.JIT HSYNC begins: "on this
+   position, if C0 is again equal to R2 but R3l is modified, then a new
+   HSYNC-CRTC begins without C3l being zeroed" (ch. 15.3.3). The write is
+   what is read here, not the value it carries — the same reading ch. 16.3
+   states outright for R7, "whatever the value written" — so a rewrite of
+   the value R3l already holds reaches it, and the sync it lets through runs
+   until C3l comes round the four bits to R3l again. Nothing outside this
+   repository grades that reading: a write that changes R3l cannot be told
+   apart here, the comparison that ends the sync reading the new value on
+   the same character. */
+static void an_r3_written_in_time_carries_the_hsync_on(void) {
+  crtc_init(&crtc);
+  write_register(0, 0);
+  write_register(2, 0);
+  write_register(3, 0x04);
+  write_register(4, 4);
+  write_register(9, 1);
+  for (int character = 0; character < 4; character++) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC); /* C3l counting towards R3l */
+  }
+  write_register(3, 0x04); /* in force on the character C3l reaches it */
+  for (int character = 0; character < 16; character++) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC); /* let through, and counting on */
+  }
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_HSYNC));
+}
+
+/* Ch. 14.5: "it is possible to change the value of R3l when C3l counts,
+   which can affect the length of the HSYNC. If R3l is changed with a value
+   less than C3l, then C3l is overflowing". Ch. 14.5.4 gives the other half,
+   the one a program aims at: "if R3l is modified ... with the value of C3l
+   when C0 is at position which corresponds to C3l while R3l was greater
+   than this value, then the HSYNC stops on CRTC's 0, 1 and 2. This
+   technique is called R3.JIT". Ch. 14.5.1 draws both for this type at R2=11
+   and R3l=10, and the widths below are read off that diagram: written with
+   0, C3l runs 0 to 15 and round to 0 again; written with 1, one character
+   further. */
+static void an_r3l_written_during_a_hsync_stops_it_or_overflows(void) {
+  static const struct {
+    uint8_t written; /* the R3l in force on the sync's sixth character */
+    int characters;  /* and the width the sync comes out */
+  } cases[] = {
+      {10, 10}, /* the value it already holds, which changes nothing */
+      {5, 5},   /* R3.JIT: the value C3l stands at, and the sync stops */
+      {0, 16},  /* under it, so C3l overflows and runs round to it */
+      {1, 17},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc);
+    write_register(0, 63);
+    write_register(2, 11);
+    write_register(3, 0x8A);
+    write_register(4, 4);
+    write_register(9, 1);
+    int characters = 0;
+    bool written = false;
+    for (int character = 0; character < 40; character++) {
+      if (crtc_tick(&crtc) & CRTC_HSYNC) {
+        characters++;
+      } else if (characters > 0) {
+        break;
+      }
+      if (characters == 5 && !written) {
+        write_register(3, (uint8_t)(0x80 | cases[index].written));
+        written = true;
+      }
+    }
+    TEST_EQUAL(characters, cases[index].characters);
+  }
+}
+
 /* A line of one character never reaches C0=1, so "C9 processing management"
    is never enabled again and "all of the CRTC counters are frozen as long as
    R0=0" (ch. 13.2.1, 13.2.4). What the last managed line had already decided
@@ -2165,6 +2267,9 @@ int main(void) {
   TEST_RUN(a_freeze_on_a_last_line_begins_an_adjustment);
   TEST_RUN(a_narrow_line_draws_the_adjustment_it_cannot_disarm);
   TEST_RUN(a_run_begun_under_a_stopped_picture_ends_on_r5);
+  TEST_RUN(two_hsyncs_cannot_be_contiguous);
+  TEST_RUN(an_r3_written_in_time_carries_the_hsync_on);
+  TEST_RUN(an_r3l_written_during_a_hsync_stops_it_or_overflows);
   TEST_RUN(a_line_of_one_character_freezes_the_counters);
   TEST_RUN(a_line_of_one_character_leaves_a_vsync_running_where_two_do_not);
   TEST_RUN(a_frozen_chip_still_reads_r8);

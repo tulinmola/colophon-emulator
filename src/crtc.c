@@ -305,10 +305,12 @@ static void enter_character(crtc_t *crtc) {
   }
   const uint8_t *r = crtc->registers;
   crtc->vma = (crtc->vma + 1) & 0x3FFF;
+  crtc->hsync_ended_here = false;
   if (crtc->hsync) {
     crtc->c3l = (crtc->c3l + 1) & 0x0F;
     if (crtc->c3l == (r[3] & 0x0F)) {
       crtc->hsync = false;
+      crtc->hsync_ended_here = true;
     }
   }
   if (crtc->c0 != r[0]) {
@@ -480,9 +482,23 @@ static void authorize_vsync(crtc_t *crtc) {
    enter_scanline rather than here. */
 static void begin_syncs(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
-  if (crtc->c0 == r[2] && !crtc->hsync && (r[3] & 0x0F) != 0) {
+  /* "On CRTC 0, two HSYNC's cannot be contiguous if position C0=R2 is
+     encountered when C3l reaches R3l, and R3l has not been modified on this
+     position" (ch. 15.3.1), which is how a line shorter than its own sync
+     avoids the endless one the other types fall into: at R0=0, R2=0 and an
+     R3l of 1, "on a CRTC 0, the HSYNC will not take place. It will occur on
+     the 3rd C0=0" (ch. 15.3.2). A write to R3 there is the exception, and
+     the sync it lets through carries the old count on: "a new HSYNC-CRTC
+     begins without C3l being zeroed", which is where a R2.JIT HSYNC begins
+     (ch. 15.3.3). The write is taken as the modification whatever value it
+     carries: an OUT lands a whole byte on R3, and ch. 16.3 states that
+     reading outright for R7, "whatever the value written". */
+  bool blocked = crtc->hsync_ended_here && !crtc->r3_written_for_this_character;
+  if (crtc->c0 == r[2] && !crtc->hsync && !blocked && (r[3] & 0x0F) != 0) {
     crtc->hsync = true;
-    crtc->c3l = 0;
+    if (!crtc->hsync_ended_here) {
+      crtc->c3l = 0;
+    }
   }
   /* On an even frame in either interlace mode the VSYNC is a MID-VSYNC:
      the C4/R7 equality does not start it where it falls, but where C0
@@ -630,6 +646,9 @@ uint64_t crtc_tick(crtc_t *crtc) {
   authorize_vsync(crtc);
   begin_syncs(crtc);
   throw_display_latches(crtc);
+  /* Cleared after the phases rather than before them, a write being made
+     between two ticks and read by the second of the two. */
+  crtc->r3_written_for_this_character = false;
   return pins_of(crtc);
 }
 
@@ -658,6 +677,9 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     uint8_t mask = writable_bits[crtc->address_register];
     if (mask != 0) {
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
+      if (crtc->address_register == 3) {
+        crtc->r3_written_for_this_character = true;
+      }
       if (crtc->address_register == 7) {
         /* Writing R7 changes the comparison whatever the value written, so
            it can serve again (ch. 16.3) — except that an equality made by
