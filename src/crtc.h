@@ -49,50 +49,50 @@
  * reaches C0=1, so "C9 processing management" is never enabled again and
  * C4, C9 and the VSYNC's own line count freeze where they stand, which is
  * why a pulse begun there never ends; the arming the last managed line made
- * still lands, and a C4 increment is all of it that can, once (ch. 13.2.1,
- * 13.2.4, 16.4.1.2). The HSYNC's width is counted per character rather than
- * per line and goes on counting. R4 and R9 written under a frozen chip are
- * read here, where ch. 13.2.1 says they are no longer considered and ch.
- * 13.2.4 then wants them for the last line it assesses at C0=0; the chapter
- * is in two minds and this is our reading. The adjustment is armed as the
- * chip arms it: ch. 12.1 gives the window, "this management of additional
- * line(s) is managed when C0<2", ch. 13.2.5 has the chip "assess whether it
- * is on the last line, and if so, arm an internal flag by default" there,
- * and leaves C0=2 to "assess the conditions for disarming ... in particular
- * by testing the value of R5". That assessment takes an arm back on R5
- * alone, so a last line unmade at C0=0 unmakes the arming with it (ch.
- * 12.2) — the interlace line is left out, its question being put "on the
- * last line of a frame" (ch. 11.9) and this one no longer being one, which
- * is our reading and ungraded; an R5 above 0 still admits a line whose C4
- * has gone past R4, which the assessment cannot see; and an adjustment
- * already begun is past both (ch. 13.2.6), which is what keeps ch.
- * 10.3.1.2's exception alive now the disarm asks only what ch. 13.2.5 says
- * it asks. A line too short to reach the disarm keeps what it was armed
- * with, as ch. 11.2.2 and ch. 12.2 have it at "R0 < 2" — the disarm being
- * read at C0=3, where a write made at C0=2 has landed, and again at the
- * head of the line after one of three characters, which has no such
- * character of its own. Not yet: what such a line then draws. Ch. 13.2.1
- * and ch. 13.2.5 give the line and stop after it — "the additional
- * management then lasts 1 line of 2 usec before ceasing (C4+1, C9=0)" —
- * where this chip tests before giving and so gives none; the comparison
- * itself is ch. 13.2.4's and is not in doubt, Shaker's graded E (1) and E
- * (6) holding it to that. Nor yet ch. 13.2.6's own worked table, where an
- * adjustment armed under an R0 of 0 survives the widening: marking it begun
- * where the frozen C4 increment lands reproduces the table, and takes
- * Shaker's graded C (P) line with it — but that line is lost to boot phase
- * rather than to the model, a thousand idle characters before the disc is
- * read losing it just as surely on an unaltered chip, so what stands in the
- * way is the record and not the reading. Also: the cursor, its own skew and
- * the lightpen, no host here wiring those pins; the per-type divergences;
- * the rest of what ch. 13.2.1 gives a line's first three microseconds — the
- * counter updates those characters schedule for a later one. Every other
- * comparison is made where it stands. Two of the border's rules move
- * DISPLAY ENABLE inside a character — the byte of border at C0=R0 on a line
- * where R1 was never reached and no skew stands ready to defer it to a
- * whole character of its own (ch. 17.6.2, 19.2.4), and the byte-by-byte
- * alternation an R6 of 0 makes on a frame's first line (ch. 18.3.2) — and
- * both are here, which is why a tick reports that pin for each of the two
- * bytes a character is drawn from rather than
+ * still lands, and a C4 increment is all of it that can, once — and where
+ * that increment falls on a last line it is ch. 13.2.6's worked table
+ * beginning rather than a row ending, so the adjustment outlives the
+ * widening and C9 is measured against R5 for the rest of the frame (ch.
+ * 13.2.1, 13.2.4, 13.2.6, 16.4.1.2). Taking that up cost Shaker's C (P) its
+ * graded line, and the line is worth less than it looks: read at three boot
+ * phases in forty on a chip altered in no way at all, and at six in forty
+ * on this one, always with the same right answer. The HSYNC's width is
+ * counted per character rather than per line and goes on counting. R4 and
+ * R9 written under a frozen chip are read here, where ch. 13.2.1 says they
+ * are no longer considered and ch. 13.2.4 then wants them for the last line
+ * it assesses at C0=0; the chapter is in two minds and this is our reading.
+ * The adjustment is armed as the chip arms it: ch. 12.1 gives the window,
+ * "this management of additional line(s) is managed when C0<2", ch. 13.2.5
+ * has the chip "assess whether it is on the last line, and if so, arm an
+ * internal flag by default" there, and leaves C0=2 to "assess the
+ * conditions for disarming ... in particular by testing the value of R5".
+ * That assessment takes an arm back on R5 alone, so a last line unmade at
+ * C0=0 unmakes the arming with it (ch. 12.2) — the interlace line is left
+ * out, its question being put "on the last line of a frame" (ch. 11.9) and
+ * this one no longer being one, which is our reading and ungraded; an R5
+ * above 0 still admits a line whose C4 has gone past R4, which the
+ * assessment cannot see; and an adjustment already begun is past both (ch.
+ * 13.2.6), which is what keeps ch. 10.3.1.2's exception alive now the
+ * disarm asks only what ch. 13.2.5 says it asks. A line too short to reach
+ * the disarm keeps what it was armed with, as ch. 11.2.2 and ch. 12.2 have
+ * it at "R0 < 2" — the disarm being read at C0=3, where a write made at
+ * C0=2 has landed, and again at the head of the line after one of three
+ * characters, which has no such character of its own. Not yet: what such a
+ * line then draws. Ch. 13.2.1 and ch. 13.2.5 give the line and stop after
+ * it — "the additional management then lasts 1 line of 2 usec before
+ * ceasing (C4+1, C9=0)" — where this chip tests before giving and so gives
+ * none; the comparison itself is ch. 13.2.4's and is not in doubt, Shaker's
+ * graded E (1) and E (6) holding it to that. Not yet, also: the cursor, its
+ * own skew and the lightpen, no host here wiring those pins; the per-type
+ * divergences; the rest of what ch. 13.2.1 gives a line's first three
+ * microseconds — the counter updates those characters schedule for a later
+ * one. Every other comparison is made where it stands. Two of the border's
+ * rules move DISPLAY ENABLE inside a character — the byte of border at
+ * C0=R0 on a line where R1 was never reached and no skew stands ready to
+ * defer it to a whole character of its own (ch. 17.6.2, 19.2.4), and the
+ * byte-by-byte alternation an R6 of 0 makes on a frame's first line (ch.
+ * 18.3.2) — and both are here, which is why a tick reports that pin for
+ * each of the two bytes a character is drawn from rather than
  * once.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by

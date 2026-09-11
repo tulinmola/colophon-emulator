@@ -1036,6 +1036,46 @@ static void a_line_of_three_characters_still_reaches_its_disarm(void) {
   TEST_EQUAL(lines, 1); /* the next line is the frame's first */
 }
 
+/* Ch. 13.2.6's worked case. "If C9=R9 and C4=R4 (when R0 goes to 0), then
+   ... an additional management is activated, and which will remain so when
+   C0 can once again exceed 1. It is then R5 which controls the end of the
+   additional management. To stop this management, program R5 with C9+1."
+   The chapter's own summary is shorter: "if C9=R9 and C4=R4 then C4=R4+1.
+   When R0>0, C4 is managed by C9/R5." So the frozen row advance is not a
+   row advance at all but the adjustment beginning, and the line it lands on
+   is one the assessment at C0=0 can no longer take back — which it would,
+   C4 having just moved off R4 and the last line with it. */
+static void a_freeze_on_a_last_line_begins_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c4 == 38 && crtc.c9 == 7 && crtc.c0 == 0) {
+      break;
+    }
+  }
+  write_register(0, 0); /* C0 already stands at 0, so it stays there */
+  for (int character = 0; character < 8; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c4, 39); /* R4+1 */
+  TEST_CHECK(crtc.vertical_adjustment_in_progress);
+
+  /* Widened again: "C9+1 being different from R5, then C9 is incremented"
+     (ch. 13.2.6), so C9 climbs from the 7 the freeze left it at while C4
+     holds where it landed. */
+  write_register(0, 63);
+  run_scanlines(4);
+  TEST_EQUAL(crtc.c4, 39);
+  TEST_EQUAL(crtc.c9, 11);
+
+  /* "To stop this management, program R5 with C9+1." */
+  write_register(5, 12);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
 /* A line of one character never reaches C0=1, so "C9 processing management"
    is never enabled again and "all of the CRTC counters are frozen as long as
    R0=0" (ch. 13.2.1, 13.2.4). What the last managed line had already decided
@@ -2032,6 +2072,7 @@ int main(void) {
   TEST_RUN(the_chip_wakes_with_its_counters_managed);
   TEST_RUN(every_last_line_is_armed_and_an_unmade_one_disarmed);
   TEST_RUN(a_line_of_three_characters_still_reaches_its_disarm);
+  TEST_RUN(a_freeze_on_a_last_line_begins_an_adjustment);
   TEST_RUN(a_line_of_one_character_freezes_the_counters);
   TEST_RUN(a_line_of_one_character_leaves_a_vsync_running_where_two_do_not);
   TEST_RUN(a_frozen_chip_still_reads_r8);

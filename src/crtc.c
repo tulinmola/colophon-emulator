@@ -158,8 +158,9 @@ static void begin_frame(crtc_t *crtc) {
    VSYNC's line counter with them, which is why a VSYNC begun there "is not
    deactivated if R3h was worth 1" (ch. 16.4.1.2). One thing still lands:
    the C4 increment the last managed boundary armed, and once only, because
-   "this increment is deactivated because it has taken place" (ch. 13.2.4).
-   In a line that does reach C0=1 the arming and the landing fall on the
+   "this increment is deactivated because it has taken place" (ch. 13.2.4) —
+   and where it falls on a last line an adjustment begins with it (ch.
+   13.2.6). In a line that does reach C0=1 the arming and the landing fall on the
    same boundary, so nothing here is felt. */
 static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
@@ -174,6 +175,19 @@ static void enter_scanline(crtc_t *crtc) {
   if (!crtc->c9_processing_managed) {
     if (crtc->c4_increment_armed) {
       crtc->c4_increment_armed = false;
+      /* On a last line that increment is the additional management
+         beginning, not a row advance: "C4 is incremented (i.e. 1). We are on
+         additional management", and it "will remain so when C0 can once
+         again exceed 1" (ch. 13.2.6). The chapter's condition is C9=R9 and
+         C4=R4, which is the last line itself — an arm the R5 window admitted
+         with C4 already past R4 is the neighbouring case, "C4's last
+         hiccup", which that page gives the increment and no management.
+         Saying so is what keeps the C0<2 assessment later in this tick from
+         taking the arming back, C4 having just moved off R4 and the last
+         line with it. */
+      if (crtc->last_line) {
+        crtc->vertical_adjustment_in_progress = true;
+      }
       enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
     }
     /* The one register the freeze does not shut out: "updates to registers

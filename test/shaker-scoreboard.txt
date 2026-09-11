@@ -2,9 +2,9 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-7 of them printed self-graded lines, 34 in all: 28 agree with Longshot's
+6 of them printed self-graded lines, 33 in all: 27 agree with Longshot's
 silicon and 6 do not. That is 82% of what this reader can score, and no
-measure at all of the other 57 groups.
+measure at all of the other 58 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -16,6 +16,12 @@ module's menu stands as "showed only the menu": it was run and kept, not
 skipped. A line marked ! is a test this machine failed: either the
 module said so, or the machine's value differs from the one Longshot's
 silicon produced.
+
+Not every difference here is this machine's doing. What a module prints
+depends on the phase it booted on, and at least one group has been measured
+printing a graded line on one phase and none on another with the emulator
+altered in no way at all. When a line leaves this record, rule the phase out
+before believing the loss.
 
 That last kind is worth knowing about: such a group grades itself while the
 machine is wrong and prints its measurement alone once it is right, so it
@@ -88,8 +94,7 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
       R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
       R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
       R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
-C (P)       ALL      : ADD LINE R8                                                           1 graded, 0 wrong
-      R5=1 ON LAST LINE-1/R9=6 ON LAST LINE. C4=#26 (exp #26)
+C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
 C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu

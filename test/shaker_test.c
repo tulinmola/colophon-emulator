@@ -1906,6 +1906,11 @@ int main(int argc, char **argv) {
   fprintf(file, "skipped. A line marked ! is a test this machine failed: either the\n");
   fprintf(file, "module said so, or the machine's value differs from the one Longshot's\n");
   fprintf(file, "silicon produced.\n\n");
+  fprintf(file, "Not every difference here is this machine's doing. What a module prints\n");
+  fprintf(file, "depends on the phase it booted on, and at least one group has been measured\n");
+  fprintf(file, "printing a graded line on one phase and none on another with the emulator\n");
+  fprintf(file, "altered in no way at all. When a line leaves this record, rule the phase out\n");
+  fprintf(file, "before believing the loss.\n\n");
   fprintf(file, "That last kind is worth knowing about: such a group grades itself while the\n");
   fprintf(file, "machine is wrong and prints its measurement alone once it is right, so it\n");
   fprintf(file, "leaves the tally above by being agreed with. A group falling out of that\n");
