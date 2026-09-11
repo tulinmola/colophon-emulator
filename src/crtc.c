@@ -148,6 +148,7 @@ static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
    it, not the adjustment that carried it. */
 static void begin_frame(crtc_t *crtc) {
   crtc->vertical_adjustment_in_progress = false;
+  crtc->adjustment_on_its_last_line = false;
   crtc->c9 = 0;
   crtc->interlace_line_given = false;
   enter_character_row(crtc, 0);
@@ -226,6 +227,17 @@ static void enter_scanline(crtc_t *crtc) {
     bool row_ended_on_r4 = row_is_on_its_last_scanline(crtc) && crtc->c4 == r[4];
     uint8_t next_c9 = row_ended_on_r4 ? 0 : (uint8_t)((crtc->c9 + 1) & C9_BITS);
     bool r5_lines_spent = next_c9 == r[5];
+    /* An adjustment a narrow line brought is entered before it is measured.
+       Ch. 11.2.2 lists the ways one comes about with R5 at 0 — an R4 or R9
+       moved at C0=1, "or if C0 can never reach 2 because R0 < 2" — and ch.
+       13.2.1 and ch. 13.2.5, both of them inside their own R0=1 case, give
+       that one a line: it lasts "1 line of 2 usec before ceasing (C4+1,
+       C9=0)", and only "on the next line" does "the end of additional
+       management reset C4 and C9 to 0". Wider lines measure first, which is
+       ch. 13.2.4's reminder and what Shaker's graded E (1) holds us to — it
+       times an R5 cancelled on a 64-character last line, and a chip that
+       gave a line there would answer four of its seven a line too long. */
+    bool entered_by_a_narrow_line = r[0] < 2 && r[5] == 0 && !crtc->vertical_adjustment_in_progress;
     if (r5_lines_spent && crtc->interlace_line_owed && !crtc->interlace_line_given) {
       /* The R5 lines are spent and interlace asks for one more, which is
          the last of them (ch. 19.6.1). C4 has already been incremented once
@@ -236,10 +248,16 @@ static void enter_scanline(crtc_t *crtc) {
       if (row_ended_on_r4) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       }
-    } else if (r5_lines_spent || crtc->interlace_line_given) {
+    } else if ((r5_lines_spent && !entered_by_a_narrow_line) || crtc->adjustment_on_its_last_line ||
+               crtc->interlace_line_given) {
       crtc->vertical_adjustment_armed = false;
       begin_frame(crtc);
     } else {
+      /* And the ceasing after one line is the R0=1 case's alone. A line of
+         one character keeps its run instead: "it will remain so when C0 can
+         once again exceed 1. It is then R5 which controls the end ... To
+         stop this management, program R5 with C9+1" (ch. 13.2.6). */
+      crtc->adjustment_on_its_last_line = r5_lines_spent && r[0] == 1;
       crtc->vertical_adjustment_in_progress = true;
       crtc->c9 = next_c9;
       if (row_ended_on_r4) {

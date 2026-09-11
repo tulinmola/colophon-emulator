@@ -77,13 +77,32 @@
  * the disarm keeps what it was armed with, as ch. 11.2.2 and ch. 12.2 have
  * it at "R0 < 2" — the disarm being read at C0=3, where a write made at
  * C0=2 has landed, and again at the head of the line after one of three
- * characters, which has no such character of its own. Not yet: what such a
- * line then draws. Ch. 13.2.1 and ch. 13.2.5 give the line and stop after
- * it — "the additional management then lasts 1 line of 2 usec before
- * ceasing (C4+1, C9=0)" — where this chip tests before giving and so gives
- * none; the comparison itself is ch. 13.2.4's and is not in doubt, Shaker's
- * graded E (1) and E (6) holding it to that. Not yet, also: the cursor, its
- * own skew and the lightpen, no host here wiring those pins; the per-type
+ * characters, which has no such character of its own. What such a line
+ * draws is here with it. Ch. 11.2.2 lists the ways an adjustment comes
+ * about with R5 at 0 — an R4 or R9 moved at C0=1 of a last line, "or if C0
+ * can never reach 2 because R0 < 2" — and ch. 13.2.1 and ch. 13.2.5 say
+ * what that second one draws, both inside their own R0=1 case: it lasts "1
+ * line of 2 usec before ceasing (C4+1, C9=0)", and only "on the next line"
+ * does "the end of additional management reset C4 and C9 to 0". So a narrow
+ * line is entered before it is measured and a wider one measured before it
+ * is entered, which is ch. 13.2.4's reminder and what Shaker's graded E (1)
+ * holds this chip to: it times an R5 cancelled on a 64-character last line,
+ * and a chip that gave a line there too would answer four of its seven a
+ * line too long. Ch. 13.2.5's own account of that ending — that it stops
+ * "when the calculated C9 becomes equal to R5" — cannot produce the picture
+ * it draws two sentences later, C9 not being zeroed once C4 has left R4;
+ * the picture is followed here and the mechanism is not, and nothing
+ * outside this repository grades the narrow line either way. The ceasing
+ * after one line is the R0=1 case's own; a line of one character keeps its
+ * run instead, and "it is then R5 which controls the end ... To stop this
+ * management, program R5 with C9+1" (ch. 13.2.6). Absent for want of a pin:
+ * the cursor, its own skew and the light pen, which no host here wires. Not
+ * yet: the two HSYNCs ch. 15.3 will not let this type place back to back —
+ * "two HSYNC's cannot be contiguous if position C0=R2 is encountered when
+ * C3l reaches R3l, and R3l has not been modified on this position" — nor
+ * the restart that a R3l written there does allow, with C3l left standing;
+ * the R0 of ch. 13.7.2 enlarged on the character C0 names 1, where the old
+ * value ends the line and the new one counts C0 on; the per-type
  * divergences; the rest of what ch. 13.2.1 gives a line's first three
  * microseconds — the counter updates those characters schedule for a later
  * one. Every other comparison is made where it stands. Two of the border's
@@ -175,6 +194,12 @@ typedef struct {
      at C0=3, where a write made at C0=2 has landed, and again at the head of
      the line after one of three characters. */
   bool vertical_adjustment_in_progress;
+  /* And whether the line it is giving is the last of them, which only a line
+     too narrow to be disarmed can need: such an adjustment lasts "1 line of
+     2 usec before ceasing (C4+1, C9=0)", and it is the line after that on
+     which "the end of additional management reset C4 and C9 to 0" (ch.
+     13.2.1). */
+  bool adjustment_on_its_last_line;
 
   /* Frame parity, which the Compendium keeps in two states rather than one
      (ch. 19.5.2). ParityFrame is this frame's, taken from ParityR6 at the

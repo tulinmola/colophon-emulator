@@ -1076,6 +1076,96 @@ static void a_freeze_on_a_last_line_begins_an_adjustment(void) {
   TEST_EQUAL(crtc.c9, 0);
 }
 
+/* Ch. 11.2.2 lists the ways an adjustment comes about with R5 at 0: an R4 or
+   R9 moved at C0=1 of a last line, "or if C0 can never reach 2 because R0 <
+   2". Ch. 13.2.1 and ch. 13.2.5 say what that second one draws, both of them
+   inside their own R0=1 case: it lasts "1 line of 2 usec before ceasing
+   (C4+1, C9=0)", and only "on the next line" does "the end of additional
+   management reset C4 and C9 to 0". Ch. 13.2.5 draws the picture — "when
+   R4=R9=0, each 'line' of 2 usec is therefore immediately followed by a
+   'line' of 2 usec for which C9=0 and C4=1" — so the lines alternate. A wider
+   line measures before it gives, which is ch. 13.2.4's reminder and what
+   Shaker's graded E (1) holds this chip to. */
+static void a_narrow_line_draws_the_adjustment_it_cannot_disarm(void) {
+  crtc_init(&crtc);
+  write_register(0, 1);
+  write_register(1, 40);
+  write_register(3, 0x8E);
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 0);
+  crtc_tick(&crtc); /* the priming tick draws no character */
+
+  /* Every line is a last line here, so every one is armed and none is
+     disarmed, and they come out as the chapter's picture has them. */
+  static const uint8_t alternating[6][2] = {{1, 0}, {0, 0}, {1, 0}, {0, 0}, {1, 0}, {0, 0}};
+  for (int line = 0; line < 6; line++) {
+    run_characters(2); /* a line of two characters */
+    TEST_EQUAL(crtc.c4, alternating[line][0]);
+    TEST_EQUAL(crtc.c9, alternating[line][1]);
+  }
+
+  /* And a row of four scanlines puts that line after the last of them:
+     "this 'line' of 2 usec (for which C4=1) occurs after the last value of
+     C9" (ch. 13.2.5). */
+  crtc_init(&crtc);
+  write_register(0, 1);
+  write_register(3, 0x8E);
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 3);
+  crtc_tick(&crtc);
+  static const uint8_t after_the_row[5][2] = {{0, 1}, {0, 2}, {0, 3}, {1, 0}, {0, 0}};
+  for (int line = 0; line < 5; line++) {
+    run_characters(2);
+    TEST_EQUAL(crtc.c4, after_the_row[line][0]);
+    TEST_EQUAL(crtc.c9, after_the_row[line][1]);
+  }
+}
+
+/* And the ceasing after one line belongs to the R0=1 case alone. Ch. 13.2.6
+   gives a line of one character the other ending: the run "will remain so
+   when C0 can once again exceed 1. It is then R5 which controls the end of
+   the additional management. To stop this management, program R5 with
+   C9+1." Its table is walked here row by row — the frozen line, three
+   widened ones with C4 held and C9 climbing, and the ending the chapter
+   prescribes. */
+static void a_run_begun_under_a_stopped_picture_ends_on_r5(void) {
+  program_standard();
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(9, 0);
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c4 == 0 && crtc.c9 == 0 && crtc.c0 == 20) {
+      break;
+    }
+  }
+  write_register(0, 0); /* narrowed away from the line's own head */
+  for (int character = 0; character < 400 && crtc.c0 != 0; character++) {
+    crtc_tick(&crtc); /* C0 runs to its top and comes back the long way */
+  }
+  TEST_CHECK(crtc.c0 == 0);
+  run_characters(4);
+  TEST_EQUAL(crtc.c4, 1); /* R4+1, and the run begun */
+  TEST_EQUAL(crtc.c9, 0);
+
+  write_register(0, 63);
+  for (uint8_t line = 1; line <= 3; line++) {
+    run_scanlines(1);
+    TEST_EQUAL(crtc.c4, 1); /* held where the stopping left it */
+    TEST_EQUAL(crtc.c9, line);
+  }
+  write_register(5, (uint8_t)(crtc.c9 + 1));
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
 /* A line of one character never reaches C0=1, so "C9 processing management"
    is never enabled again and "all of the CRTC counters are frozen as long as
    R0=0" (ch. 13.2.1, 13.2.4). What the last managed line had already decided
@@ -2073,6 +2163,8 @@ int main(void) {
   TEST_RUN(every_last_line_is_armed_and_an_unmade_one_disarmed);
   TEST_RUN(a_line_of_three_characters_still_reaches_its_disarm);
   TEST_RUN(a_freeze_on_a_last_line_begins_an_adjustment);
+  TEST_RUN(a_narrow_line_draws_the_adjustment_it_cannot_disarm);
+  TEST_RUN(a_run_begun_under_a_stopped_picture_ends_on_r5);
   TEST_RUN(a_line_of_one_character_freezes_the_counters);
   TEST_RUN(a_line_of_one_character_leaves_a_vsync_running_where_two_do_not);
   TEST_RUN(a_frozen_chip_still_reads_r8);
