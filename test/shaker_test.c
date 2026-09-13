@@ -2009,10 +2009,11 @@ int main(int argc, char **argv) {
   fprintf(file, "printing a graded line on one phase and none on another with the emulator\n");
   fprintf(file, "altered in no way at all. When a line leaves this record, rule the phase out\n");
   fprintf(file, "before believing the loss.\n\n");
-  fprintf(file, "That last kind is worth knowing about: such a group grades itself while the\n");
-  fprintf(file, "machine is wrong and prints its measurement alone once it is right, so it\n");
-  fprintf(file, "leaves the tally above by being agreed with. A group falling out of that\n");
-  fprintf(file, "count is not the same as a group that could not be read.\n\n");
+  fprintf(file, "A group that names silicon's value only where it differs is worth\n");
+  fprintf(file, "knowing about: it grades itself while the machine is wrong and prints its\n");
+  fprintf(file, "measurement alone once it is right, so it leaves the tally above by being\n");
+  fprintf(file, "agreed with. A group falling out of that count is not the same as a group\n");
+  fprintf(file, "that could not be read.\n\n");
   fprintf(file, "The copy of this file in the test sources is the one on record, and a sweep\n");
   fprintf(file, "fails on the first line where the two differ. The screens behind these\n");
   fprintf(file, "standings are in the module records written beside the sweep's own copy.\n\n");

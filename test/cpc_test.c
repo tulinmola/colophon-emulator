@@ -634,10 +634,12 @@ static void port_b_carries_the_links_and_the_vsync(void) {
   };
   rom_program(program, sizeof program);
   TEST_CHECK(run_to_halt());
-  /* 50Hz and Amstrad, with the cassette, printer and expansion floating
-     high. Bit 0 is the CRTC's VSYNC passed straight through, whatever it
+  /* 50Hz and Amstrad, and nothing on the cassette, the printer or the
+     expansion port, which is the #5E Shaker's D (R) names for such a
+     machine. Bit 0 is the CRTC's VSYNC passed straight through, whatever it
      happens to be: an unprogrammed CRTC has R7 at zero and so never leaves
      its VSYNC, which is a degenerate frame but a real one. */
+  TEST_EQUAL(cpc.cpu.a & 0xE0, 0x40);
   TEST_EQUAL(cpc.cpu.a & 0x10, 0x10);
   TEST_EQUAL((cpc.cpu.a >> 1) & 0x07, CPC_MANUFACTURER_AMSTRAD);
   TEST_EQUAL(cpc.cpu.a & 0x01, (cpc.crtc_pins & CRTC_VSYNC) ? 1 : 0);
@@ -648,6 +650,8 @@ static void port_b_carries_the_links_and_the_vsync(void) {
   TEST_CHECK(run_to_halt());
   TEST_EQUAL(cpc.cpu.a & 0x10, 0);
   TEST_EQUAL((cpc.cpu.a >> 1) & 0x07, 5);
+  /* The three that answer no link at all stand where they stood. */
+  TEST_EQUAL(cpc.cpu.a & 0xE0, 0x40);
 }
 
 static void port_b_follows_the_crtc_into_vsync(void) {

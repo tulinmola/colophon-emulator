@@ -40,10 +40,20 @@ void cpc_remap(cpc_t *cpc) {
 /* Port B is wired to the outside world and to the CRTC: bit 7 the cassette,
    bit 6 the printer's ready line inverted, bit 5 the expansion port, bit 4
    the refresh-rate link, bits 3-1 the manufacturer's, and bit 0 the CRTC's
-   VSYNC straight through ("8255 PPI"). Nothing is connected to the cassette
-   or the printer here, and both float high. */
+   VSYNC straight through ("8255 PPI"). Bit 7 is driven by the tape circuit
+   rather than pulled anywhere, so it rests low with nothing playing, and
+   bit 6 is pulled up and stands high with no printer on the far end.
+
+   Bit 5 is low on a measurement rather than on a derivation. "8255 PPI"
+   gives it as 0 where no device is connected, and Shaker's D (R) names #5E
+   for a 50Hz Amstrad with the VSYNC down and #5F with it up, which is what
+   these levels answer. Amstrad's own CPC6128 circuit diagram nevertheless
+   pulls that pin up through NR101 and carries it to the expansion connector
+   and nowhere else, which would leave it high on a bare board; the disc
+   interface's link to the same pin is the likeliest reconciliation, and the
+   sheet that would settle it is one we have not seen. */
 static void present_port_b(cpc_t *cpc) {
-  uint8_t levels = 0xE0;
+  uint8_t levels = 0x40;
   if (cpc->fifty_hz) {
     levels |= 0x10;
   }

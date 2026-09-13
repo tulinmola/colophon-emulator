@@ -252,6 +252,10 @@ static void each_type_answers_the_read_port_its_own_way(void) {
     TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x2A);
     crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 15));
     TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x55);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 16));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 17));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
     crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 4));
     TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
     crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 31));
