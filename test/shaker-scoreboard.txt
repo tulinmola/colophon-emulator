@@ -2,8 +2,8 @@ What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,
 module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-6 of them printed self-graded lines, 33 in all: 27 agree with Longshot's
-silicon and 6 do not. That is 82% of what this reader can score, and no
+6 of them printed self-graded lines, 36 in all: 27 agree with Longshot's
+silicon and 9 do not. That is 75% of what this reader can score, and no
 measure at all of the other 58 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -104,11 +104,14 @@ D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                  
     ! TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)
       Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)
       Break ED xx on Pending Int #00 (Exp#00)
-D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   4 graded, 0 wrong
+D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   7 graded, 3 wrong
       R3h=0.UPP R3h=8 ON 9th LINE. DELAY VSYNC OFF=#03F2 (CRTC 0.3.4:3F2/CRTC 1.2:1F4)
       R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)
       R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)
       R3h=0/R4=R7=0/ON LINE 9, R4=R7=7F: VSYNC OFF DELAY=#0032 (EXP:#32)
+    ! CRTC VSYNC 3 uSEC LENGTH (R0=2). C0=10 VSYNC READ IS #FE (EXP:#5E=VS OFF)
+    ! R0=0 ON C4=R7 AND R3h=1 >> VSYNC DEADLOCK. ON C0=4 VSYNC=#FF (EXP:#5F=VS ON)
+    ! R0=1 ON C4=R7 AND R3h=1 >> NO VS DEADLOCK. ON C0=8 VSYNC=#FE (EXP:#5E=VS OFF)
 D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded
 D (H)       HSYNC GATE ARRAY                                                                 recorded, ungraded
 D (1)       CSYNC4 VS 2xCSYNC2                                                               recorded, ungraded

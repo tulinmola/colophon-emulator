@@ -127,8 +127,9 @@ typedef struct {
   uint8_t *write_page[4];
 } cpc_t;
 
-/* Power-on with a CRTC built as the given type — only type 0 is
- * implemented, so the number is carried and not obeyed (crtc.h). The lower
+/* Power-on with a CRTC built as the given type — only type 0's behaviour
+ * is implemented, and what a program can read of the chip is what follows
+ * the number given (crtc.h). The lower
  * ROM is readable at &0000 — it must be, or no first instruction could ever
  * be fetched. Upper ROM enabled and configuration 0 are conventions: the
  * firmware writes both registers before anything could observe their reset

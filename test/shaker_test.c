@@ -88,9 +88,11 @@
    being cut off, which is why the standing records it separately.
 
    The cap is for the groups that never stop, which are the ones drawing
-   something that moves. */
+   something that moves. Module B's status-register check is quieter than
+   any of those: it waits past two hundred frames before its first screen,
+   and a threshold that suited the groups a type 0 runs cut it off. */
 #define SAMPLE_STEP_FRAMES 5
-#define MAX_SAMPLES_WITHOUT_NEWS 40
+#define MAX_SAMPLES_WITHOUT_NEWS 60
 #define MAX_SAMPLES_PER_GROUP 300
 
 /* Every path this file builds names a directory the sweep was pointed at,

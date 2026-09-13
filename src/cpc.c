@@ -134,8 +134,13 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
        writes: whatever the CPU happened to put on the address bus lands in
        the selected register. For IN A,(n) that byte is A, which is the
        documented three-microsecond way to write a register (Compendium ch.
-       4.4.2); for IN r,(C) it is B, which the document leaves undefined. */
-    data = crtc_data(crtc_bus(cpc, address, (uint8_t)(address >> 8)));
+       4.4.2); for IN r,(C) it is B, which the document leaves undefined.
+       The two read ports write nothing, so what goes in is only what comes
+       back where the chip declines to drive: a bus at rest, which is what a
+       real machine reads there — "my CPC CRTC 2 always returns 255 ... my
+       CPC CRTC 0 randomly returns 255 or 127" (ch. 21.3.2). */
+    uint8_t floating = (address & 0x0200) ? 0xFF : (uint8_t)(address >> 8);
+    data = crtc_data(crtc_bus(cpc, address, floating));
   }
   if ((address & 0x0800) == 0) {
     present_port_b(cpc);

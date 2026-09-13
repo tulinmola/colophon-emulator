@@ -580,6 +580,28 @@ static void throw_display_latches(crtc_t *crtc) {
   }
 }
 
+/* The type 1 status register's bit 5, which reports the BORDER R6 condition
+   on the two heads of line the chapter names: "False: C4=C9=C0=0 / True:
+   C4=R6 & C9=C0=0" (ch. 21.3.3). It is read at a line's head and not where
+   the border itself is thrown, which is why a program is answered for the
+   line being drawn rather than for the picture in front of it — "this does
+   not necessarily mean that BORDER or CHARACTERS are displayed". An R6 of
+   0, written while C4 stands above it, is never seen: the equality does not
+   come round again inside the frame, and "if R6=0 while C4>0 and the status
+   is 0 (Characters displayed), bit 5 of the status register will continue
+   to be 0". */
+static void latch_status_border(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  if (crtc->c0 != 0 || crtc->c9 != 0) {
+    return;
+  }
+  if (crtc->c4 == 0) {
+    crtc->status_border_r6 = false;
+  } else if (crtc->c4 == r[6]) {
+    crtc->status_border_r6 = true;
+  }
+}
+
 /* Two rules move DISPLAY ENABLE half a character, and both move it the same
    way: the byte a character begins with is displayed and the byte it ends
    with is border.
@@ -646,6 +668,7 @@ uint64_t crtc_tick(crtc_t *crtc) {
   move_video_pointer(crtc);
   authorize_vsync(crtc);
   begin_syncs(crtc);
+  latch_status_border(crtc);
   throw_display_latches(crtc);
   /* Cleared after the phases rather than before them, a write being made
      between two ticks and read by the second of the two. */
@@ -653,22 +676,53 @@ uint64_t crtc_tick(crtc_t *crtc) {
   return pins_of(crtc);
 }
 
+/* What the read port answers. Type 0 reads R12-R17; types 1 and 2 read only
+   the cursor and the light pen, and for either "an attempt to read another
+   register (0 to 255) returns the value 0" — except register 31 on type 1,
+   which "returns a non-zero value (I got 127 or 255)", one UMC defined and
+   this model never used (ch. 21.2.1, 21.2.2). Silicon does not settle which
+   of the two it gives and this answers the larger.
+
+   Ch. 28.1.9 says of a type 2 that the port "is used to read registers R16
+   and R17", where ch. 21.2.2 gives it R14 to R17 as it gives type 1. The
+   register table is followed over the identification chapter's summary of
+   it, and nothing here grades the difference: the cursor is the only place
+   the two disagree, and no suite on this disc reads it. */
+static uint8_t readable_register(const crtc_t *crtc) {
+  uint8_t number = crtc->address_register;
+  if (number >= 14 && number <= 17) {
+    return crtc->registers[number];
+  }
+  if (crtc->type == 0 && (number == 12 || number == 13)) {
+    return crtc->registers[number];
+  }
+  if (crtc->type == 1 && number == 31) {
+    return 0xFF;
+  }
+  return 0;
+}
+
 uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
   if (!(pins & CRTC_CS)) {
     return pins;
   }
   if (pins & CRTC_RW) {
-    /* Type 0 drives the bus only for R12-R17 (Compendium ch. 4.3); the
-       address register and the write-only registers leave it floating, and
-       a nonexistent register reads 0. */
     if (!(pins & CRTC_RS)) {
-      return pins;
+      /* The status port. Types 0 and 2 "do not have a status register", and
+         what a program reads there is a bus nobody drives: "my CPC CRTC 2
+         always returns 255 ... my CPC CRTC 0 randomly returns 255 or 127"
+         (ch. 21.3.2), so the pins pass through for the machine to answer.
+         Type 1 has one, and drives it (ch. 21.3.1, 21.3.3). */
+      if (crtc->type != 1) {
+        return pins;
+      }
+      /* Bits 0 to 4 and bit 7 are unused and "repeated readings of this
+         register return 0 on these bits" (ch. 21.3.3). Bit 6 says a light
+         pen reading stands, and no host here wires that pin, so it is 0
+         wherever a real one would have something to report. */
+      return crtc_set_data(pins, crtc->status_border_r6 ? 0x20 : 0x00);
     }
-    uint8_t value = 0;
-    if (crtc->address_register >= 12 && crtc->address_register <= 17) {
-      value = crtc->registers[crtc->address_register];
-    }
-    return crtc_set_data(pins, value);
+    return crtc_set_data(pins, readable_register(crtc));
   }
   if (!(pins & CRTC_RS)) {
     crtc->address_register = crtc_data(pins) & 0x1F;

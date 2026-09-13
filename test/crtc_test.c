@@ -218,16 +218,99 @@ static void writes_wear_the_documented_widths(void) {
   write_register(20, 0x55); /* no such register */
 }
 
-static void type0_reads_r12_to_r17_and_nothing_else(void) {
-  program_standard();
-  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 12));
-  TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x30);
-  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 4));
-  TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
-  /* A status read: type 0 has no status register, the bus stays floating —
-     whatever the machine drove passes through. */
-  uint64_t floating = crtc_set_data(0, 0x77) | CRTC_CS | CRTC_RW;
-  TEST_EQUAL(crtc_data(crtc_access(&crtc, floating)), 0x77);
+/* Ch. 21.2.2: types 1 and 2 read the cursor and the light pen and nothing
+   besides — "an attempt to read another register (0 to 255) returns the
+   value 0" — where type 0 reads the display start as well (ch. 21.2.1).
+   Reading R12 is therefore what parts a type 0 from the rest, and register
+   31 what parts a type 1 from a type 2: on a type 1 it "returns a non-zero
+   value (I got 127 or 255)", a register UMC defined and this model never
+   used. Both are how a program names the chip in front of it (ch. 28.1.9). */
+static void each_type_answers_the_read_port_its_own_way(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t at_r12; /* the display start, which only a type 0 gives back */
+    uint8_t at_r31; /* and the register that parts a type 1 from a type 2 */
+  } cases[] = {{0, 0x30, 0x00}, {1, 0x00, 0xFF}, {2, 0x00, 0x00}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0x18};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    write_register(14, 0x2A);
+    write_register(15, 0x55);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 12));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), cases[index].at_r12);
+    /* Each half of a pointer is its own register, so a type that answers
+       one answers the other. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 13));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)),
+               cases[index].at_r12 == 0 ? 0x00 : 0x18);
+    /* The cursor registers read back on every type; no board here wires the
+       pin that would fill the light pen's pair, so those stay empty. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 14));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x2A);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 15));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x55);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 4));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 31));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), cases[index].at_r31);
+    /* Only the low five bits of a number are read, so 108 names R12 and 124
+       names R31 (ch. 21.2.1). */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 108));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), cases[index].at_r12);
+  }
+}
+
+/* Ch. 21.3.2: types 0 and 2 "do not have a status register", so &BE00 is a
+   bus nobody drives and the machine reads back whatever it put there. Type
+   1 has one, and its unused bits — 0 to 4 and 7 — read 0 (ch. 21.3.3). */
+static void only_type_1_drives_the_status_port(void) {
+  for (uint8_t type = 0; type < 3; type++) {
+    crtc_init(&crtc, type);
+    uint64_t floating = crtc_set_data(0, 0x77) | CRTC_CS | CRTC_RW;
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, floating)), type == 1 ? 0x00 : 0x77);
+  }
+}
+
+/* And its bit 5, which ch. 21.3.3 gives twice over, in prose and in two
+   diagrams: the BORDER R6 condition on the two heads of line it names,
+   "False: C4=C9=C0=0 / True: C4=R6 & C9=C0=0". Its diagrams read the port
+   four times across each turn and the byte changes on the fourth, where C0
+   comes round to 0 — so the bit speaks for the line being drawn, and a
+   program that reads it during the line before is told the old answer.
+   With rows of eight scanlines and R6 at 25, it rises at the head of the
+   row R6 names and falls at the head of the frame. */
+static void the_status_border_bit_turns_over_at_a_line_head(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
+  crtc_init(&crtc, 1);
+  for (int reg = 0; reg < 14; reg++) {
+    write_register(reg, values[reg]);
+  }
+  int rose[3] = {-1, -1, -1}; /* c4, c9 and c0 where the bit went up */
+  int fell[3] = {-1, -1, -1};
+  bool standing = false;
+  /* A frame to settle on, then the frame that is read. */
+  for (long character = 0; character < 2L * 64 * 312; character++) {
+    crtc_tick(&crtc);
+    bool bit = (crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RW)) & 0x20) != 0;
+    if (bit != standing && character >= 64L * 312) {
+      int *where = bit ? rose : fell;
+      if (where[0] < 0) {
+        where[0] = crtc.c4;
+        where[1] = crtc.c9;
+        where[2] = crtc.c0;
+      }
+    }
+    standing = bit;
+  }
+  TEST_EQUAL(rose[0], 25); /* the row R6 names */
+  TEST_EQUAL(rose[1], 0);  /* on its first scanline */
+  TEST_EQUAL(rose[2], 0);  /* and its first character */
+  TEST_EQUAL(fell[0], 0);  /* and the frame's own head */
+  TEST_EQUAL(fell[1], 0);
+  TEST_EQUAL(fell[2], 0);
 }
 
 static void unselected_chip_ignores_the_bus(void) {
@@ -2230,7 +2313,9 @@ int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(select_wears_five_bits);
   TEST_RUN(writes_wear_the_documented_widths);
-  TEST_RUN(type0_reads_r12_to_r17_and_nothing_else);
+  TEST_RUN(each_type_answers_the_read_port_its_own_way);
+  TEST_RUN(only_type_1_drives_the_status_port);
+  TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
   TEST_RUN(unselected_chip_ignores_the_bus);
   TEST_RUN(hsync_falls_where_r2_and_r3_put_it);
   TEST_RUN(vsync_holds_eight_scanlines_from_row_30);
