@@ -60,12 +60,13 @@ The emulator's documentation lives in `docs/`, beside the code it describes, and
 An emulator that looks right and an emulator that is right are different things, and the difference surfaces years later, in the one game nobody tried. So every claim here has a check behind it, and wherever possible the check comes from outside — written by someone else, who did not know what we believe. A test built from our own understanding agrees with our own mistakes.
 
 ```sh
-make test              # fast, hermetic, no network — runs on every change
-make test-firmware     # boots the real firmware and types at it
-make test-shaker       # sets what Shaker's modules say against the record
-make test-single-step  # the complete SingleStepTests corpus
-make test-exerciser    # the Z80 instruction set exerciser
-make test-all          # all five
+make test               # fast, hermetic, no network — runs on every change
+make test-firmware      # boots the real firmware and types at it
+make test-shaker        # sets what Shaker's modules say against the record
+make test-shaker CRTC=1 # the same, on a machine a program names a type 1
+make test-single-step   # the complete SingleStepTests corpus
+make test-exerciser     # the Z80 instruction set exerciser
+make test-all           # all five, with Shaker against both records
 ```
 
 Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — and all three machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table the ROM itself carries. The 6128 also catalogues Shaker's disc through the real AMSDOS and loads a file off it, and both are checked against a reading of the image that never went near the controller.

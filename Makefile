@@ -49,6 +49,15 @@ EXERCISER_GROUPS ?= 12
 MODULE ?=
 GROUP ?=
 
+# Which CRTC the machine is built with, which decides both what Shaker runs
+# and the record it is set against. Only type 0 behaves as itself here;
+# CRTC=1 builds a machine a program names a type 1 and runs the groups that
+# belong to one. The chip answers to all five, and two have a record.
+CRTC ?= 0
+ifeq ($(filter $(CRTC),0 1 2 3 4),)
+$(error CRTC=$(CRTC) names no CRTC; the types are 0 to 4)
+endif
+
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
@@ -174,8 +183,8 @@ test-firmware: $(BUILD)/firmware_test
 test-shaker: $(BUILD)/shaker_test
 	@sh tools/fetch-roms.sh
 	@sh tools/fetch-discs.sh
-	@mkdir -p $(BUILD)/shaker
-	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker test/shaker-scoreboard.txt "$(MODULE)" "$(GROUP)"
+	@mkdir -p $(BUILD)/shaker/crtc$(CRTC)
+	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker/crtc$(CRTC) test/shaker-scoreboard-crtc$(CRTC).txt "$(MODULE)" "$(GROUP)" "$(CRTC)"
 
 # The conformance tier: the complete SingleStepTests corpus, fetched on first
 # use. Run it before committing anything that touches the CPU.
@@ -190,7 +199,11 @@ test-exerciser: $(BUILD)/z80_exerciser_test
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexdoc.com $(EXERCISER_GROUPS)
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexall.com $(EXERCISER_GROUPS)
 
+# Both CRTCs, whatever the command line asked for: the point of the tier is
+# every record, and a type named here would silently grade one of them twice.
+test-all: override CRTC := 0
 test-all: test test-firmware test-shaker test-single-step test-exerciser
+	@$(MAKE) --no-print-directory test-shaker CRTC=1
 
 format:
 	$(CLANG_FORMAT) -i $(SRC_ALL)

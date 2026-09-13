@@ -171,11 +171,12 @@ static void build_glyph_index(void) {
    an array the controller would drive the wrong drive. */
 static cpc_t cpc;
 
-/* Which CRTC the machine under test is built with. Held here rather than
-   read back from the machine, because the modules run in forked children
-   and the scoreboard's head is written by the parent, which powers nothing
-   on and would name a type it never built. */
-static const uint8_t crtc_type = 0;
+/* Which CRTC the machine under test is built with, named on the command
+   line and a type 0 when it is not. Held here rather than read back from
+   the machine, because the modules run in forked children and the
+   scoreboard's head is written by the parent, which powers nothing on and
+   would name a type it never built. */
+static uint8_t crtc_type = 0;
 static cpc_t saved_cpc;
 static uint8_t saved_ram[sizeof ram];
 static floppy_t saved_disc;
@@ -192,7 +193,7 @@ static int grid_top = NOMINAL_TOP;
 static const char *rom_directory = "roms";
 static const char *disc_directory = "test/data/discs";
 static const char *report_directory = "build/shaker";
-static const char *scoreboard_on_record = "test/shaker-scoreboard.txt";
+static const char *scoreboard_on_record = "test/shaker-scoreboard-crtc0.txt";
 
 typedef struct {
   char key[MAX_KEY_LENGTH + 1];
@@ -1599,20 +1600,20 @@ static const verdict_case built_lines[] = {
     /* The word only corroborates the numbers, and it is read where they
        agree and it does not. */
     {"RESULT:#0032 WRONG (EXP:#0032)", true, true},
-    /* A clause naming this machine's type outranks the one gathering the
-       rest, whichever stands first. */
+    /* A clause naming a type 0 outranks the one gathering the rest,
+       whichever stands first. */
     {"X=#0011 (CRTC 0:#11/ OTHERS:#22)", true, false},
     {"X=#0011 (OTHERS:#22/ CRTC 0:#11)", true, false},
     /* Type 10 is not type 0. */
     {"X=#0022 (CRTC 10:#11/ OTHERS:#22)", true, false},
-    /* A bracket that speaks for no type this machine is. */
+    /* A bracket that speaks for no type a 0 is. */
     {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", false, false},
     /* A word that merely begins with the letters, naming a value for
        something other than silicon, and a word that is not the word. */
     {"X=#0044 (EXPANSION #44)", false, false},
     {"X=#0044 (EXT #44)", false, false},
-    /* A clause for this machine whose value cannot be read takes the
-       bracket down rather than letting the rest answer in its place. */
+    /* A clause for a type 0 whose value cannot be read takes the bracket
+       down rather than letting the rest answer in its place. */
     {"X=#0058 (CRTC 0:DEADLOCK/ OTHERS:#22)", false, false},
     {"X=#0058 (CRTC 0:/ OTHERS:#22)", false, false},
     {"X=#0058 (CRTC 0:#FFFFFFFF/ OTHERS:#22)", false, false},
@@ -1643,9 +1644,9 @@ static void the_verdict_reader_knows_its_renderings(void) {
    states silicon's value for each type in one bracket and gates whole
    groups by the type named at the head of a label, so a reader that follows
    the type the machine was built as is what lets a second type be graded at
-   all. None of these readings can be taken from a run here yet — the chip
-   is a type 0 — so these say how they will be read when a second type
-   arrives. */
+   all. A machine built as a type 1 reads the clauses that speak for one;
+   the readings for a 2, a 3 and a 4 say how they will be read when a
+   machine can be built as those. */
 typedef struct {
   const char *line;
   uint8_t type;
@@ -1936,6 +1937,8 @@ static bool run_every_module(void) {
   return every_module_ran;
 }
 
+/* The order of these is the Makefile recipe's, and the two move together.
+   Every one of them has a default. */
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -1955,6 +1958,13 @@ int main(int argc, char **argv) {
   if (argc > 6 && argv[6][0] != '\0') {
     only_group = argv[6];
     keep_rasters = true;
+  }
+  if (argc > 7 && argv[7][0] != '\0') {
+    if (argv[7][1] != '\0' || argv[7][0] < '0' || argv[7][0] > '4') {
+      printf("shaker: %s names no CRTC; the types are 0 to 4\n", argv[7]);
+      return 1;
+    }
+    crtc_type = (uint8_t)(argv[7][0] - '0');
   }
   if (only_group != NULL && only_module == NULL) {
     printf("shaker: a group needs the module it belongs to — pass MODULE too\n");
@@ -1980,8 +1990,14 @@ int main(int argc, char **argv) {
     printf("shaker: cannot write %s\n", scoreboard_path);
     return 1;
   }
-  fprintf(file, "What Longshot's Shaker 2.7 said about this machine, a type %u CRTC,\n", crtc_type);
-  fprintf(file, "module by module and in the order each module's own menu prints.\n\n");
+  fprintf(file, "What Longshot's Shaker 2.7 said about this machine, built as a type %u\n",
+          crtc_type);
+  fprintf(file, "CRTC, module by module and in the order each module's own menu prints.\n\n");
+  if (crtc_type != 0) {
+    fprintf(file, "Built as, and no more than that: the chip answers a program asking what\n");
+    fprintf(file, "it is, and behaves as a type 0 in every timing it has. Most of what is\n");
+    fprintf(file, "wrong below is that, and is the work rather than a fault.\n\n");
+  }
   fprintf(file, "%d groups run, %d left to another CRTC type.\n", total_groups_run,
           total_groups_skipped);
   /* The denominator is the lines this reader can score and not the groups
@@ -2009,6 +2025,11 @@ int main(int argc, char **argv) {
   fprintf(file, "printing a graded line on one phase and none on another with the emulator\n");
   fprintf(file, "altered in no way at all. When a line leaves this record, rule the phase out\n");
   fprintf(file, "before believing the loss.\n\n");
+  fprintf(file, "Nor is every line here one the machine drew once. A screen read while it\n");
+  fprintf(file, "was being redrawn is spliced from the two halves, and a tear whose seam\n");
+  fprintf(file, "falls on a row boundary is believed, so a group can be recorded printing\n");
+  fprintf(file, "the same line twice. Count a group's distinct lines before trusting its\n");
+  fprintf(file, "standing.\n\n");
   fprintf(file, "A group that names silicon's value only where it differs is worth\n");
   fprintf(file, "knowing about: it grades itself while the machine is wrong and prints its\n");
   fprintf(file, "measurement alone once it is right, so it leaves the tally above by being\n");
