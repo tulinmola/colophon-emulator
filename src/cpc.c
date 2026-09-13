@@ -155,10 +155,11 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
   return data;
 }
 
-void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom) {
+void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
+              uint8_t crtc_type) {
   *cpc = (cpc_t){0};
   z80_init(&cpc->cpu);
-  crtc_init(&cpc->crtc);
+  crtc_init(&cpc->crtc, crtc_type);
   gate_array_init(&cpc->gate_array);
   ppi_init(&cpc->ppi);
   psg_init(&cpc->psg);

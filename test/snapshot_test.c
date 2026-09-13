@@ -22,7 +22,7 @@ static cpc_t cpc;
 static cpc_t restored;
 
 static void power_on(cpc_t *machine, uint8_t *memory, uint32_t size) {
-  cpc_init(machine, memory, size, lower_rom);
+  cpc_init(machine, memory, size, lower_rom, 0);
   cpc_set_upper_rom(machine, 0, upper_rom);
 }
 

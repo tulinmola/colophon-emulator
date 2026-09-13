@@ -50,13 +50,13 @@ The names are the datasheets'. A pin, a register or a counter that has a page in
 
 ```c
 cpc_t cpc;
-cpc_init(&cpc, ram, ram_size, lower_rom);
+cpc_init(&cpc, ram, ram_size, lower_rom, 0);
 cpc_set_upper_rom(&cpc, 0, basic_rom);
 cpc_connect_monitor(&cpc, framebuffer);
 cpc_set_links(&cpc, true, CPC_MANUFACTURER_AMSTRAD);
 ```
 
-The RAM's size is the machine's identity as far as the board is concerned: 64K means no PAL is fitted and banking commands die on the empty socket, 128K makes it a 6128. An upper ROM socket left empty resolves to ROM 0 when something selects it, as it does on the hardware.
+The last argument is which of the five CRTCs the machine is built with, and type 0 is the only one the chip implements: another number is carried so a host can say what it fitted, and not obeyed. The RAM's size is the machine's identity as far as the board is concerned: 64K means no PAL is fitted and banking commands die on the empty socket, 128K makes it a 6128. An upper ROM socket left empty resolves to ROM 0 when something selects it, as it does on the hardware.
 
 The framebuffer is `CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT` bytes of hardware colour codes — the whole raster, not the picture. Left unplugged, the machine runs on and draws into the void, as it would with the cable out.
 

@@ -23,7 +23,7 @@ static void power_on(uint32_t ram_size) {
   memset(lower_rom, 0x76, sizeof lower_rom);
   memset(basic_rom, 0, sizeof basic_rom);
   memset(extra_rom, 0, sizeof extra_rom);
-  cpc_init(&cpc, ram, ram_size, lower_rom);
+  cpc_init(&cpc, ram, ram_size, lower_rom, 0);
   cpc_set_upper_rom(&cpc, 0, basic_rom);
 }
 
@@ -217,7 +217,7 @@ static void upper_rom_selects_and_absent_numbers_fall_back(void) {
 static void an_empty_upper_socket_reads_high(void) {
   memset(ram, 0, sizeof ram);
   memset(lower_rom, 0x76, sizeof lower_rom);
-  cpc_init(&cpc, ram, sizeof ram, lower_rom);
+  cpc_init(&cpc, ram, sizeof ram, lower_rom, 0);
   TEST_EQUAL(cpc_peek(&cpc, 0xC000), 0xFF);
   TEST_EQUAL(cpc_peek(&cpc, 0xFFFF), 0xFF);
 }

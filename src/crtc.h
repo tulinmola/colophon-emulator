@@ -8,6 +8,11 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
+ * Only type 0 is implemented. The chip carries whichever type the machine
+ * built it as, so that a host can say which part it fitted, but every
+ * behaviour below is type 0's whatever that type is set to, and a number
+ * naming none of the five is neither refused nor corrected.
+ *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its readable set, its
  * VMA/VMA' reload rules, the counter widths a program can overrun, the last
@@ -177,6 +182,13 @@ static inline uint64_t crtc_set_data(uint64_t pins, uint8_t data) {
 }
 
 typedef struct {
+  /* Which of the five types this is, numbered as ch. 4.2's table numbers
+     them: 0 is Hitachi's HD6845S and UMC's UM6845, 1 UMC's UM6845R, 2
+     Motorola's MC6845, and 3 and 4 the Amstrad ASICs that emulate one. That
+     table splits type 1 into a 1-A and a 1-B, two behaviours observed of
+     the one part, which nothing here tells apart. */
+  uint8_t type;
+
   /* R0-R17, selected through the address register. Writes are masked to the
      documented type-0 widths (Compendium ch. 4.3); R16/R17 ignore writes. */
   uint8_t registers[18];
@@ -306,11 +318,11 @@ typedef struct {
   bool vsync;
 } crtc_t;
 
-/* Power-on. Real silicon leaves the register file undefined; zeroes here,
- * for determinism, which leaves the chip before a line's first character —
- * with the VSYNC's authorization and the management of C9 the two states
- * that wake standing. */
-void crtc_init(crtc_t *crtc);
+/* Power-on as the given type. Real silicon leaves the register file
+ * undefined; zeroes here, for determinism, which leaves the chip before a
+ * line's first character — with the VSYNC's authorization and the
+ * management of C9 the two states that wake standing. */
+void crtc_init(crtc_t *crtc, uint8_t type);
 
 /* Advance one character clock. Returns the output pins. */
 uint64_t crtc_tick(crtc_t *crtc);

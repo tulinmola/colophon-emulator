@@ -24,7 +24,7 @@ static void write_register(int reg, uint8_t value) {
 
 static void program_standard(void) {
   static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   for (int reg = 0; reg < 14; reg++) {
     write_register(reg, values[reg]);
   }
@@ -190,7 +190,7 @@ static void stand_on_an_even_frame(uint8_t r9) { stand_on_a_frame(false, r9); }
 static void stand_on_an_odd_frame(uint8_t r9) { stand_on_a_frame(true, r9); }
 
 static void reset_state(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   TEST_EQUAL(crtc.c0, 0);
   TEST_EQUAL(crtc.c9, 0);
   TEST_EQUAL(crtc.c4, 0);
@@ -200,13 +200,13 @@ static void reset_state(void) {
 }
 
 static void select_wears_five_bits(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0xEC));
   TEST_EQUAL(crtc.address_register, 0x0C);
 }
 
 static void writes_wear_the_documented_widths(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(4, 0xFF);
   TEST_EQUAL(crtc.registers[4], 0x7F);
   write_register(12, 0xFF);
@@ -231,7 +231,7 @@ static void type0_reads_r12_to_r17_and_nothing_else(void) {
 }
 
 static void unselected_chip_ignores_the_bus(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
   TEST_EQUAL(crtc.address_register, 0);
 }
@@ -910,7 +910,7 @@ static void a_line_of_three_characters_still_arms_the_vsync(void) {
    ch. 13.2.2's state standing, since C4 never moves to lift a block, and a
    chip that woke without it would give none at all. */
 static void an_r7_and_r4_of_zero_give_one_vsync_and_no_more(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(0, 63);
   write_register(1, 40);
   write_register(3, 0x8E);
@@ -974,7 +974,7 @@ static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
    0 from the first character, which is what power-on leaves it: one
    boundary lands, and then the freeze. */
 static void the_chip_wakes_with_its_counters_managed(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(9, 7); /* a row of eight lines, so C9 is what the boundary moves */
   for (int character = 0; character < 16; character++) { /* a dozen and more */
     crtc_tick(&crtc);
@@ -1087,7 +1087,7 @@ static void a_freeze_on_a_last_line_begins_an_adjustment(void) {
    line measures before it gives, which is ch. 13.2.4's reminder and what
    Shaker's graded E (1) holds this chip to. */
 static void a_narrow_line_draws_the_adjustment_it_cannot_disarm(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(0, 1);
   write_register(1, 40);
   write_register(3, 0x8E);
@@ -1110,7 +1110,7 @@ static void a_narrow_line_draws_the_adjustment_it_cannot_disarm(void) {
   /* And a row of four scanlines puts that line after the last of them:
      "this 'line' of 2 usec (for which C4=1) occurs after the last value of
      C9" (ch. 13.2.5). */
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(0, 1);
   write_register(3, 0x8E);
   write_register(4, 0);
@@ -1174,7 +1174,7 @@ static void a_run_begun_under_a_stopped_picture_ends_on_r5(void) {
    will occur on the 3rd C0=0", so the syncs alternate with the characters
    between them. */
 static void two_hsyncs_cannot_be_contiguous(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(0, 0);
   write_register(2, 0);
   write_register(3, 0x01);
@@ -1186,7 +1186,7 @@ static void two_hsyncs_cannot_be_contiguous(void) {
 
   /* A sync four characters wide on a line of four ends where it began, so
      the same block holds it to every other line. */
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(0, 3);
   write_register(2, 0);
   write_register(3, 0x04);
@@ -1208,7 +1208,7 @@ static void two_hsyncs_cannot_be_contiguous(void) {
    apart here, the comparison that ends the sync reading the new value on
    the same character. */
 static void an_r3_written_in_time_carries_the_hsync_on(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(0, 0);
   write_register(2, 0);
   write_register(3, 0x04);
@@ -1245,7 +1245,7 @@ static void an_r3l_written_during_a_hsync_stops_it_or_overflows(void) {
       {1, 17},
   };
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
-    crtc_init(&crtc);
+    crtc_init(&crtc, 0);
     write_register(0, 63);
     write_register(2, 11);
     write_register(3, 0x8A);

@@ -24,13 +24,19 @@ typedef struct {
   const char *rom_file;
   uint32_t ram_size;
   bool disc_interface; /* built in; a 464 gets one plugged in with a disc */
+  /* Amstrad fitted whichever part it had bought, and ch. 4.2's third note
+     says it "cannot be excluded even at present, that some series of CPC's
+     may be equipped with different CRTC models", so this is a choice about
+     a unit rather than a fact about the model. Type 0 is the only one
+     implemented, so it is the only one offered. */
+  uint8_t crtc_type;
   const char *description;
 } machine_t;
 
 static const machine_t machines[] = {
-    {"cpc6128", "cpc6128.rom", 0x20000, true, "Amstrad CPC 6128, 128K, BASIC 1.1"},
-    {"cpc664", "cpc664.rom", 0x10000, true, "Amstrad CPC 664, 64K, BASIC 1.1"},
-    {"cpc464", "cpc464.rom", 0x10000, false, "Amstrad CPC 464, 64K, BASIC 1.0"},
+    {"cpc6128", "cpc6128.rom", 0x20000, true, 0, "Amstrad CPC 6128, 128K, BASIC 1.1"},
+    {"cpc664", "cpc664.rom", 0x10000, true, 0, "Amstrad CPC 664, 64K, BASIC 1.1"},
+    {"cpc464", "cpc464.rom", 0x10000, false, 0, "Amstrad CPC 464, 64K, BASIC 1.0"},
 };
 static const size_t machine_count = sizeof machines / sizeof machines[0];
 
@@ -564,7 +570,7 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   }
 
   /* The operating system fills the lower 16K, BASIC the upper as ROM 0. */
-  cpc_init(cpc, ram, options.machine->ram_size, rom);
+  cpc_init(cpc, ram, options.machine->ram_size, rom, options.machine->crtc_type);
   cpc_set_upper_rom(cpc, 0, rom + 0x4000);
   if (disc_interface) {
     cpc_fit_disc_interface(cpc, true);

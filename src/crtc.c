@@ -20,8 +20,9 @@ static const uint8_t writable_bits[18] = {
 #define C4_BITS 0x7F
 #define C9_BITS 0x1F
 
-void crtc_init(crtc_t *crtc) {
+void crtc_init(crtc_t *crtc, uint8_t type) {
   *crtc = (crtc_t){0};
+  crtc->type = type;
   crtc->vsync_armed = true;
   crtc->c9_processing_managed = true;
 }

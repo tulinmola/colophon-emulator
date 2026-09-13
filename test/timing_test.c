@@ -152,7 +152,7 @@ static const timing self_looping[] = {
 static void power_on(void) {
   memset(ram, 0, sizeof ram);
   memset(lower_rom, 0, sizeof lower_rom); /* NOPs everywhere */
-  cpc_init(&cpc, ram, sizeof ram, lower_rom);
+  cpc_init(&cpc, ram, sizeof ram, lower_rom, 0);
 }
 
 /* Two ways to hold an instruction still long enough to time it, because

@@ -95,7 +95,7 @@ static bool power_on(const char *file, uint32_t ram_size, bool fifty_hz, bool di
       !load_file(rom_directory, "amsdos.rom", amsdos, sizeof amsdos, NULL, "make roms")) {
     return false;
   }
-  cpc_init(&cpc, ram, ram_size, rom);
+  cpc_init(&cpc, ram, ram_size, rom, 0);
   cpc_set_upper_rom(&cpc, 0, rom + 0x4000);
   if (disc_interface) {
     cpc_fit_disc_interface(&cpc, true);

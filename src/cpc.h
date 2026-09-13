@@ -127,11 +127,14 @@ typedef struct {
   uint8_t *write_page[4];
 } cpc_t;
 
-/* Power-on. The lower ROM is readable at &0000 — it must be, or no first
- * instruction could ever be fetched. Upper ROM enabled and configuration 0
- * are conventions: the firmware writes both registers before anything could
- * observe their reset state. */
-void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom);
+/* Power-on with a CRTC built as the given type — only type 0 is
+ * implemented, so the number is carried and not obeyed (crtc.h). The lower
+ * ROM is readable at &0000 — it must be, or no first instruction could ever
+ * be fetched. Upper ROM enabled and configuration 0 are conventions: the
+ * firmware writes both registers before anything could observe their reset
+ * state. */
+void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
+              uint8_t crtc_type);
 
 /* Fit a 16K ROM as upper ROM `number`; NULL empties the socket. */
 void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom);

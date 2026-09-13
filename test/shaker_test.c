@@ -168,6 +168,12 @@ static void build_glyph_index(void) {
    saved copy is not a usable machine, and the day this becomes a local or
    an array the controller would drive the wrong drive. */
 static cpc_t cpc;
+
+/* Which CRTC the machine under test is built with. Held here rather than
+   read back from the machine, because the modules run in forked children
+   and the scoreboard's head is written by the parent, which powers nothing
+   on and would name a type it never built. */
+static const uint8_t crtc_type = 0;
 static cpc_t saved_cpc;
 static uint8_t saved_ram[sizeof ram];
 static floppy_t saved_disc;
@@ -335,7 +341,7 @@ static bool power_on(void) {
     return false;
   }
   build_glyph_index();
-  cpc_init(&cpc, ram, sizeof ram, rom);
+  cpc_init(&cpc, ram, sizeof ram, rom, crtc_type);
   cpc_set_upper_rom(&cpc, 0, rom + 0x4000);
   cpc_fit_disc_interface(&cpc, true);
   cpc_set_upper_rom(&cpc, 7, amsdos);
@@ -608,6 +614,35 @@ static bool begins_with(const char *text, const char *prefix) {
   return strncmp(text, prefix, strlen(prefix)) == 0;
 }
 
+/* A list of types is written as numbers with any of . + , - / between them:
+   "CRTC 0.1.2", "CRTC 3+4", "CRTC 3/4". Each is read whole, so a 10 names
+   neither a 1 nor a 0. The list ends at the first character that is neither
+   a digit nor a separator, because Shaker's prose is full of register names
+   that would otherwise lend a list a digit it never meant — "C0io=#00"
+   stands in a line of this very test. A number past the types that exist is
+   held at one rather than wrapped into one that does. */
+static bool names_the_crtc_type(const char *from, const char *to, uint8_t type) {
+  const char *at = from;
+  while (at < to) {
+    if (*at == '.' || *at == '+' || *at == ',' || *at == '-' || *at == '/') {
+      at++;
+      continue;
+    }
+    if (!isdigit((unsigned char)*at)) {
+      return false;
+    }
+    unsigned named = 0;
+    while (at < to && isdigit((unsigned char)*at)) {
+      named = named < 256 ? named * 10 + (unsigned)(*at - '0') : 256;
+      at++;
+    }
+    if (named == type) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /* Which CRTC type a group belongs to is stated at the head of its label and
    nowhere else: "CRTC 2 RVMB" is type 2's, "CRTC 0.2" is shared, "ALL" is
    everyone's. A type named later in a label is a remark about the test, not
@@ -615,8 +650,8 @@ static bool begins_with(const char *text, const char *prefix) {
    KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)" is a caution. The one label
    that overrides its own head is the one that says so: "OPEN TO OTHER
    CRTC'S", which Shaker prints where a type's test has been found to hold
-   for the rest. */
-static bool applies_to_type_0(const char *label) {
+   for the rest. A label writes its list the way a bracket's clause does. */
+static bool applies_to_crtc_type(const char *label, uint8_t type) {
   if (strstr(label, "OPEN TO OTHER") != NULL) {
     return true;
   }
@@ -631,15 +666,10 @@ static bool applies_to_type_0(const char *label) {
   while (*at == ' ') {
     at++;
   }
-  if (*at < '0' || *at > '9') {
+  if (!isdigit((unsigned char)*at)) {
     return true;
   }
-  for (; (*at >= '0' && *at <= '9') || *at == '/' || *at == '.'; at++) {
-    if (*at == '0') {
-      return true;
-    }
-  }
-  return false;
+  return names_the_crtc_type(at, at + strlen(at), type);
 }
 
 /* The whole bracket has to match: a label can carry "(2.1.0)" beside its
@@ -712,7 +742,7 @@ static void add_group(const char *key, size_t key_length, const char *label, siz
   }
   memmove(entry->label, from, strlen(from) + 1);
   entry->declared_tests = declared_test_count(entry->label);
-  entry->applies_to_this_crtc_type = applies_to_type_0(entry->label);
+  entry->applies_to_this_crtc_type = applies_to_crtc_type(entry->label, crtc_type);
   group_count++;
 }
 
@@ -887,18 +917,9 @@ static bool holds_text(const char *from, const char *to, const char *lowercase) 
   return false;
 }
 
-/* A clause names the types it speaks for as the digits following the word
-   CRTC, which any of . + , - may separate: "CRTC 0.1.2", "CRTC 3+4". The
-   list ends at the first character that is neither, because Shaker's prose
-   is full of register names that would otherwise lend a clause a zero it
-   never meant — "C0io=#00" stands in a line of this very test. A clause
-   naming no types at all is not this machine's unless it gathers the rest.
-
-   applies_to_type_0 asks the same question of a group's label and answers
-   it differently: it reads the run after the word and is content with a
-   zero anywhere in the number, where a type list may hold several and each
-   must be read whole. */
-static bool clause_speaks_for_type_0(const char *from, const char *to) {
+/* A clause names the types it speaks for behind the word CRTC. One naming
+   none at all is not this machine's unless it gathers the rest. */
+static bool clause_speaks_for_crtc_type(const char *from, const char *to, uint8_t type) {
   const char *at = from;
   while (at + 4 <= to && !matches_ignoring_case(at, "crtc", 4)) {
     at++;
@@ -908,24 +929,7 @@ static bool clause_speaks_for_type_0(const char *from, const char *to) {
   }
   for (at += 4; at < to && *at == ' '; at++) {
   }
-  while (at < to) {
-    if (*at == '.' || *at == '+' || *at == ',' || *at == '-') {
-      at++;
-      continue;
-    }
-    if (!isdigit((unsigned char)*at)) {
-      return false;
-    }
-    bool zero = true;
-    while (at < to && isdigit((unsigned char)*at)) {
-      zero = zero && *at == '0';
-      at++;
-    }
-    if (zero) {
-      return true;
-    }
-  }
-  return false;
+  return names_the_crtc_type(at, to, type);
 }
 
 /* The value a clause names, wearing the # of a measurement or going
@@ -955,17 +959,17 @@ static bool clause_value(const char *at, const char *end, unsigned long *value) 
 /* Some groups name silicon's value for each CRTC type rather than for the
    machine in front of them: "(CRTC 0.3.4:3F2/CRTC 1.2:1F4)", "(CRTC 3+4:#58/
    OTHERS:#59)". Slashes separate the clauses, each naming the types it
-   speaks for and then their value. This machine is a type 0, so the clause
-   to read is the one naming 0, or failing that the one gathering the rest —
-   and a clause that names 0 and then no value this reader can read takes
-   the whole bracket down with it, rather than letting the rest be answered
-   in its place.
+   speaks for and then their value. The clause to read is the one naming the
+   type this machine was built as, or failing that the one gathering the
+   rest — and a clause that names it and then no value this reader can read
+   takes the whole bracket down with it, rather than letting the rest be
+   answered in its place.
 
    Naming a type is what tells this rendering from a legend keyed by value,
    "(00:C4ovf 01:C4=0)" or "(01:IO>=5TH NOP / 00:IO ON 4TH NOP)": a clause
    claims this machine by the word CRTC and the digits behind it, or by
-   gathering the rest, so a legend's 00 claims nothing at all. */
-static bool value_for_this_crtc_type(const char *opening, const char *closing,
+   gathering the rest, so a legend's 00 claims nothing on any type. */
+static bool value_for_this_crtc_type(const char *opening, const char *closing, uint8_t type,
                                      unsigned long *value) {
   bool found = false;
   for (const char *clause = opening + 1; clause < closing;) {
@@ -980,7 +984,7 @@ static bool value_for_this_crtc_type(const char *opening, const char *closing,
     if (colon < end) {
       unsigned long named;
       bool readable = clause_value(colon + 1, end, &named);
-      if (clause_speaks_for_type_0(clause, colon)) {
+      if (clause_speaks_for_crtc_type(clause, colon, type)) {
         if (!readable) {
           return false;
         }
@@ -1018,7 +1022,7 @@ static bool first_hex_value_between(const char *from, const char *to, unsigned l
   return false;
 }
 
-static bool read_verdict(const char *line, bool *failed) {
+static bool read_verdict(const char *line, uint8_t type, bool *failed) {
   for (const char *opening = strchr(line, '('); opening != NULL;
        opening = strchr(opening + 1, '(')) {
     const char *closing = strchr(opening, ')');
@@ -1033,7 +1037,7 @@ static bool read_verdict(const char *line, bool *failed) {
       if (!first_hex_value_between(opening, closing, &expected)) {
         return false;
       }
-    } else if (!value_for_this_crtc_type(opening, closing, &expected)) {
+    } else if (!value_for_this_crtc_type(opening, closing, type, &expected)) {
       continue;
     }
     unsigned long produced;
@@ -1098,7 +1102,7 @@ static int collect_verdicts(int percentage_named) {
     line[length] = '\0';
     trim_trailing_spaces(line);
     bool failed = false;
-    if (!read_verdict(line, &failed) || strchr(line, '?') != NULL) {
+    if (!read_verdict(line, crtc_type, &failed) || strchr(line, '?') != NULL) {
       continue;
     }
     if (!appears_in_previous_screen(line)) {
@@ -1614,7 +1618,7 @@ static const verdict_case built_lines[] = {
 
 static void check_verdict_case(const char *provenance, const verdict_case *wanted) {
   bool read_as_failed = false;
-  bool read_as_graded = read_verdict(wanted->line, &read_as_failed);
+  bool read_as_graded = read_verdict(wanted->line, 0, &read_as_failed);
   if (read_as_graded != wanted->graded) {
     TEST_FAIL("%s: \"%s\" was %s, where it should be %s", provenance, wanted->line,
               read_as_graded ? "graded" : "left alone", wanted->graded ? "graded" : "left alone");
@@ -1630,6 +1634,98 @@ static void the_verdict_reader_knows_its_renderings(void) {
   }
   for (size_t index = 0; index < sizeof built_lines / sizeof built_lines[0]; index++) {
     check_verdict_case("built", &built_lines[index]);
+  }
+}
+
+/* The same lines and labels read as each of the five machines. Shaker
+   states silicon's value for each type in one bracket and gates whole
+   groups by the type named at the head of a label, so a reader that follows
+   the type the machine was built as is what lets a second type be graded at
+   all. None of these readings can be taken from a run here yet — the chip
+   is a type 0 — so these say how they will be read when a second type
+   arrives. */
+typedef struct {
+  const char *line;
+  uint8_t type;
+  bool graded;
+  bool failed;
+} verdict_case_by_type;
+
+static const char vsync_off_by_type[] =
+    "R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)";
+
+static const verdict_case_by_type lines_by_type[] = {
+    /* The machine measured #0032, which is what a type 0, 3 or 4 owes and
+       not what a type 1 or a type 2 does. */
+    {vsync_off_by_type, 0, true, false},
+    {vsync_off_by_type, 3, true, false},
+    {vsync_off_by_type, 1, true, true},
+    {vsync_off_by_type, 2, true, true},
+    /* The rest are gathered for every type the bracket passes over. */
+    {"X=#0011 (CRTC 0:#11/ OTHERS:#22)", 0, true, false},
+    {"X=#0011 (CRTC 0:#11/ OTHERS:#22)", 1, true, true},
+    /* A bracket that names some types and gathers no rest grades nothing on
+       a machine it passes over, and grades on one it names. */
+    {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", 0, false, false},
+    {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", 1, true, true},
+    /* The digits behind the word are read whole whatever the machine, so 10
+       is no more a 1 than it is a 0. */
+    {"X=#0022 (CRTC 10:#11/ OTHERS:#22)", 0, true, false},
+    {"X=#0022 (CRTC 10:#11/ OTHERS:#22)", 1, true, false},
+    /* A line already on the record, and a gap written down rather than
+       implied away: Shaker carries the second clause's types without
+       repeating the word, so this reader does not see them and grades
+       nothing on a 3 or a 4 where it grades on a 0, a 1 and a 2. */
+    {"R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)", 0, true, false},
+    {"R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)", 2, true, false},
+    {"R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)", 3, false, false},
+    {"R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)", 4, false, false},
+};
+
+typedef struct {
+  const char *label;
+  uint8_t type;
+  bool applies;
+} label_case_by_type;
+
+static const label_case_by_type labels_by_type[] = {
+    {"CRTC 2 RVMB (22 TST)", 0, false},
+    {"CRTC 2 RVMB (22 TST)", 2, true},
+    {"CRTC 1 BUG OUTI R0", 1, true},
+    {"CRTC 1 BUG OUTI R0", 0, false},
+    /* A variant behind the number is still that number. */
+    {"CRTC 1-A OR 1-B?", 1, true},
+    {"CRTC 1-A OR 1-B?", 0, false},
+    /* And a head naming two types speaks for both. */
+    {"CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)", 3, true},
+    {"CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)", 4, true},
+    {"CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)", 0, false},
+    {"ALL : CRTC 3/4 PARITY", 0, true},
+    {"ALL : CRTC 3/4 PARITY", 1, true},
+    {"CRTC 0 R9 UPDATE (OPEN TO OTHER CRTC'S)", 1, true},
+};
+
+static void the_reader_follows_the_type_the_machine_was_built_as(void) {
+  for (size_t index = 0; index < sizeof lines_by_type / sizeof lines_by_type[0]; index++) {
+    const verdict_case_by_type *wanted = &lines_by_type[index];
+    bool failed = false;
+    bool graded = read_verdict(wanted->line, wanted->type, &failed);
+    if (graded != wanted->graded) {
+      TEST_FAIL("as a type %u: \"%s\" was %s, where it should be %s", wanted->type, wanted->line,
+                graded ? "graded" : "left alone", wanted->graded ? "graded" : "left alone");
+    } else if (wanted->graded && failed != wanted->failed) {
+      TEST_FAIL("as a type %u: \"%s\" was read as %s", wanted->type, wanted->line,
+                failed ? "wrong" : "right");
+    }
+  }
+  for (size_t index = 0; index < sizeof labels_by_type / sizeof labels_by_type[0]; index++) {
+    const label_case_by_type *wanted = &labels_by_type[index];
+    bool applies = applies_to_crtc_type(wanted->label, wanted->type);
+    if (applies != wanted->applies) {
+      TEST_FAIL("as a type %u: \"%s\" is %s, where it should be %s", wanted->type, wanted->label,
+                applies ? "run" : "left to another type",
+                wanted->applies ? "run" : "left to another type");
+    }
   }
 }
 
@@ -1882,7 +1978,7 @@ int main(int argc, char **argv) {
     printf("shaker: cannot write %s\n", scoreboard_path);
     return 1;
   }
-  fprintf(file, "What Longshot's Shaker 2.7 said about this machine, a type 0 CRTC,\n");
+  fprintf(file, "What Longshot's Shaker 2.7 said about this machine, a type %u CRTC,\n", crtc_type);
   fprintf(file, "module by module and in the order each module's own menu prints.\n\n");
   fprintf(file, "%d groups run, %d left to another CRTC type.\n", total_groups_run,
           total_groups_skipped);
@@ -1933,6 +2029,7 @@ int main(int argc, char **argv) {
          agreeing, total_verdicts, percentage, total_groups_graded, total_groups_run);
 
   TEST_RUN(the_verdict_reader_knows_its_renderings);
+  TEST_RUN(the_reader_follows_the_type_the_machine_was_built_as);
   TEST_RUN(a_screen_read_in_part_cannot_repeat_a_verdict);
   TEST_RUN(the_scoreboard_matches_the_one_on_record);
   return TEST_REPORT("shaker");
