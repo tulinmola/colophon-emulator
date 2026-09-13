@@ -155,6 +155,18 @@ static void begin_frame(crtc_t *crtc) {
   enter_character_row(crtc, 0);
 }
 
+/* How many lines a VSYNC lasts. "This number of lines can be programmed on
+   CRTC's 0, 3 and 4 (via register R3h). It is fixed at 16 for CRTC's 1 and
+   2 (and for CRTC's 0, 3, 4 when R3h=0)" (ch. 16). C3h counts on four bits,
+   so a limit of 0 is the same comparison as a limit of 16, and the two
+   types that cannot be programmed simply never read R3h. */
+static uint8_t vsync_lines(const crtc_t *crtc) {
+  if (crtc->type == 1 || crtc->type == 2) {
+    return 0;
+  }
+  return (uint8_t)(crtc->registers[3] >> 4);
+}
+
 /* A line that never reaches C0=1 leaves C9's management disabled, and then
    "all of the CRTC counters are frozen as long as R0=0" (ch. 13.2.1) — the
    VSYNC's line counter with them, which is why a VSYNC begun there "is not
@@ -199,18 +211,29 @@ static void enter_scanline(crtc_t *crtc) {
     return;
   }
   /* C3h counts VSYNC scanlines on its 4 bits, so a width of 0 runs the full
-     16 (ch. 6.1.2). */
+     16 (ch. 6.1.2), which is every VSYNC on the two types that cannot
+     program one. */
   if (crtc->vsync_began_mid_line) {
     /* A VSYNC that began away from the head of a line has its counter
        initialized at the next C0=0 rather than advanced there, which leaves
        the pulse longer than R3's high nibble by the rest of the line it
        began in: one begun during line 1 of 16 ends at the end of line 17
-       (ch. 16.4.1). */
-    crtc->c3h = 0;
+       (ch. 16.4.1). Types 1 and 2 initialize it with 1 instead and spend a
+       line fewer, "the 'triggered' activation of the VSYNC count(ing) the
+       line as if the VSYNC had started when C0=0" (ch. 16.4.2, 16.4.3;
+       ch. 28.1.3 says the same of a type 1 alone, being a chapter about
+       telling the types apart rather than about all of them). Both chapters
+       scope it to a VSYNC begun because R7 was written to meet C4, which
+       the half line an even interlaced frame begins on is not: one of those
+       "starts when R7 was programmed before C4=R7" and so "lasts 16 lines"
+       (ch. 28.1.4). */
+    bool counts_from_one =
+        (crtc->type == 1 || crtc->type == 2) && !crtc->vsync_began_on_its_half_line;
+    crtc->c3h = counts_from_one ? 1 : 0;
     crtc->vsync_began_mid_line = false;
   } else if (crtc->vsync) {
     crtc->c3h = (crtc->c3h + 1) & 0x0F;
-    if (crtc->c3h == (r[3] >> 4)) {
+    if (crtc->c3h == vsync_lines(crtc)) {
       crtc->vsync = false;
     }
   }
@@ -522,6 +545,7 @@ static void begin_syncs(crtc_t *crtc) {
     crtc->vsync_blocked = true;
     crtc->c3h = 0;
     crtc->vsync_began_mid_line = crtc->c0 != 0;
+    crtc->vsync_began_on_its_half_line = mid_vsync;
   }
 }
 

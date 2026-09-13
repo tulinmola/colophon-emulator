@@ -1,13 +1,14 @@
 What Longshot's Shaker 2.7 said about this machine, built as a type 1
 CRTC, module by module and in the order each module's own menu prints.
 
-Built as, and no more than that: the chip answers a program asking what
-it is, and behaves as a type 0 in every timing it has. Most of what is
-wrong below is that, and is the work rather than a fault.
+Built as, and nearly no more: the chip answers a program asking what it
+is, and of its own timing keeps only what the head of crtc.h names. The
+rest is a type 0's, and most of what is wrong below is that, and is the
+work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-7 of them printed self-graded lines, 58 in all: 14 agree with Longshot's
-silicon and 44 do not. That is 24% of what this reader can score, and no
+7 of them printed self-graded lines, 58 in all: 16 agree with Longshot's
+silicon and 42 do not. That is 28% of what this reader can score, and no
 measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -151,9 +152,9 @@ D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                  
     ! TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)
       Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)
       Break ED xx on Pending Int #00 (Exp#00)
-D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   4 graded, 2 wrong
-    ! R3h=0.UPP R3h=8 ON 9th LINE. DELAY VSYNC OFF=#03F2 (CRTC 0.3.4:3F2/CRTC 1.2:1F4)
-    ! R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)
+D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   4 graded, 0 wrong
+      R3h=0.UPP R3h=8 ON 9th LINE. DELAY VSYNC OFF=#01F4 (CRTC 0.3.4:3F2/CRTC 1.2:1F4)
+      R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#023A (CRTC 0.3.4:032/CRTC 1.2:23A)
       R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)
       R3h=0/R4=R7=0/ON LINE 9, R4=R7=7F: VSYNC OFF DELAY=#0032 (EXP:#32)
 D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded

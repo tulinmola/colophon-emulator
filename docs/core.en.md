@@ -56,7 +56,7 @@ cpc_connect_monitor(&cpc, framebuffer);
 cpc_set_links(&cpc, true, CPC_MANUFACTURER_AMSTRAD);
 ```
 
-The last argument is which of the five CRTCs the machine is built with. Type 0 is the only one whose behaviour the chip implements; what a program can read of the chip — the registers it hands back, and the status register one of the five has — follows the number given, and nothing else does. The RAM's size is the machine's identity as far as the board is concerned: 64K means no PAL is fitted and banking commands die on the empty socket, 128K makes it a 6128. An upper ROM socket left empty resolves to ROM 0 when something selects it, as it does on the hardware.
+The last argument is which of the five CRTCs the machine is built with. Type 0 is the only one whose behaviour the chip implements; what a program can read of the chip — the registers it hands back, and the status register one of the five has — follows the number given, as does the length of its frame sync; nothing else does. The RAM's size is the machine's identity as far as the board is concerned: 64K means no PAL is fitted and banking commands die on the empty socket, 128K makes it a 6128. An upper ROM socket left empty resolves to ROM 0 when something selects it, as it does on the hardware.
 
 The framebuffer is `CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT` bytes of hardware colour codes — the whole raster, not the picture. Left unplugged, the machine runs on and draws into the void, as it would with the cable out.
 

@@ -317,6 +317,101 @@ static void the_status_border_bit_turns_over_at_a_line_head(void) {
   TEST_EQUAL(fell[2], 0);
 }
 
+/* Ch. 16: the VSYNC's length "can be programmed on CRTC's 0, 3 and 4 (via
+   register R3h). It is fixed at 16 for CRTC's 1 and 2", so the same R3h
+   that shortens a type 0's pulse is not read at all by those two. And a
+   pulse a program triggers, by writing R7 to the row C4 already stands on,
+   is counted by those two "as if the VSYNC had started when C0=0"
+   (ch. 16.4.2, 16.4.3), so it spends a line fewer than a type 0's, which
+   keeps the rest of the line it began in. A pulse C4 simply walks into
+   keeps all sixteen on every type (ch. 28.1.4), which is why the two
+   columns below are set up differently: the first leaves R7 where C4 will
+   meet it, the second writes R7 mid-line to trigger one.
+
+   Counted as the line heads the pulse stands through, which is the measure
+   the chip's own counter takes, C3h advancing at each C0=0. Nothing outside
+   this repository grades the triggered rule: no group on the disc moves
+   when it is taken away. */
+static void each_type_keeps_its_own_vsync_length(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r3;             /* R3h the length asked for, R3l a HSYNC of 14 */
+    int walked_into;        /* line heads a pulse C4 meets stands through */
+    int triggered_mid_line; /* and one an R7 written mid-line begins */
+  } cases[] = {
+      {0, 0x4E, 4, 4},   /* four lines asked for and four given */
+      {1, 0x4E, 16, 15}, /* R3h unread, and a line fewer for being triggered */
+      {2, 0x4E, 16, 15}, /* which ch. 16.4.3 gives this type in the same words */
+      {0, 0x0E, 16, 16}, /* the R3h of 0 that makes a type 0 count 16 too */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    for (int triggered = 0; triggered < 2; triggered++) {
+      crtc_init(&crtc, cases[index].type);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(3, cases[index].r3);
+      write_register(4, 38);
+      write_register(9, 7);
+      write_register(6, 25);
+      /* Left where C4 walks into it, or out of C4's reach until a write
+         puts it under the row the chip already stands on. */
+      write_register(7, triggered ? 127 : 5);
+      int lines = 0;
+      bool standing = false;
+      for (long character = 0; character < 4L * 64 * 312; character++) {
+        bool vsync = (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+        if (vsync && crtc.c0 == 0) {
+          lines++;
+        }
+        if (standing && !vsync) {
+          break;
+        }
+        standing = vsync;
+        if (triggered && !standing && crtc.c9 == 3 && crtc.c0 == 20) {
+          write_register(7, crtc.c4);
+        }
+      }
+      TEST_EQUAL(lines, triggered ? cases[index].triggered_mid_line : cases[index].walked_into);
+    }
+  }
+
+  /* And the pulse an even interlaced frame raises on the half line of its
+     own, which R7 was set for in advance rather than written to trigger: it
+     "starts when R7 was programmed before C4=R7" and so "lasts 16 lines"
+     (ch. 28.1.4), where one a write triggers on the same type gives a line
+     up. */
+  crtc_init(&crtc, 1);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(3, 0x4E);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(6, 25);
+  write_register(7, 5);
+  write_register(8, 1); /* interlace, which raises an even frame's VSYNC late */
+  int lines = 0;
+  bool standing = false;
+  bool began_mid_line = false;
+  for (long character = 0; character < 6L * 64 * 312; character++) {
+    bool vsync = (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+    if (vsync && !standing) {
+      began_mid_line = crtc.c0 != 0;
+      lines = 0;
+    }
+    if (vsync && crtc.c0 == 0) {
+      lines++;
+    }
+    if (standing && !vsync && began_mid_line) {
+      break;
+    }
+    standing = vsync;
+  }
+  TEST_CHECK(began_mid_line);
+  TEST_EQUAL(lines, 16);
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -2318,6 +2413,7 @@ int main(void) {
   TEST_RUN(select_wears_five_bits);
   TEST_RUN(writes_wear_the_documented_widths);
   TEST_RUN(each_type_answers_the_read_port_its_own_way);
+  TEST_RUN(each_type_keeps_its_own_vsync_length);
   TEST_RUN(only_type_1_drives_the_status_port);
   TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
   TEST_RUN(unselected_chip_ignores_the_bus);

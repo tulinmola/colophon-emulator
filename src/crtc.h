@@ -8,15 +8,21 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and what a machine can read of the chip is
- * the exception: the registers each type hands back on the read port, and the
- * status register type 1 alone has, are answered for types 0, 1 and 2
- * (ch. 21.2, 21.3). That much is what a program names the chip by (ch. 28.1.8,
- * 28.1.9). Nothing here runs as anything but a type 0, so what a probing
- * program would make of the others is a reading of those chapters and no
- * evidence we did not write. Every other behaviour below is type 0's whatever
- * the type is set to, and a number naming none of the five is neither refused
- * nor corrected.
+ * Type 0 is the type implemented, and two things are not its alone. The first
+ * is what a machine can read of the chip: the registers each type hands back
+ * on the read port, and the status register type 1 alone has, are answered for
+ * types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program names the chip by
+ * (ch. 28.1.8, 28.1.9) — what a program probing for a type 2 would make of it
+ * being a reading of those chapters and no evidence we did not write. The
+ * second is the VSYNC's length: types 1 and 2 cannot program it, so it "is
+ * fixed at 16" whatever R3h holds (ch. 16), and a pulse either of them is made
+ * to begin by a write to R7 is counted "as if the VSYNC had started when C0=0"
+ * and spends a line fewer than a type 0's (ch. 16.4.2, 16.4.3), where one
+ * begun on a frame's own half line keeps all sixteen (ch. 28.1.4). Nothing
+ * outside this repository grades that shortened count: what stands behind it
+ * is those chapters' sentences and a test of our own. Every other behaviour
+ * below is type 0's whatever the type is set to, and a number naming none of
+ * the five is neither refused nor corrected.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
@@ -210,7 +216,8 @@ typedef struct {
   uint8_t c3l; /* HSYNC width counter, 4 bits: R3 low nibble. A nibble of 0
                   is no HSYNC at all on this type, where types 2, 3 and 4
                   read it as 16 (ch. 14.1, 14.5) */
-  uint8_t c3h; /* VSYNC scanline counter, 4 bits: R3 high nibble, 0 counts 16 */
+  uint8_t c3h; /* VSYNC scanline counter, 4 bits: R3 high nibble, 0 counts 16,
+                  and types 1 and 2 never read that nibble at all (ch. 16) */
 
   /* This line ends the frame. Decided while C0 is 0 or 1 and held for the
      rest of the line, so a register written afterwards cannot take it back
@@ -288,6 +295,10 @@ typedef struct {
      then initialized at the next C0=0 instead of being advanced there, so
      the part line it began in is not one of R3's (ch. 16.4.1). */
   bool vsync_began_mid_line;
+  /* And whether that late start was the half line an even interlaced frame
+     raises its VSYNC on rather than an R7 written to meet C4, which is the
+     only one of the two the shortened count belongs to (ch. 16.4.2). */
+  bool vsync_began_on_its_half_line;
 
   /* DISPLAY ENABLE is two latches rather than two comparisons (ch. 6.1.3,
      18.2.1). The R1 one opens at the head of every line; the R6 one, once

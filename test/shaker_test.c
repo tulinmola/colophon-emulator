@@ -1994,9 +1994,10 @@ int main(int argc, char **argv) {
           crtc_type);
   fprintf(file, "CRTC, module by module and in the order each module's own menu prints.\n\n");
   if (crtc_type != 0) {
-    fprintf(file, "Built as, and no more than that: the chip answers a program asking what\n");
-    fprintf(file, "it is, and behaves as a type 0 in every timing it has. Most of what is\n");
-    fprintf(file, "wrong below is that, and is the work rather than a fault.\n\n");
+    fprintf(file, "Built as, and nearly no more: the chip answers a program asking what it\n");
+    fprintf(file, "is, and of its own timing keeps only what the head of crtc.h names. The\n");
+    fprintf(file, "rest is a type 0's, and most of what is wrong below is that, and is the\n");
+    fprintf(file, "work rather than a fault.\n\n");
   }
   fprintf(file, "%d groups run, %d left to another CRTC type.\n", total_groups_run,
           total_groups_skipped);
