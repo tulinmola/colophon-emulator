@@ -587,6 +587,162 @@ static void types_0_and_2_alone_can_freeze_their_frame_parity(void) {
   }
 }
 
+/* A type 1 is the one type a program can tell which field to start on, and
+   an interlace pulse is how: "if IVM mode is toggled on and off on an even
+   C9 line, regardless of the value of R9, the parity is set to EVEN. It is
+   thus possible to fix the parity quite easily on this CRTC" (ch. 19.5.3).
+   The rules behind it are that chapter's own, taken on the third and fourth
+   microseconds of the write. No other type has them, and on those the pulse
+   leaves the parity where it found it. */
+static void an_interlace_pulse_fixes_a_type_1_on_an_even_field(void) {
+  for (uint8_t type = 0; type < 5; type++) {
+    for (uint8_t r9 = 6; r9 <= 7; r9++) {
+      for (int from_odd = 0; from_odd < 2; from_odd++) {
+        crtc_init(&crtc, type);
+        write_register(0, 63);
+        write_register(1, 40);
+        write_register(2, 46);
+        write_register(3, 0x8E);
+        write_register(4, 38);
+        write_register(9, r9);
+        write_register(6, 25);
+        write_register(7, 35);
+        /* Run to a frame whose parity is the one being started from, then
+           stand on an even scanline of a row and pulse the mode. */
+        bool standing = false;
+        for (long character = 0; character < 8L * 64 * 320; character++) {
+          crtc_tick(&crtc);
+          bool head = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0;
+          if (head && !standing && crtc.parity_frame == (from_odd != 0)) {
+            break;
+          }
+          standing = head;
+        }
+        while (!(crtc.c9 % 2 == 0 && crtc.c0 == 10)) {
+          crtc_tick(&crtc);
+        }
+        bool before = crtc.parity_frame;
+        write_register(8, 3);
+        crtc_tick(&crtc);
+        write_register(8, 0);
+        crtc_tick(&crtc);
+        if (type == 1) {
+          TEST_CHECK(!crtc.parity_frame); /* even, whichever it began on */
+        } else {
+          TEST_EQUAL(crtc.parity_frame, before);
+        }
+      }
+    }
+  }
+
+  /* Turning it on and leaving it on is the half the pulse hides, and it is
+     where the chapter's exception lives: the frame's parity survives only
+     "for cases where ParityFrame and ParityC9 were odd before the request
+     for IVM", and with an odd R9 it is the scanline alone that decides
+     ParityC9. So entering on an even scanline settles the parity even
+     whichever it was, and entering on an odd one only spares a frame that
+     was odd already. */
+  for (int from_odd = 0; from_odd < 2; from_odd++) {
+    for (int on_an_odd_scanline = 0; on_an_odd_scanline < 2; on_an_odd_scanline++) {
+      crtc_init(&crtc, 1);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(3, 0x8E);
+      write_register(4, 38);
+      write_register(9, 7); /* odd, so C4 has no say in ParityC9 */
+      write_register(6, 25);
+      write_register(7, 35);
+      bool standing = false;
+      for (long character = 0; character < 8L * 64 * 320; character++) {
+        crtc_tick(&crtc);
+        bool head = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0;
+        if (head && !standing && crtc.parity_frame == (from_odd != 0)) {
+          break;
+        }
+        standing = head;
+      }
+      while (!(crtc.c9 % 2 == (on_an_odd_scanline ? 1 : 0) && crtc.c0 == 10)) {
+        crtc_tick(&crtc);
+      }
+      write_register(8, 3);
+      crtc_tick(&crtc);
+      TEST_EQUAL(crtc.parity_frame, from_odd && on_an_odd_scanline);
+    }
+  }
+}
+
+/* Ch. 19.5.3 does not only state the rules an R8 write follows on a type 1,
+   it draws them: printed pages 211 and 212 work fifteen scenarios, one for
+   each way the frame's parity, C9, C4 and R9 can stand when the mode is
+   pulsed on and off, and each is labelled with the Shaker test that
+   exercises it. The table below is those pages, and the values are theirs.
+   It is the only outside evidence for three of the rules — the correction
+   C4 makes where R9 is even, the reset of ParityC9 where the frame was
+   even, and the parity the frame takes back when the mode is left — none of
+   which any line the scoreboard scores can reach. */
+static void an_r8_write_answers_the_scenarios_the_chapter_draws(void) {
+  static const struct {
+    const char *drawn_as; /* the Shaker tests the page names it by */
+    bool frame_odd;       /* how the chip stands when the pulse comes */
+    bool c4_odd;
+    bool r9_odd;
+    bool c9_odd;
+    bool held_on_entering; /* and the four values the page annotates */
+    bool frame_on_entering;
+    bool held_on_leaving;
+    bool frame_on_leaving;
+  } scenarios[] = {
+      {"S/W", false, false, false, false, false, false, false, false},
+      {"T/X", false, false, true, false, false, false, false, false},
+      {"Q/U/Y1", false, false, false, true, false, false, false, false},
+      {"R/V/Z1", false, false, true, true, false, false, false, false},
+      {"D/H", false, true, false, false, true, false, false, false},
+      {"E/I", false, true, true, false, false, false, false, false},
+      {"B/F", false, true, false, true, true, false, false, false},
+      {"C/G", false, true, true, true, false, false, false, false},
+      {"ZA/ZC", true, false, false, false, false, false, false, false},
+      {"ZB/ZD", true, false, true, false, false, false, false, false},
+      {"P/Y2", true, false, false, true, true, true, true, true},
+      {"Z", true, false, true, true, true, true, true, true},
+      {"L/N", true, true, false, false, true, false, false, false},
+      {"A/J2", true, true, false, true, false, true, true, true},
+      {"K2", true, true, true, true, true, true, true, true},
+  };
+  for (unsigned index = 0; index < sizeof scenarios / sizeof *scenarios; index++) {
+    crtc_init(&crtc, 1);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 38);
+    write_register(9, scenarios[index].r9_odd ? 7 : 6);
+    write_register(6, 25);
+    write_register(7, 35);
+    write_register(8, 0);
+    /* Stand where the page stands: a row and a scanline of the parities it
+       names, away from either end of the line. */
+    bool stood = false;
+    for (long character = 0; character < 8L * 64 * 320; character++) {
+      crtc_tick(&crtc);
+      if (((crtc.c4 & 1) != 0) == scenarios[index].c4_odd &&
+          ((crtc.c9 & 1) != 0) == scenarios[index].c9_odd && crtc.c0 == 20) {
+        stood = true;
+        break;
+      }
+    }
+    TEST_CHECK(stood);
+    crtc.parity_frame = scenarios[index].frame_odd;
+    write_register(8, 3);
+    TEST_EQUAL(crtc.parity_c9_held, scenarios[index].held_on_entering);
+    TEST_EQUAL(crtc.parity_frame, scenarios[index].frame_on_entering);
+    crtc_tick(&crtc);
+    write_register(8, 0);
+    TEST_EQUAL(crtc.parity_c9_held, scenarios[index].held_on_leaving);
+    TEST_EQUAL(crtc.parity_frame, scenarios[index].frame_on_leaving);
+  }
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -2592,6 +2748,8 @@ int main(void) {
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
   TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
+  TEST_RUN(an_interlace_pulse_fixes_a_type_1_on_an_even_field);
+  TEST_RUN(an_r8_write_answers_the_scenarios_the_chapter_draws);
   TEST_RUN(only_type_1_drives_the_status_port);
   TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
   TEST_RUN(unselected_chip_ignores_the_bus);

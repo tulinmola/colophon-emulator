@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-6 of them printed self-graded lines, 42 in all: 16 agree with Longshot's
-silicon and 26 do not. That is 38% of what this reader can score, and no
-measure at all of the other 64 groups.
+5 of them printed self-graded lines, 27 in all: 16 agree with Longshot's
+silicon and 11 do not. That is 59% of what this reader can score, and no
+measure at all of the other 65 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -113,22 +113,7 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
     ! DEADLOCK G ADD T5 / CPU TO NEW FRAME:#0001 (#0223 expected)
 C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
-C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             15 graded, 15 wrong
-    ! PARITY O. TO R7=1, R4=6, CPU=#0920 WRONG (EXP:#0940)
-    ! PARITY O. TO R7=2, R4=6, CPU=#0A20 WRONG (EXP:#0A80)
-    ! PARITY O. TO R7=3, R4=6, CPU=#0B60 WRONG (EXP:#0B80)
-    ! PARITY O. TO R7=4, R4=6, CPU=#0C60 WRONG (EXP:#0CC0)
-    ! PARITY O. TO R7=5, R4=6, CPU=#0DA0 WRONG (EXP:#0DC0)
-    ! PARITY O. TO R7=7, R4=6, CPU=#0FE0 WRONG (EXP:#0820)
-    ! PARITY E. TO R7=1, R4=6, CPU=#0100 WRONG (EXP:#0160)
-    ! PARITY E. TO R7=3, R4=6, CPU=#0340 WRONG (EXP:#03A0)
-    ! PARITY E. TO R7=5, R4=6, CPU=#0580 WRONG (EXP:#05E0)
-    ! PARITY O. TO R7=2, R4=7, CPU=#0B60 WRONG (EXP:#0B80)
-    ! PARITY O. TO R7=3, R4=7, CPU=#0CA0 WRONG (EXP:#0C80)
-    ! PARITY O. TO R7=4, R4=7, CPU=#0DA0 WRONG (EXP:#0DC0)
-    ! PARITY O. TO R7=5, R4=7, CPU=#0EE0 WRONG (EXP:#0EC0)
-    ! PARITY E. TO R7=5, R4=7, CPU=#0580 WRONG (EXP:#05E0)
-    ! PARITY E. TO R7=8, R4=7, CPU=#1220 WRONG (EXP:#0920)
+C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  another CRTC type's
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's

@@ -29,22 +29,31 @@
  * character of N lines wanting "the value N-1" of it where a type 0 asks
  * "value N-2" (ch. 19.4.1, 19.4.2), which is why a type 0 and a type 1 want R9
  * "programmed respectively with 6 and 7" for rows of the same four lines
- * (ch. 28.1.7). Entering that mode in the middle of a row is still a type 0's
- * rule here, and leaves a type 1 counting the long way round where ch. 19.8.2
- * sets its parity outright. A type 2 shares none of the third: ch. 19.4.3 and
- * 19.5.4 give it an interlace of its own, in which "parity is respected
- * whatever the values of R9 and C4", and it is answered here as a type 0 is.
- * The fourth is the frame parity itself. Types 1, 3 and 4 anticipate none of
- * it: ParityFrame "switch between each frame when C4 = C9 = C0 = 0" and does
- * so "whatever the value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a
- * type 2 take the parity R6 anticipated and hold it for ever once C4 can no
- * longer reach R6 (ch. 19.5.2, 19.5.4) — so those three cannot be frozen, and
- * cannot be made to add the interlace line to every frame. That line follows
- * each type's own parity (ch. 19.6.1 to 19.6.4). The disc grades this one and
- * is not pleased: Shaker's C (S) came right and fell silent, and of C (O)'s
- * twenty-four answers four fewer agree than before. Which way that reads
- * depends on the parity the chip wakes holding, because what a program uses to
- * set it — the R8 writes of ch. 19.5.3's own page — is not here. Every other
+ * (ch. 28.1.7). Entering that mode in the middle of a row still takes the
+ * doubling up a line later, as ch. 19.8.1 gives a type 0; the parity
+ * ch. 19.8.2 fixes at the write is fixed there now, and the fourth below says
+ * how. A type 2 shares none of the third: ch. 19.4.3 and 19.5.4 give it an
+ * interlace of its own, in which "parity is respected whatever the values of
+ * R9 and C4", and it is answered here as a type 0 is. The fourth is the frame
+ * parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame "switch
+ * between each frame when C4 = C9 = C0 = 0" and does so "whatever the value of
+ * R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type 2 take the parity R6
+ * anticipated and hold it for ever once C4 can no longer reach R6 (ch. 19.5.2,
+ * 19.5.4) — so those three cannot be frozen, and cannot be made to add the
+ * interlace line to every frame. That line follows each type's own parity
+ * (ch. 19.6.1 to 19.6.4). A type 1 also holds ParityC9 as a state rather than
+ * a sum, because an R8 write sets it outright on that type: "these updates are
+ * performed on the 3rd and 4th µseconds of the OUT(C),C instruction", and
+ * toggling the mode "on and off on an even C9 line, regardless of the value of
+ * R9" sets the parity even, which is the only means a program has of choosing
+ * a field on this type (ch. 19.5.3). The disc grades the divergence: Shaker's
+ * C (S) and C (O) both came right and fell silent. The rules themselves are
+ * graded by the fifteen scenarios ch. 19.5.3 draws on its own following pages,
+ * each named for the Shaker test that exercises it, and all fifteen are a test
+ * here — all but one of the rules dies when it is taken away. The one that
+ * does not is the parity the frame takes back when the mode is left, which a
+ * pulse cannot show because ParityC9's turn and C4's correction cancel: the
+ * disc moves on it, in a group that says so in a picture. Every other
  * behaviour below is type 0's whatever the type is set to, and a number naming
  * none of the five is neither refused nor corrected.
  *
@@ -287,6 +296,12 @@ typedef struct {
      already stands on, and nothing we can run grades that. */
   bool parity_frame;
   bool parity_r6;
+  /* ParityC9 as a type 1 keeps it: a state of its own rather than a sum of
+     the others, because an R8 write sets it outright on that type and the
+     sum cannot be told what to hold (ch. 19.5.3). The other four are
+     answered by parity_c9() from R9, C4 and ParityFrame, which is what
+     their own chapters describe. */
+  bool parity_c9_held;
   /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a
      microsecond before the line it decides could begin. */
   bool interlace_line_owed;

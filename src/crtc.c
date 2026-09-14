@@ -33,6 +33,11 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
   uint8_t next = row & C4_BITS;
   if (next != crtc->c4) {
     crtc->vsync_blocked = false;
+    /* "ParityC9 is reversed with each C4 increasing when R9 is peer", which
+       on a type 1 is an even R9 (ch. 19.5.3). */
+    if (crtc->type == 1 && (crtc->registers[9] & 1) == 0) {
+      crtc->parity_c9_held = !crtc->parity_c9_held;
+    }
   }
   crtc->c4 = next;
 }
@@ -98,6 +103,9 @@ static bool interlace_video_asked(const crtc_t *crtc) {
    address under the line being drawn, which is the very thing ch. 19.8.1
    gives the delayed take-up to prevent. Nothing we can run grades it. */
 static bool parity_c9(const crtc_t *crtc) {
+  if (crtc->type == 1) {
+    return crtc->parity_c9_held;
+  }
   /* A type 1 reads that the other way round: it is "when R9 is even" that
      "the parity of the lines depends on that of C4 and on the current
      parity at the start of the frame" (ch. 19.5.3), which ch. 19.8.2 puts
@@ -727,6 +735,8 @@ static void settle_parity(crtc_t *crtc) {
        a type 2 holds its parity for ever once C4 can no longer reach R6,
        those three cannot be frozen at all. */
     crtc->parity_frame = anticipates_the_parity(crtc) ? crtc->parity_r6 : !crtc->parity_frame;
+    /* "At the beginning of the Frame, ParityC9=ParityFrame" (ch. 19.5.3). */
+    crtc->parity_c9_held = crtc->parity_frame;
   }
   crtc->stood_on_the_frame_head = on_the_frame_head;
   if (crtc->c4 == crtc->registers[6]) {
@@ -776,6 +786,45 @@ static uint8_t readable_register(const crtc_t *crtc) {
   return 0;
 }
 
+/* An R8 write that turns the interlace video mode on or off sets a type 1's
+   parities outright, where this chip gives the other four theirs from the
+   counters alone. Ch. 19.5.3 gives the rules and the microseconds they fall on —
+   "these updates are performed on the 3rd and 4th µseconds of the OUT(C),C
+   instruction" — and since both fall inside the one instruction, they are
+   taken here in that order. What they are for is stated plainly: "if IVM
+   mode is toggled on and off on an even C9 line, regardless of the value of
+   R9, the parity is set to EVEN. It is thus possible to fix the parity
+   quite easily on this CRTC", which is the only means a program has of
+   choosing a field on this type. */
+static void take_up_r8_parity(crtc_t *crtc, bool was_video_mode) {
+  if (crtc->type != 1 || was_video_mode == interlace_video_asked(crtc)) {
+    return;
+  }
+  /* "C4.0 and not (R9.0)", which stands for the whole of the third rule's
+     correction and again for the fourth's. */
+  bool c4_carries_it = (crtc->c4 & 1) != 0 && (crtc->registers[9] & 1) == 0;
+  /* The third microsecond, whichever way the mode is going: "ParityC9 =
+     C9.0", then "ParityC9 = ParityC9 xor (C4.0 and not (R9.0))". The
+     frame's own parity is not touched by it. While the mode stands, C9's
+     low bit is the parity itself and not the counter's — "C9 = ParityC9"
+     (ch. 19.8.2) — so leaving reads back what entering installed, which is
+     what makes a pulse of the mode settle the parity at all. */
+  bool c9_bit_0 = was_video_mode ? crtc->parity_c9_held : (crtc->c9 & 1) != 0;
+  crtc->parity_c9_held = c9_bit_0 != c4_carries_it;
+  if (interlace_video_asked(crtc)) {
+    /* And the fourth, entering: the frame's parity survives only where it
+       and ParityC9 were both odd — "Parityframe changes to even, except for
+       cases where ParityFrame and ParityC9 were odd before the request". */
+    if (!crtc->parity_frame) {
+      crtc->parity_c9_held = c4_carries_it;
+    }
+    crtc->parity_frame = crtc->parity_frame && (crtc->parity_c9_held != c4_carries_it);
+  } else {
+    /* Leaving, the frame takes what the row held: "ParityFrame=ParityC9". */
+    crtc->parity_frame = crtc->parity_c9_held;
+  }
+}
+
 uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
   if (!(pins & CRTC_CS)) {
     return pins;
@@ -805,7 +854,11 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
   if (crtc->address_register < 18) {
     uint8_t mask = writable_bits[crtc->address_register];
     if (mask != 0) {
+      bool was_video_mode = interlace_video_asked(crtc);
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
+      if (crtc->address_register == 8) {
+        take_up_r8_parity(crtc, was_video_mode);
+      }
       if (crtc->address_register == 3) {
         crtc->r3_written_for_this_character = true;
       }
