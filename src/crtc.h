@@ -8,35 +8,45 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and three things are not its alone. The
- * first is what a machine can read of the chip: the registers each type hands
- * back on the read port, and the status register type 1 alone has, are
- * answered for types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program
- * names the chip by (ch. 28.1.8, 28.1.9) — what a program probing for a type 2
- * would make of it being a reading of those chapters and no evidence we did
- * not write. The second is the VSYNC. Types 1 and 2 cannot program its length,
- * so it "is fixed at 16" whatever R3h holds (ch. 16), and a pulse either of
- * them is made to begin by a write to R7 is counted "as if the VSYNC had
- * started when C0=0" and spends a line fewer than a type 0's (ch. 16.4.2,
- * 16.4.3), where one begun on a frame's own half line keeps all sixteen
- * (ch. 28.1.4). Neither of them takes the whole line below either, which
- * ch. 19.7.1 gives "CRTC's 0, 3 and 4" alone. No line on the disc moves on the
- * shortened count or the whole line withheld: what stands behind those two is
- * those chapters' sentences and tests of our own. The third is how a type 1
- * reads R9 in the interlace video mode, and it is the first of the three the
- * disc does grade: its odd-lined rows come of an even R9 where a type 0's come
- * of an odd one (ch. 19.5.3, 19.8.2), and it reads the limit down to that
- * parity where a type 0 reads it up — a character of N lines wanting "the
- * value N-1" of it where a type 0 asks "value N-2" (ch. 19.4.1, 19.4.2), which
- * is why a type 0 and a type 1 want R9 "programmed respectively with 6 and 7"
- * for rows of the same four lines (ch. 28.1.7). Entering that mode in the
- * middle of a row is still a type 0's rule here, and leaves a type 1 counting
- * the long way round where ch. 19.8.2 sets its parity outright. A type 2
- * shares none of the third: ch. 19.4.3 and 19.5.4 give it an interlace of its
- * own, in which "parity is respected whatever the values of R9 and C4", and it
- * is answered here as a type 0 is. Every other behaviour below is type 0's
- * whatever the type is set to, and a number naming none of the five is neither
- * refused nor corrected.
+ * Type 0 is the type implemented, and four things are not its alone. The first
+ * is what a machine can read of the chip: the registers each type hands back
+ * on the read port, and the status register type 1 alone has, are answered for
+ * types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program names the chip by
+ * (ch. 28.1.8, 28.1.9) — what a program probing for a type 2 would make of it
+ * being a reading of those chapters and no evidence we did not write. The
+ * second is the VSYNC. Types 1 and 2 cannot program its length, so it "is
+ * fixed at 16" whatever R3h holds (ch. 16), and a pulse either of them is made
+ * to begin by a write to R7 is counted "as if the VSYNC had started when C0=0"
+ * and spends a line fewer than a type 0's (ch. 16.4.2, 16.4.3), where one
+ * begun on a frame's own half line keeps all sixteen (ch. 28.1.4). Neither of
+ * them takes the whole line below either, which ch. 19.7.1 gives "CRTC's 0, 3
+ * and 4" alone. No line on the disc moves on the shortened count or the whole
+ * line withheld: what stands behind those two is those chapters' sentences and
+ * tests of our own. The third is how a type 1 reads R9 in the interlace video
+ * mode, and it is the first of them the disc does grade: its odd-lined rows
+ * come of an even R9 where a type 0's come of an odd one (ch. 19.5.3, 19.8.2),
+ * and it reads the limit down to that parity where a type 0 reads it up — a
+ * character of N lines wanting "the value N-1" of it where a type 0 asks
+ * "value N-2" (ch. 19.4.1, 19.4.2), which is why a type 0 and a type 1 want R9
+ * "programmed respectively with 6 and 7" for rows of the same four lines
+ * (ch. 28.1.7). Entering that mode in the middle of a row is still a type 0's
+ * rule here, and leaves a type 1 counting the long way round where ch. 19.8.2
+ * sets its parity outright. A type 2 shares none of the third: ch. 19.4.3 and
+ * 19.5.4 give it an interlace of its own, in which "parity is respected
+ * whatever the values of R9 and C4", and it is answered here as a type 0 is.
+ * The fourth is the frame parity itself. Types 1, 3 and 4 anticipate none of
+ * it: ParityFrame "switch between each frame when C4 = C9 = C0 = 0" and does
+ * so "whatever the value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a
+ * type 2 take the parity R6 anticipated and hold it for ever once C4 can no
+ * longer reach R6 (ch. 19.5.2, 19.5.4) — so those three cannot be frozen, and
+ * cannot be made to add the interlace line to every frame. That line follows
+ * each type's own parity (ch. 19.6.1 to 19.6.4). The disc grades this one and
+ * is not pleased: Shaker's C (S) came right and fell silent, and of C (O)'s
+ * twenty-four answers four fewer agree than before. Which way that reads
+ * depends on the parity the chip wakes holding, because what a program uses to
+ * set it — the R8 writes of ch. 19.5.3's own page — is not here. Every other
+ * behaviour below is type 0's whatever the type is set to, and a number naming
+ * none of the five is neither refused nor corrected.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
@@ -252,24 +262,29 @@ typedef struct {
      13.2.1). */
   bool adjustment_on_its_last_line;
 
-  /* Frame parity, which the Compendium keeps in two states rather than one
-     (ch. 19.5.2). ParityFrame is this frame's, taken from ParityR6 at the
-     frame's first character; ParityR6 anticipates the next frame's where C4
-     stands on R6, and it does so whatever R8 holds. Where R6 stands above
-     R4 C4 never reaches it, and both freeze — which is how a program stops
-     the frames alternating, and how it asks for the extra line on every
-     frame rather than every other. True is odd, and the power-on zeroes
-     leave the first frame even; real silicon wakes on whatever it wakes on,
-     and every frame after inherits the phase. The document turns ParityR6
-     "when C4 reaches R6" and we read that comparison standing, as the same
-     C4/R6 comparison is read for DISPLAY ENABLE (ch. 18.2.1); the two part
-     company only for an R6 written mid-frame onto the row the chip already
-     stands on, and nothing we can run grades that. */
   /* Whether the chip stood on a frame's first character last time it was
      asked. ParityFrame turns as that character is entered (ch. 19.5.2), and
      a chip frozen on it enters nothing: without this the parity would turn
      under a still picture every microsecond. */
   bool stood_on_the_frame_head;
+
+  /* Frame parity, which the Compendium keeps in two states rather than one
+     on a type 0 and a type 2 (ch. 19.5.2, 19.5.4). ParityFrame is this
+     frame's, taken from ParityR6 at the frame's first character; ParityR6
+     anticipates the next frame's where C4 stands on R6, and it does so
+     whatever R8 holds. Where R6 stands above R4 C4 never reaches it, and
+     both freeze — which is how a program stops those two alternating, and
+     how it asks for the extra line on every frame rather than every other.
+     Types 1, 3 and 4 keep the one state: ParityFrame turns over at each
+     frame's own head, ParityR6 goes unread, and no R6 can stop them
+     (ch. 19.5.3, 19.5.5). True is odd, and the power-on zeroes leave a type
+     0 or a type 2 on an even first frame where the other three turn at that
+     first head and so begin odd; real silicon wakes on whatever it wakes
+     on, and every frame after inherits the phase. The document turns
+     ParityR6 "when C4 reaches R6" and we read that comparison standing, as
+     the same C4/R6 comparison is read for DISPLAY ENABLE (ch. 18.2.1); the
+     two part company only for an R6 written mid-frame onto the row the chip
+     already stands on, and nothing we can run grades that. */
   bool parity_frame;
   bool parity_r6;
   /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a

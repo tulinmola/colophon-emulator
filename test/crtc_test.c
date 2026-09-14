@@ -523,6 +523,70 @@ static void types_0_and_1_want_different_r9s_for_a_row(void) {
   }
 }
 
+/* Types 0 and 2 settle the coming frame's parity on the row R6 names, so
+   where C4 can never reach R6 "this state is no longer updated and
+   ParityFrame remains frozen" (ch. 19.5.2, 19.5.4) — the frames stop
+   alternating and the two fields stop differing. The other three anticipate
+   nothing: "ParityFrame switch between each frame when C4 = C9 = C0 = 0"
+   and does so "whatever the value of R8" (ch. 19.5.3, 19.5.5), so no R6 can
+   freeze them. The extra line follows whichever parity its type keeps — the
+   anticipated one on a type 0 and a type 2 (ch. 19.6.1, 19.6.3), the
+   frame's own on the other three, where it "does not depend on the C4=R6
+   equivalence" (ch. 19.6.2, 19.6.4) — so a frame carrying it is a line
+   longer than the frame beside it, and the lengths turn over wherever the
+   parity does. */
+static void types_0_and_2_alone_can_freeze_their_frame_parity(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r6;      /* the row a type 0 takes its anticipation on */
+    bool alternates; /* whether the parity, and the extra line with it, turns */
+  } cases[] = {
+      {0, 5, true},   {1, 5, true},  {2, 5, true},   {3, 5, true},  {4, 5, true},
+      {0, 25, false}, {1, 25, true}, {2, 25, false}, {3, 25, true}, {4, 25, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 6);
+    write_register(9, 7);
+    write_register(6, cases[index].r6);
+    write_register(7, 3);
+    write_register(8, 3);
+    bool parity[4] = {false, false, false, false};
+    int length[4] = {0, 0, 0, 0};
+    int frames = 0;
+    int lines = 0;
+    bool head = false;
+    for (long character = 0; character < 16L * 64 * 80 && frames < 4; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0) {
+        lines++;
+      }
+      bool on_the_head = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0;
+      if (on_the_head && !head) {
+        if (frames > 0) {
+          length[frames - 1] = lines - 1;
+        }
+        parity[frames++] = crtc.parity_frame;
+        lines = 0;
+      }
+      head = on_the_head;
+    }
+    /* Four frames seen, so a chip that stopped drawing cannot pass by
+       never contradicting anything. */
+    TEST_EQUAL(frames, 4);
+    for (int frame = 1; frame < 4; frame++) {
+      TEST_EQUAL(parity[frame] != parity[frame - 1], cases[index].alternates);
+    }
+    /* And the extra line turns over with it, or with nothing. */
+    TEST_EQUAL(length[1] != length[0], cases[index].alternates);
+    TEST_EQUAL(length[2] != length[1], cases[index].alternates);
+  }
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -2527,6 +2591,7 @@ int main(void) {
   TEST_RUN(each_type_keeps_its_own_vsync_length);
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
+  TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
   TEST_RUN(only_type_1_drives_the_status_port);
   TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
   TEST_RUN(unselected_chip_ignores_the_bus);

@@ -57,10 +57,25 @@ static bool interlace_asked(const crtc_t *crtc) {
   return display_skew(crtc) != SKEW_BORDER_ON && (crtc->registers[8] & 1) != 0;
 }
 
+/* Whether this type settles the coming frame's parity ahead of the frame, on
+   the row R6 names. Types 0 and 2 do (ch. 19.5.2, 19.5.4); types 1, 3 and 4
+   keep no such state and turn the parity over at each frame's own head
+   (ch. 19.5.3, 19.5.5). */
+static bool anticipates_the_parity(const crtc_t *crtc) {
+  return crtc->type == 0 || crtc->type == 2;
+}
+
 /* The line either interlace mode adds at the end of a frame is added on the
-   parity R6 anticipated (ch. 19.6.1). */
+   parity R6 anticipated, on a type 0 and a type 2 (ch. 19.6.1, 19.6.3).
+   Types 1, 3 and 4 anticipate nothing and ask on the frame's own parity:
+   "if ParityFrame is even, then an additional line and a MID-VSYNC are
+   scheduled" (ch. 19.5.3, 19.5.5), and for those three the line "does not
+   depend on the C4=R6 equivalence, unlike CRTC's 0 and 2" (ch. 19.6.2,
+   19.6.4). What ch. 19.6.4 asks of a type 3 or 4 besides — that "C4 is not
+   incremented (unlike all other CRTC's)" for that line — is not here. */
 static bool interlace_line_asked_for(const crtc_t *crtc) {
-  return interlace_asked(crtc) && crtc->parity_r6;
+  return interlace_asked(crtc) &&
+         (anticipates_the_parity(crtc) ? crtc->parity_r6 : !crtc->parity_frame);
 }
 
 /* The interlace video mode as R8 holds it, which is not always as the
@@ -706,7 +721,12 @@ static uint64_t pins_of(const crtc_t *crtc) {
 static void settle_parity(crtc_t *crtc) {
   bool on_the_frame_head = crtc->c0 == 0 && crtc->c4 == 0 && crtc->c9 == 0;
   if (on_the_frame_head && !crtc->stood_on_the_frame_head) {
-    crtc->parity_frame = crtc->parity_r6;
+    /* The other three keep no such anticipation and simply turn over:
+       "ParityFrame switch between each frame when C4 = C9 = C0 = 0" and do
+       so "whatever the value of R8" (ch. 19.5.3, 19.5.5). Where a type 0 or
+       a type 2 holds its parity for ever once C4 can no longer reach R6,
+       those three cannot be frozen at all. */
+    crtc->parity_frame = anticipates_the_parity(crtc) ? crtc->parity_r6 : !crtc->parity_frame;
   }
   crtc->stood_on_the_frame_head = on_the_frame_head;
   if (crtc->c4 == crtc->registers[6]) {
