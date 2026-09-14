@@ -534,11 +534,22 @@ static void begin_syncs(crtc_t *crtc) {
      at the row's own first line: the two frames' rows are of unequal length
      there, and this is what still leaves their syncs half a line apart
      (ch. 19.5.2, 19.7.1). It never meets a MID-VSYNC, which happens only on
-     an even frame. A row of one line never reaches C9.VMA=2 and so raises
-     no VSYNC at all, which an R9 of 31 makes of every even-parity row; the
-     Compendium describes neither. */
-  bool late_vsync =
-      crtc->interlace_video_mode && (r[9] & 1) != 0 && (crtc->c4 & 1) != 0 && crtc->parity_frame;
+     an even frame: "MID-VSYNC is not cumulative with this line because it
+     cannot occur on an odd frame with an odd C4" (ch. 19.7.1). A row of one
+     line never reaches C9.VMA=2 and so raises no VSYNC at all, which an R9
+     of 31 makes of every even-parity row; the Compendium describes
+     neither. */
+  /* Three of the five take that delay at all: "there is also an exception
+     on CRTC's 0, 3 and 4 when the line count of a C4 character is odd on an
+     odd frame and an odd C4" (ch. 19.7.1), and of a type 1 ch. 19.5.3 says
+     outright that "the VSYNC is not delayed from a line on odd C4s when R9
+     is even". R9 even is where that type's rows come out odd, where a type
+     0's do at R9 odd — a divergence in the reading of R9 that is not here
+     yet, so what this withholds is the delay and not the heights that ask
+     for it. */
+  bool delays_a_whole_line = crtc->type != 1 && crtc->type != 2;
+  bool late_vsync = delays_a_whole_line && crtc->interlace_video_mode && (r[9] & 1) != 0 &&
+                    (crtc->c4 & 1) != 0 && crtc->parity_frame;
   if (c4_stands_on_r7(crtc) && !crtc->vsync && !crtc->vsync_blocked &&
       (!mid_vsync || crtc->c0 == r[0] / 2) && (!late_vsync || c9_vma(crtc) == 2)) {
     crtc->vsync = true;

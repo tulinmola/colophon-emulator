@@ -412,6 +412,53 @@ static void each_type_keeps_its_own_vsync_length(void) {
   TEST_EQUAL(lines, 16);
 }
 
+/* Every type waits the half line an even frame's VSYNC is held to, and
+   three of the five take a whole line besides: "there is also an exception
+   on CRTC's 0, 3 and 4 when the line count of a C4 character is odd on an
+   odd frame and an odd C4" (ch. 19.7.1). Of a type 1 ch. 19.5.3 says the
+   opposite outright — "the VSYNC is not delayed from a line on odd C4s when
+   R9 is even" — so where an odd frame finds C4 odd, a type 0 raises its
+   VSYNC on the row's second scanline and a type 1 and a type 2 on its
+   first. No line on the disc moves when the type test is taken away. */
+static void types_1_and_2_delay_no_vsync_by_a_whole_line(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t scanline_on_an_odd_frame;
+  } cases[] = {{0, 1}, {1, 0}, {2, 0}, {3, 1}, {4, 1}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 38);
+    write_register(9, 7); /* odd, which is what the whole-line delay asks for */
+    write_register(6, 25);
+    write_register(7, 5); /* odd, so C4 is odd where it meets R7 */
+    write_register(8, 3); /* the interlace video mode */
+    int half_line = -1;
+    int odd_frame_scanline = -1;
+    bool standing = false;
+    for (long character = 0; character < 8L * 64 * 320; character++) {
+      bool vsync = (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+      if (vsync && !standing) {
+        if (!crtc.parity_frame) {
+          half_line = crtc.c0;
+        } else if (odd_frame_scanline < 0) {
+          odd_frame_scanline = crtc.c9;
+        }
+      }
+      standing = vsync;
+      if (half_line >= 0 && odd_frame_scanline >= 0) {
+        break;
+      }
+    }
+    /* The half line is every type's, and it is half of R0 (ch. 16.5). */
+    TEST_EQUAL(half_line, 31);
+    TEST_EQUAL(odd_frame_scanline, cases[index].scanline_on_an_odd_frame);
+  }
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -2414,6 +2461,7 @@ int main(void) {
   TEST_RUN(writes_wear_the_documented_widths);
   TEST_RUN(each_type_answers_the_read_port_its_own_way);
   TEST_RUN(each_type_keeps_its_own_vsync_length);
+  TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(only_type_1_drives_the_status_port);
   TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
   TEST_RUN(unselected_chip_ignores_the_bus);
