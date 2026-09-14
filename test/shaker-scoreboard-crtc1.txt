@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-5 of them printed self-graded lines, 27 in all: 16 agree with Longshot's
-silicon and 11 do not. That is 59% of what this reader can score, and no
-measure at all of the other 65 groups.
+7 of them printed self-graded lines, 39 in all: 17 agree with Longshot's
+silicon and 22 do not. That is 44% of what this reader can score, and no
+measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -37,8 +37,10 @@ standing.
 A group that names silicon's value only where it differs is worth
 knowing about: it grades itself while the machine is wrong and prints its
 measurement alone once it is right, so it leaves the tally above by being
-agreed with. A group falling out of that count is not the same as a group
-that could not be read.
+agreed with. A group that makes the comparison itself and prints only
+its verdict leaves the tally the same way: the word stands while the
+machine is wrong and is gone once it is right. A group falling out of
+that count is not the same as a group that could not be read.
 
 The copy of this file in the test sources is the one on record, and a sweep
 fails on the first line where the two differ. The screens behind these
@@ -69,7 +71,13 @@ B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                  
 B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
 B (4)       CRTC 2 FIND C0 MIN                                                               another CRTC type's
 B (5)       CRTC 2 RLAL                                                                      another CRTC type's
-B (6)       CRTC 1 BUG OUTI R0                                                               recorded, ungraded
+B (6)       CRTC 1 BUG OUTI R0                                                               6 graded, 5 wrong
+    ! OUTI ON R0.JIT 5TH uSec ON C0=0 - RES: #26 :WRONG!
+    ! OUTI ON R0.JIT 4TH uSec ON C0=0 - RES: #27 :WRONG!
+    ! OUTI ON R0.JIT 5TH uSec ON C0=1 - RES: #25 :WRONG!
+    ! OUTI ON C0=0,R0=0, RES: #1F :WRONG!
+      OUTI ON R7 LAST CHANCE 5TH uSec ON C0=0 - RES: #1E :GOOD
+    ! OUTI ON R7 LAST CHANCE 4TH uSec ON C0=0 - RES: #1E :WRONG!
 B (7)       CRTC 0 BUG OVF C4                                                                another CRTC type's
 B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded
 B (O)       CRTC 1-A OR 1-B?                                                                 recorded, ungraded
@@ -93,7 +101,13 @@ B (TAB)     R5 BENCH (INTERACTIVE)                                              
 B (0)       VERTICAL SCROLL SUB-PIXEL 1/8,1/16,1/32,1/64,1/128                               recorded, ungraded, cut off at the cap
 C (1)       CRTC 1   : RFD & PARITY STORY                                                    recorded, ungraded
 C (2)       CRTC 1   : R8 IVM ON ODD C9                                                      recorded, ungraded
-C (3)       CRTC 1   : PARITY SWITCH STATUS                                                  recorded, ungraded
+C (3)       CRTC 1   : PARITY SWITCH STATUS                                                  6 graded, 6 wrong
+    ! TEST C: 5F,5F: WRONG!
+    ! TEST E: 5F,5F: WRONG!
+    ! TEST G: 5F,5F: WRONG!
+    ! TEST I: 5F,5F: WRONG!
+    ! TEST K: 5F,5F: WRONG!
+    ! TEST L: 5F,5F: WRONG!
 C (4)       CRTC 1   : IVM ON/OFF                                                            recorded, ungraded
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   another CRTC type's
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's

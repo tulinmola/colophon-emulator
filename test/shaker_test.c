@@ -1025,7 +1025,9 @@ static bool first_hex_value_between(const char *from, const char *to, unsigned l
   return false;
 }
 
-static bool read_verdict(const char *line, uint8_t type, bool *failed) {
+/* A verdict a group states in numbers: its own value beside silicon's, in a
+   bracket this reader knows how to pair with the value standing before it. */
+static bool read_a_measured_verdict(const char *line, uint8_t type, bool *failed) {
   for (const char *opening = strchr(line, '('); opening != NULL;
        opening = strchr(opening + 1, '(')) {
     const char *closing = strchr(opening, ')');
@@ -1051,6 +1053,46 @@ static bool read_verdict(const char *line, uint8_t type, bool *failed) {
     return true;
   }
   return false;
+}
+
+/* Whether a line ends with the given word, the screens being padded with
+   spaces to their full width. */
+static bool ends_with(const char *line, const char *word) {
+  size_t length = strlen(line);
+  while (length > 0 && line[length - 1] == ' ') {
+    length--;
+  }
+  size_t wanted = strlen(word);
+  return length >= wanted && memcmp(line + length - wanted, word, wanted) == 0;
+}
+
+/* And a verdict a group states in a word, having made the comparison itself
+   and kept silicon's value to itself: "TEST C: 5F,5F: WRONG!", "OUTI ON
+   C0=0,R0=0, RES: #1F :WRONG!", "C4=>00 IF 1:0 WRONG", and against them the
+   ":GOOD" the same group prints where the machine answered. The word is
+   read only at the end of a line and only where no bracket was found, so
+   that a line which does name a value is paired with it as before — ">WRONG
+   (Exp #C4)" carries the word in the middle, and "(EXP:#00F7)  WRONG" at
+   the end, and both are graded on their numbers.
+
+   Trusting the word is not what trusting a bracket is: nothing here can
+   check it, and a group that says only this contributes to the count only
+   while it disagrees. Longshot's word is still better evidence than our
+   own, which is why it is taken at all. */
+static bool read_a_declared_verdict(const char *line, bool *failed) {
+  if (ends_with(line, "WRONG") || ends_with(line, "WRONG!")) {
+    *failed = true;
+    return true;
+  }
+  if (ends_with(line, ":GOOD")) {
+    *failed = false;
+    return true;
+  }
+  return false;
+}
+
+static bool read_verdict(const char *line, uint8_t type, bool *failed) {
+  return read_a_measured_verdict(line, type, failed) || read_a_declared_verdict(line, failed);
 }
 
 static bool appears_in_previous_screen(const char *line) {
@@ -1559,6 +1601,18 @@ static const verdict_case printed_lines[] = {
      false},
     {"R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)", true, false},
     {"TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)", true, true},
+    /* A group that judged itself and printed only the verdict, which is a
+       grading with no value of silicon's in it — with the mark on a type 1's
+       groups and without it on a type 0's, and answered by the ":GOOD" the
+       same group prints where the machine agreed. */
+    {"TEST C: 5F,5F: WRONG!", true, true},
+    {"OUTI ON C0=0,R0=0, RES: #1F :WRONG!", true, true},
+    {"C4==R4 & C9<>R9: UPD R9=C9  WHEN C0==1. C4=>00 IF 1:0 WRONG", true, true},
+    {"OUTI ON R7 LAST CHANCE 5TH uSec ON C0=0 - RES: #1E :GOOD", true, false},
+    /* A verdict a group states by the bare fact of printing it, which is a
+       convention this reader does not know and must not guess at. */
+    {"VERY BAD TRIP FOR YOUR EMULATOR!!!", false, false},
+    {"IF YOU CAN READ THIS...YOUR EMULATOR HAS A PROBLEM", false, false},
     /* A legend keyed by value rather than by type, which names no type and
        must not be read as one. */
     {"PREV R9=7 R4=1 >> UPD R4=3 WHEN C4=1 & C9=7 (LAST LINE):01 (00:C4ovf 01:C4=0)", false, false},
@@ -1577,6 +1631,10 @@ static const verdict_case printed_lines[] = {
    line reaches. They are what the guards are for: a rendering nobody prints
    is not a rendering, but a rule nobody exercises is not a rule either. */
 static const verdict_case built_lines[] = {
+    /* The word inside a line is not the word at its end. A heading that
+       names what a group is about to test carries no verdict, and nothing
+       in it can be paired with a value. */
+    {"TEST FOR A WRONG R5 ON THE LAST LINE", false, false},
     /* A legend keyed by value, written in clean digits and with a
        measurement before it, which the word CRTC is what keeps out: the 00
        would otherwise read as a clause for this machine and hand back the
@@ -2034,8 +2092,10 @@ int main(int argc, char **argv) {
   fprintf(file, "A group that names silicon's value only where it differs is worth\n");
   fprintf(file, "knowing about: it grades itself while the machine is wrong and prints its\n");
   fprintf(file, "measurement alone once it is right, so it leaves the tally above by being\n");
-  fprintf(file, "agreed with. A group falling out of that count is not the same as a group\n");
-  fprintf(file, "that could not be read.\n\n");
+  fprintf(file, "agreed with. A group that makes the comparison itself and prints only\n");
+  fprintf(file, "its verdict leaves the tally the same way: the word stands while the\n");
+  fprintf(file, "machine is wrong and is gone once it is right. A group falling out of\n");
+  fprintf(file, "that count is not the same as a group that could not be read.\n\n");
   fprintf(file, "The copy of this file in the test sources is the one on record, and a sweep\n");
   fprintf(file, "fails on the first line where the two differ. The screens behind these\n");
   fprintf(file, "standings are in the module records written beside the sweep's own copy.\n\n");

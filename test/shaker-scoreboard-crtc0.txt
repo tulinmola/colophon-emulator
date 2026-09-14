@@ -2,9 +2,9 @@ What Longshot's Shaker 2.7 said about this machine, built as a type 0
 CRTC, module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-6 of them printed self-graded lines, 36 in all: 30 agree with Longshot's
-silicon and 6 do not. That is 83% of what this reader can score, and no
-measure at all of the other 58 groups.
+7 of them printed self-graded lines, 38 in all: 30 agree with Longshot's
+silicon and 8 do not. That is 79% of what this reader can score, and no
+measure at all of the other 57 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -32,8 +32,10 @@ standing.
 A group that names silicon's value only where it differs is worth
 knowing about: it grades itself while the machine is wrong and prints its
 measurement alone once it is right, so it leaves the tally above by being
-agreed with. A group falling out of that count is not the same as a group
-that could not be read.
+agreed with. A group that makes the comparison itself and prints only
+its verdict leaves the tally the same way: the word stands while the
+machine is wrong and is gone once it is right. A group falling out of
+that count is not the same as a group that could not be read.
 
 The copy of this file in the test sources is the one on record, and a sweep
 fails on the first line where the two differ. The screens behind these
@@ -105,7 +107,9 @@ C (P)       ALL      : ADD LINE R8                                              
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
 C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
-C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  recorded, ungraded
+C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  2 graded, 2 wrong
+    ! C4==R4 & C9<>R9: UPD R9=C9  WHEN C0==1. C4=>00 IF 1:0 WRONG
+    ! C9==R9 & C4<>R4: UPD R4=C4  WHEN C0==1. C4=>00 IF 1:0 WRONG
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's
 D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               3 graded, 1 wrong
     ! TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)
