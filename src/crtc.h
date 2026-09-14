@@ -8,23 +8,35 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and two things are not its alone. The first
- * is what a machine can read of the chip: the registers each type hands back
- * on the read port, and the status register type 1 alone has, are answered for
- * types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program names the chip by
- * (ch. 28.1.8, 28.1.9) — what a program probing for a type 2 would make of it
- * being a reading of those chapters and no evidence we did not write. The
- * second is the VSYNC. Types 1 and 2 cannot program its length, so it "is
- * fixed at 16" whatever R3h holds (ch. 16), and a pulse either of them is made
- * to begin by a write to R7 is counted "as if the VSYNC had started when C0=0"
- * and spends a line fewer than a type 0's (ch. 16.4.2, 16.4.3), where one
- * begun on a frame's own half line keeps all sixteen (ch. 28.1.4). Neither of
- * them takes the whole line below either, which ch. 19.7.1 gives "CRTC's 0, 3
- * and 4" alone. No line on the disc moves on the shortened count or the whole
- * line withheld: what stands behind those two is those chapters' sentences and
- * tests of our own. Every other behaviour below is type 0's whatever the type
- * is set to, and a number naming none of the five is neither refused nor
- * corrected.
+ * Type 0 is the type implemented, and three things are not its alone. The
+ * first is what a machine can read of the chip: the registers each type hands
+ * back on the read port, and the status register type 1 alone has, are
+ * answered for types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program
+ * names the chip by (ch. 28.1.8, 28.1.9) — what a program probing for a type 2
+ * would make of it being a reading of those chapters and no evidence we did
+ * not write. The second is the VSYNC. Types 1 and 2 cannot program its length,
+ * so it "is fixed at 16" whatever R3h holds (ch. 16), and a pulse either of
+ * them is made to begin by a write to R7 is counted "as if the VSYNC had
+ * started when C0=0" and spends a line fewer than a type 0's (ch. 16.4.2,
+ * 16.4.3), where one begun on a frame's own half line keeps all sixteen
+ * (ch. 28.1.4). Neither of them takes the whole line below either, which
+ * ch. 19.7.1 gives "CRTC's 0, 3 and 4" alone. No line on the disc moves on the
+ * shortened count or the whole line withheld: what stands behind those two is
+ * those chapters' sentences and tests of our own. The third is how a type 1
+ * reads R9 in the interlace video mode, and it is the first of the three the
+ * disc does grade: its odd-lined rows come of an even R9 where a type 0's come
+ * of an odd one (ch. 19.5.3, 19.8.2), and it reads the limit down to that
+ * parity where a type 0 reads it up — a character of N lines wanting "the
+ * value N-1" of it where a type 0 asks "value N-2" (ch. 19.4.1, 19.4.2), which
+ * is why a type 0 and a type 1 want R9 "programmed respectively with 6 and 7"
+ * for rows of the same four lines (ch. 28.1.7). Entering that mode in the
+ * middle of a row is still a type 0's rule here, and leaves a type 1 counting
+ * the long way round where ch. 19.8.2 sets its parity outright. A type 2
+ * shares none of the third: ch. 19.4.3 and 19.5.4 give it an interlace of its
+ * own, in which "parity is respected whatever the values of R9 and C4", and it
+ * is answered here as a type 0 is. Every other behaviour below is type 0's
+ * whatever the type is set to, and a number naming none of the five is neither
+ * refused nor corrected.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload

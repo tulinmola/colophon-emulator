@@ -459,6 +459,70 @@ static void types_1_and_2_delay_no_vsync_by_a_whole_line(void) {
   }
 }
 
+/* Which R9 gives a row of a given height is not the same on a type 0 and a
+   type 1. Ch. 28.1.7 sets them side by side: "on CRTC's 0 and 1, with R9
+   programmed respectively with 6 and 7 without having modified R7, the
+   VSYNC occurs 2 times faster, since C4=R7 with characters of 4 lines
+   instead of 8", and ch. 19.4.1 and 19.4.2 say it from the programmer's
+   side — a character of N lines wants "value N-2" from a type 0 and "the
+   value N-1" from a type 1. The reason is in ch. 19.5.3: where a type 0
+   makes its odd-lined rows out of an odd R9, a type 1 makes them out of an
+   even one, and it reads the limit down to that parity where a type 0 reads
+   it up (ch. 19.8.2). The pairs below are ch. 19.5.2's table and ch.
+   19.5.3's diagram, both of which draw the two fields, so both fields are
+   read here: a pair of rows holds the same total on either frame, and it is
+   which of them is the longer that turns over. */
+static void types_0_and_1_want_different_r9s_for_a_row(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r9;
+    int even_field[2]; /* scanlines in the frame's first two rows */
+    int odd_field[2];  /* and in the first two of the frame after it */
+  } cases[] = {
+      {0, 6, {4, 4}, {4, 4}}, /* ch. 28.1.7's pair: one height, two R9s */
+      {1, 7, {4, 4}, {4, 4}},
+      {0, 7, {5, 4}, {4, 5}}, /* and the R9 each of them makes a pair of */
+      {1, 8, {5, 4}, {4, 5}},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 38);
+    write_register(9, cases[index].r9);
+    write_register(6, 25);
+    write_register(7, 35);
+    write_register(8, 3); /* the interlace video mode */
+    int rows[2][2] = {{0, 0}, {0, 0}};
+    int counted[2] = {0, 0};
+    int scanlines = 0;
+    int row = -1;
+    bool parity = false;
+    for (long character = 0; character < 8L * 64 * 320; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 != 0) {
+        continue;
+      }
+      if (crtc.c4 != row) {
+        int field = parity ? 1 : 0;
+        if (row >= 0 && scanlines > 0 && counted[field] < 2) {
+          rows[field][counted[field]++] = scanlines;
+        }
+        scanlines = 0;
+        row = crtc.c4;
+        parity = crtc.parity_frame;
+      }
+      scanlines++;
+    }
+    TEST_EQUAL(rows[0][0], cases[index].even_field[0]);
+    TEST_EQUAL(rows[0][1], cases[index].even_field[1]);
+    TEST_EQUAL(rows[1][0], cases[index].odd_field[0]);
+    TEST_EQUAL(rows[1][1], cases[index].odd_field[1]);
+  }
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -2462,6 +2526,7 @@ int main(void) {
   TEST_RUN(each_type_answers_the_read_port_its_own_way);
   TEST_RUN(each_type_keeps_its_own_vsync_length);
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
+  TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
   TEST_RUN(only_type_1_drives_the_status_port);
   TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
   TEST_RUN(unselected_chip_ignores_the_bus);

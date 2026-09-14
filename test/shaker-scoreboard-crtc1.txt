@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-7 of them printed self-graded lines, 58 in all: 16 agree with Longshot's
-silicon and 42 do not. That is 28% of what this reader can score, and no
+7 of them printed self-graded lines, 39 in all: 16 agree with Longshot's
+silicon and 23 do not. That is 41% of what this reader can score, and no
 measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -113,38 +113,19 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
     ! DEADLOCK G ADD T5 / CPU TO NEW FRAME:#0001 (#0223 expected)
 C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           1 graded, 1 wrong
-    ! RESULT:#57A0 WRONG (EXP:#4E40)
-C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             30 graded, 30 wrong
-    ! PARITY O. TO R7=1, R4=6, CPU=#0A20 WRONG (EXP:#0940)
-    ! PARITY O. TO R7=2, R4=6, CPU=#0B80 WRONG (EXP:#0A80)
-    ! PARITY O. TO R7=3, R4=6, CPU=#0CA0 WRONG (EXP:#0B80)
-    ! PARITY O. TO R7=4, R4=6, CPU=#0E00 WRONG (EXP:#0CC0)
-    ! PARITY O. TO R7=5, R4=6, CPU=#06E0 WRONG (EXP:#0DC0)
+    ! RESULT:#4E20 WRONG (EXP:#4E40)
+C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             11 graded, 11 wrong
+    ! PARITY O. TO R7=1, R4=6, CPU=#0960 WRONG (EXP:#0940)
+    ! PARITY O. TO R7=2, R4=6, CPU=#0A40 WRONG (EXP:#0A80)
+    ! PARITY O. TO R7=3, R4=6, CPU=#0BA0 WRONG (EXP:#0B80)
+    ! PARITY O. TO R7=4, R4=6, CPU=#0C80 WRONG (EXP:#0CC0)
+    ! PARITY O. TO R7=5, R4=6, CPU=#0DE0 WRONG (EXP:#0DC0)
     ! PARITY O. TO R7=7, R4=6, CPU=#0000 WRONG (EXP:#0820)
-    ! PARITY E. TO R7=1, R4=6, CPU=#0140 WRONG (EXP:#0160)
-    ! PARITY E. TO R7=2, R4=6, CPU=#02A0 WRONG (EXP:#0260)
-    ! PARITY E. TO R7=3, R4=6, CPU=#03C0 WRONG (EXP:#03A0)
-    ! PARITY E. TO R7=4, R4=6, CPU=#0520 WRONG (EXP:#04A0)
-    ! PARITY E. TO R7=5, R4=6, CPU=#0640 WRONG (EXP:#05E0)
-    ! PARITY E. TO R7=7, R4=6, CPU=#08C0 WRONG (EXP:#0820)
-    ! PARITY O. TO R7=1, R4=7, CPU=#0B80 WRONG (EXP:#0A40)
-    ! PARITY O. TO R7=2, R4=7, CPU=#0CA0 WRONG (EXP:#0B80)
-    ! PARITY O. TO R7=3, R4=7, CPU=#0E00 WRONG (EXP:#0C80)
-    ! PARITY O. TO R7=4, R4=7, CPU=#0F20 WRONG (EXP:#0DC0)
-    ! PARITY E. TO R7=1, R4=6, CPU=#0140 WRONG (EXP:#0160)
-    ! PARITY E. TO R7=2, R4=6, CPU=#02A0 WRONG (EXP:#0260)
-    ! PARITY E. TO R7=3, R4=6, CPU=#03C0 WRONG (EXP:#03A0)
-    ! PARITY E. TO R7=4, R4=6, CPU=#0520 WRONG (EXP:#04A0)
-    ! PARITY E. TO R7=5, R4=6, CPU=#0640 WRONG (EXP:#05E0)
-    ! PARITY E. TO R7=7, R4=6, CPU=#08C0 WRONG (EXP:#0820)
-    ! PARITY O. TO R7=5, R4=7, CPU=#06D0 WRONG (EXP:#0EC0)
-    ! PARITY O. TO R7=8, R4=7, CPU=#0A00 WRONG (EXP:#0920)
-    ! PARITY E. TO R7=1, R4=7, CPU=#0140 WRONG (EXP:#0160)
-    ! PARITY E. TO R7=2, R4=7, CPU=#02A0 WRONG (EXP:#0260)
-    ! PARITY E. TO R7=3, R4=7, CPU=#03C0 WRONG (EXP:#03A0)
-    ! PARITY E. TO R7=4, R4=7, CPU=#0520 WRONG (EXP:#04A0)
-    ! PARITY E. TO R7=5, R4=7, CPU=#0640 WRONG (EXP:#05E0)
-    ! PARITY E. TO R7=8, R4=7, CPU=#0A00 WRONG (EXP:#0920)
+    ! PARITY E. TO R7=1, R4=6, CPU=#0100 WRONG (EXP:#0160)
+    ! PARITY E. TO R7=7, R4=6, CPU=#07C0 WRONG (EXP:#0820)
+    ! PARITY O. TO R7=8, R4=7, CPU=#0000 WRONG (EXP:#0920)
+    ! PARITY E. TO R7=1, R4=7, CPU=#0100 WRONG (EXP:#0160)
+    ! PARITY E. TO R7=8, R4=7, CPU=#0900 WRONG (EXP:#0920)
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  another CRTC type's
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's

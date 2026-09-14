@@ -72,7 +72,8 @@ static bool interlace_video_asked(const crtc_t *crtc) {
 
 /* ParityC9, which fills bit 0 of the raster address in the interlace video
    mode: "ParityC9 = C4.0 xor ParityFrame" (ch. 19.5.2). Where R9 is odd the
-   rows come out alternately even-lined and odd-lined as C4 advances, which
+   rows come out alternately even-lined and odd-lined as C4 advances on a
+   type 0, which
    is how a pair of them keeps the same length on both frames; where R9 is
    even every row takes the frame's own parity. The Compendium holds this in
    a state it updates at a row's end and only while R9 is odd, which leaves
@@ -82,7 +83,13 @@ static bool interlace_video_asked(const crtc_t *crtc) {
    address under the line being drawn, which is the very thing ch. 19.8.1
    gives the delayed take-up to prevent. Nothing we can run grades it. */
 static bool parity_c9(const crtc_t *crtc) {
-  if ((crtc->registers[9] & 1) != 0 && (crtc->c4 & 1) != 0) {
+  /* A type 1 reads that the other way round: it is "when R9 is even" that
+     "the parity of the lines depends on that of C4 and on the current
+     parity at the start of the frame" (ch. 19.5.3), which ch. 19.8.2 puts
+     as "if R9 is even (odd number of lines of a character), then the parity
+     of C4 is also considered". */
+  bool odd_lined_rows = (crtc->registers[9] & 1) != (crtc->type == 1 ? 1u : 0u);
+  if (odd_lined_rows && (crtc->c4 & 1) != 0) {
     return !crtc->parity_frame;
   }
   return crtc->parity_frame;
@@ -103,8 +110,9 @@ static uint8_t c9_vma(const crtc_t *crtc) {
   return (uint8_t)((((unsigned)crtc->c9 << 1) | (parity_c9(crtc) ? 1u : 0u)) & C9_BITS);
 }
 
-/* R9 read up to the nearest line of ParityC9's own parity, which is the
-   limit a row ends on while the raster address carries parity in bit 0. The
+/* R9 read to the nearest line of ParityC9's own parity — up on a type 0,
+   down on a type 1 below — which is the limit a row ends on while the
+   raster address carries parity in bit 0. On a type 0: The
    Compendium says this three ways that do not agree — "R9 + ParityFrame"
    (ch. 19.8.1), "R9 or ParityC9" (its note), and ch. 19.3.3's "it suffices
    to ignore bit 0 ... and to manage this bit 0 as that of frame parity" —
@@ -117,7 +125,20 @@ static uint8_t c9_vma(const crtc_t *crtc) {
    ends. */
 static uint8_t r9_with_parity(const crtc_t *crtc) {
   unsigned r9 = crtc->registers[9];
-  return (uint8_t)((r9 + ((r9 ^ (parity_c9(crtc) ? 1u : 0u)) & 1u)) & C9_BITS);
+  unsigned off_by_one = (r9 ^ (parity_c9(crtc) ? 1u : 0u)) & 1u;
+  /* A type 1 reads it down to that parity where a type 0 reads it up. Ch.
+     19.8.2 gives that type's counting outright and ends a row on "(C9 and
+     %11110) == (R9 and %11110) (test C9/R9 excluding parity)", which is the
+     limit read down; ch. 19.4.2 says the same from the programmer's side,
+     R9 wanting "the value N-1" for a character of N lines where ch. 19.4.1
+     asks a type 0 for "value N-2". It is why the two want R9 "programmed
+     respectively with 6 and 7" for the same four lines (ch. 28.1.7).
+     Reading down carries out of five bits at an R9 of 0, where ch. 19.8.2's
+     own counting also runs a row of sixteen, as reading up does at 31. */
+  if (crtc->type == 1) {
+    return (uint8_t)((r9 - off_by_one) & C9_BITS);
+  }
+  return (uint8_t)((r9 + off_by_one) & C9_BITS);
 }
 
 /* Writing R8 moves two things and they do not move together (ch. 19.8.1):
@@ -544,9 +565,7 @@ static void begin_syncs(crtc_t *crtc) {
      odd frame and an odd C4" (ch. 19.7.1), and of a type 1 ch. 19.5.3 says
      outright that "the VSYNC is not delayed from a line on odd C4s when R9
      is even". R9 even is where that type's rows come out odd, where a type
-     0's do at R9 odd — a divergence in the reading of R9 that is not here
-     yet, so what this withholds is the delay and not the heights that ask
-     for it. */
+     0's do at R9 odd, which parity_c9 reads for itself. */
   bool delays_a_whole_line = crtc->type != 1 && crtc->type != 2;
   bool late_vsync = delays_a_whole_line && crtc->interlace_video_mode && (r[9] & 1) != 0 &&
                     (crtc->c4 & 1) != 0 && crtc->parity_frame;
