@@ -60,16 +60,25 @@
  * on those two the row goes on being counted and C4 on advancing through the
  * lines — "regardless of the value of R4 each time C9=R9, as long as C5 has
  * not reached R5" — where the other three hold the row where it stands. No
- * line the disc grades moves on it: what stands behind it is ch. 11.2.2 and
- * 11.2.3's own tables and a test of our own. Two things that counter carries
- * are not here. Ch. 11.3.2's R5 taken to 0 in the middle of a run leaves a
- * type 1 with "the state not deactivated, C4 (not returning) to 0 and C5
- * (looping)", where this ends the run when C5 comes round, and it is what
- * Shaker's C (E) fails on. And a line too narrow to reach the disarm gives
- * those two no additional line where it gives the other three one, ch. 13.2's
- * window being a type 0's. Every other behaviour below is type 0's whatever
- * the type is set to, and a number naming none of the five is neither refused
- * nor corrected.
+ * line the disc grades moves on the counter itself: what stands behind that
+ * is ch. 11.2.2 and 11.2.3's own tables and a test of our own. A type 1 alone
+ * latches a state with the counter, "if R5>0 when C4 should return to 0 at the
+ * end of the frame", which an R5 taken back to 0 does not clear — "the state
+ * is not deactivated, C4 does not return to 0 and C5 loops" — so a program can
+ * hold a frame open and close it on a line of its own choosing, and that is
+ * here. The hold is not endless: "C4, however, continues to be compared to R4
+ * to process the change from C4 to 0", and on the row that comparison comes
+ * round on C4 goes back to 0 while "the additional management, however,
+ * remains activated" — the state is simply taken again on the comparison that
+ * activates it, finds the R5 the program cancelled, and is not taken, so the
+ * run ends where C5 next comes round to it (ch. 11.3.2). Ch. 11.3.1 is headed
+ * "CRTC's 0, 2" and gives its two the plain overflow of the counter, so
+ * neither of them takes the state. One thing that counter carries is not
+ * here: a line too narrow to reach the disarm gives types 1 and 2 no
+ * additional line where it gives the other three one, ch. 13.2's window being
+ * a type 0's. Every other behaviour below is type 0's
+ * whatever the type is set to, and a number naming none of the five is neither
+ * refused nor corrected.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
@@ -287,6 +296,12 @@ typedef struct {
      which "the end of additional management reset C4 and C9 to 0" (ch.
      13.2.1). */
   bool adjustment_on_its_last_line;
+  /* Whether the last run to open took the state ch. 11.3.2 has a type 1
+     latch — "if R5>0 when C4 should return to 0 at the end of the frame
+     (C4=R4, C9=R9)" — which an R5 taken back to 0 does not clear. Taken
+     afresh wherever that comparison holds, so that no frame is held by the
+     R5 of the frame before it, and false on the other four types. */
+  bool r5_opened_the_run;
 
   /* Whether the chip stood on a frame's first character last time it was
      asked. ParityFrame turns as that character is entered (ch. 19.5.2), and

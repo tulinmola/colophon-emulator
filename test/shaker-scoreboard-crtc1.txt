@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-7 of them printed self-graded lines, 39 in all: 17 agree with Longshot's
-silicon and 22 do not. That is 44% of what this reader can score, and no
+7 of them printed self-graded lines, 39 in all: 22 agree with Longshot's
+silicon and 17 do not. That is 56% of what this reader can score, and no
 measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -116,15 +116,15 @@ C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                   
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
 C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded
-C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              8 graded, 5 wrong
+C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              8 graded, 0 wrong
       R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
-    ! R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0B20 expected)
+      R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0B20 (#0B20 expected)
       R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
-    ! DEADLOCK G ADD T1 / CPU TO NEW FRAME:#0001 (#0073 expected)
-    ! DEADLOCK G ADD T2 / CPU TO NEW FRAME:#0001 (#0077 expected)
+      DEADLOCK G ADD T1 / CPU TO NEW FRAME:#0073 (#0073 expected)
+      DEADLOCK G ADD T2 / CPU TO NEW FRAME:#0077 (#0077 expected)
       DEADLOCK G ADD T3 / CPU TO NEW FRAME:#04A0 (#04A0 expected)
-    ! DEADLOCK G ADD T4 / CPU TO NEW FRAME:#0080 (#0B20 expected)
-    ! DEADLOCK G ADD T5 / CPU TO NEW FRAME:#0001 (#0223 expected)
+      DEADLOCK G ADD T4 / CPU TO NEW FRAME:#0B20 (#0B20 expected)
+      DEADLOCK G ADD T5 / CPU TO NEW FRAME:#0223 (#0223 expected)
 C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
 C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded

@@ -850,6 +850,251 @@ static void each_type_counts_the_adjustment_lines_its_own_way(void) {
   }
 }
 
+/* A type 1 latches a state when it opens a run of additional lines, "if
+   R5>0 when C4 should return to 0 at the end of the frame", and taking R5
+   back to 0 does not clear it: "the state is not deactivated, C4 does not
+   return to 0 and C5 loops". Only a later R5 closes it — "if C5+1 reaches
+   an R5>0, then the additional management changes C4 to 0 before
+   deactivating its state" (ch. 11.3.2). The chapter offers that to a
+   program as a way of holding a frame open — "it is possible to change C4
+   and C9 to 0 on any line with this method" — so the test is the offer
+   taken up: open a run, cancel R5, and name the line to end on — named on
+   the tenth line the run spends with R5 at 0, which is its eleventh and its
+   last, so the run is eleven lines long.
+
+   A program that names none does not hold the frame for ever, because "C4,
+   however, continues to be compared to R4 to process the change from C4 to
+   0". The run opens with C4 one past R4, and C4 comes back round to R4 after
+   the 128 rows a seven-bit counter has, each of the R9+1 = 4 lines the setup
+   below gives a row. The management is not deactivated there — "the
+   additional management, however, remains activated" — so C5, which never
+   stopped counting, spends the rest of its own round of thirty-two before it
+   reaches the 0 R5 was cancelled to: 128 x 4 + 32 below.
+
+   Types 0 and 2 latch no such state. An R5 cancelled under those is only
+   the overflow ch. 11.3.1 gives its two — "if R5 is modified with a value
+   less than C5+1/C9+1, then the counter overflows and continues to count up
+   to 0 to reach the new R5 value" — which is the thirty-two a five-bit
+   counter has before it comes round to the 0 it was cancelled to. That
+   chapter is headed "CRTC's 0, 2" and the deadlock's is headed "CRTC 1",
+   which is the whole of why the type column below names three types. */
+static void a_type_1_holds_a_frame_open_where_r5_is_cancelled(void) {
+  /* NEVER_ASKED stands in the column a line would be named in, for the
+     program that names none. WATCHED is twice the longest run asked for
+     below, and bounds a run that will not end, so that a chip holding the
+     frame for ever fails here rather than spinning until the character
+     count runs out. */
+  enum { NEVER_ASKED = -1, WATCHED = 2 * (128 * 4 + 32) };
+  static const struct {
+    uint8_t type;
+    int end_it_after; /* lines to run with R5 at 0 before naming the end */
+    int lines;        /* and how long the run comes out */
+  } cases[] = {
+      {1, 10, 11},                    /* ended where the program asks, and not before */
+      {1, 20, 21},                    /* and again ten lines later, to show it is the asking */
+      {1, NEVER_ASKED, 128 * 4 + 32}, /* or C4's round, and then C5's own */
+      {2, NEVER_ASKED, 32},           /* while these two merely count five bits */
+      {0, NEVER_ASKED, 32},           /* the one of them on C5, the other on C9 */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 10);
+    write_register(9, 3);
+    write_register(5, 2);
+    write_register(6, 25);
+    write_register(7, 60);
+    int lines = 0;
+    int held = 0;
+    bool standing = false;
+    bool seen = false;
+    bool cancelled = false;
+    bool ended = false;
+    for (long character = 0; character < 80L * 64 * 400; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 != 0) {
+        continue;
+      }
+      bool running = crtc.vertical_adjustment_in_progress;
+      if (running && !standing) {
+        lines = 0;
+        held = 0;
+      }
+      if (running) {
+        lines++;
+        if (!cancelled) {
+          write_register(5, 0);
+          cancelled = true;
+        } else if (++held == cases[index].end_it_after) {
+          write_register(5, (uint8_t)((crtc.c5 + 1) & 0x1F));
+        }
+        if (lines > WATCHED) {
+          break;
+        }
+      }
+      if (standing && !running && seen) {
+        ended = true;
+        break;
+      }
+      seen = seen || running;
+      standing = running;
+    }
+    TEST_CHECK(ended);
+    TEST_EQUAL(lines, cases[index].lines);
+  }
+}
+
+/* The state is taken where a run opens, and a frame is never held by the R5
+   of the frame before it. The path that tells a taken state from a carried
+   one is a last line unmade by an R9 write at C0=1, where "the current line
+   becomes the 'first' adjustment line" (ch. 10.3.1.2): the run that opens
+   there opens with "C4 should return to 0 at the end of the frame (C4=R4,
+   C9=R9)" false, which is the one comparison ch. 11.3.2 puts its state
+   behind. R5 stands above 0 over that opening and is cancelled inside the
+   run, so a chip that took no state counts the plain five-bit overflow,
+   where one that took the state here — or carried it from the two frames
+   before, which did open with the comparison true — would hold the frame
+   past that count, to the row C4 comes round to R4 on — R9 is moved and R4
+   is not, so C4 must climb all 128 rows to get there, and the difference is
+   a whole frame rather than a line of it. */
+static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
+  enum { GIVE_UP_AFTER = 4096 };
+  crtc_init(&crtc, 1);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 10);
+  write_register(9, 3);
+  write_register(5, 5);
+  write_register(6, 25);
+  write_register(7, 60);
+  int spent_runs = 0;
+  int lines = 0;
+  bool standing = false;
+  bool unmade = false;
+  bool opened_mid_line = false;
+  bool cancelled = false;
+  bool ended = false;
+  for (long character = 0; character < 400L * 64 * 400 && !ended; character++) {
+    /* The write that unmakes the last line is made during the character C0
+       names 1, the only one that can leave the state true and the
+       comparison false: one made at C0=0 would have been seen by the line's
+       own second look, and one made later leaves the state standing
+       (ch. 12.2, 10.3.1.2, both headed for a type 0 and read here whatever
+       the type). */
+    if (spent_runs == 2 && !unmade && crtc.c0 == 1 && crtc.c4 == 10 && crtc.c9 == 3) {
+      write_register(9, 4);
+      unmade = true;
+      /* That line is the run's first and is already past its own C0=0,
+         which is where the lines below are counted, so it is counted
+         here instead. */
+      opened_mid_line = true;
+    }
+    crtc_tick(&crtc);
+    if (crtc.c0 != 0) {
+      continue;
+    }
+    bool running = crtc.vertical_adjustment_in_progress;
+    if (running && !standing) {
+      lines = opened_mid_line ? 1 : 0;
+      opened_mid_line = false;
+    }
+    if (running) {
+      lines++;
+      /* The two frames before opened their runs with the comparison true
+         and R5 above 0, so a state carried rather than taken would stand
+         latched going in. This run's own opening had it false. */
+      /* Cancelled on the run's third line, by which point the row has
+         reached R9 once and carried C4 a step past R4: a state taken here
+         would have to climb the whole counter to find R4 again, where one
+         cancelled while C4 still stood on R4 would be released on the very
+         next line and tell us nothing. */
+      if (unmade && !cancelled && lines == 3) {
+        write_register(5, 0);
+        cancelled = true;
+      }
+      if (lines > GIVE_UP_AFTER) {
+        break;
+      }
+    }
+    if (standing && !running) {
+      spent_runs++;
+      /* Two runs spent with R5 above 0, and the state stands latched. */
+      if (unmade) {
+        ended = true;
+      }
+    }
+    standing = running;
+  }
+  TEST_CHECK(ended);
+  TEST_EQUAL(lines, 32);
+}
+
+/* The other half of that parenthesis. A line whose C4 has already gone past
+   R4 can still arm a run, because R5's own window asks only that the row be
+   on its last scanline (ch. 11.2.2, 12.2, 13.2.1) — so a program that moves
+   R4 down under its own row counter opens a run on a line that was never
+   going to end the frame. "C4 should return to 0 at the end of the frame
+   (C4=R4, C9=R9)" is false there as surely as it is on a last line unmade,
+   and no state is taken: an R5 cancelled inside such a run is ch. 11.3.1's
+   plain overflow, the thirty-two a five-bit counter has. A chip that read
+   only the C9 half of the parenthesis would hold the frame instead, until C4
+   had climbed its whole counter to find R4 again. */
+static void a_type_1_takes_no_state_where_c4_is_past_r4(void) {
+  enum { GIVE_UP_AFTER = 4096 };
+  crtc_init(&crtc, 1);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 8);
+  write_register(9, 3);
+  write_register(5, 2);
+  write_register(6, 25);
+  write_register(7, 60);
+  int lines = 0;
+  bool standing = false;
+  bool moved = false;
+  bool cancelled = false;
+  bool ended = false;
+  for (long character = 0; character < 400L * 64 * 400 && !ended; character++) {
+    /* R4 taken below C4 on a row's last scanline, which leaves the row
+       armed for a run it cannot end a frame with. */
+    if (!moved && crtc.c0 == 0 && crtc.c4 == 4 && crtc.c9 == 3) {
+      write_register(4, 2);
+      moved = true;
+    }
+    crtc_tick(&crtc);
+    if (crtc.c0 != 0) {
+      continue;
+    }
+    bool running = crtc.vertical_adjustment_in_progress;
+    if (running && !standing) {
+      lines = 0;
+    }
+    if (running) {
+      lines++;
+      if (moved && !cancelled && lines == 2) {
+        write_register(5, 0);
+        cancelled = true;
+      }
+      if (lines > GIVE_UP_AFTER) {
+        break;
+      }
+    }
+    if (standing && !running && cancelled) {
+      ended = true;
+    }
+    standing = running;
+  }
+  TEST_CHECK(ended);
+  TEST_EQUAL(lines, 32);
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -2856,6 +3101,9 @@ int main(void) {
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
   TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
   TEST_RUN(each_type_counts_the_adjustment_lines_its_own_way);
+  TEST_RUN(a_type_1_holds_a_frame_open_where_r5_is_cancelled);
+  TEST_RUN(a_type_1_opens_each_run_with_the_r5_it_has);
+  TEST_RUN(a_type_1_takes_no_state_where_c4_is_past_r4);
   TEST_RUN(an_interlace_pulse_fixes_a_type_1_on_an_even_field);
   TEST_RUN(an_r8_write_answers_the_scenarios_the_chapter_draws);
   TEST_RUN(only_type_1_drives_the_status_port);

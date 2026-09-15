@@ -214,6 +214,32 @@ static void begin_frame(crtc_t *crtc) {
   enter_character_row(crtc, 0);
 }
 
+/* "CRTC 1 activates an internal additional management state if R5>0 when C4
+   should return to 0 at the end of the frame (C4=R4, C9=R9)" (ch. 11.3.2).
+   The parenthesis is read here rather than assumed from the run, because the
+   chip reaches this rule at characters where it does not hold: a run opened
+   because an R4 or R9 write unmade the last line under it is a frame
+   postponed rather than ended, and one the R5 window admits with C4 already
+   past R4 was never going to return C4 to 0 either. It also holds inside a
+   run already standing, where C4 comes back round to R4. Ch. 11.3.1 is
+   headed "CRTC's 0, 2" and gives those two the plain overflow and no state
+   at all, which is why only a type 1 takes anything. */
+static bool takes_the_r5_state(const crtc_t *crtc) {
+  return crtc->type == 1 && crtc->registers[5] != 0 && crtc->c4 == crtc->registers[4] &&
+         row_is_on_its_last_scanline(crtc);
+}
+
+/* A run of additional lines opening. Taking the state here rather than
+   reading it line by line is what keeps a frame from being decided by the R5
+   of the frame before it. */
+static void open_the_adjustment(crtc_t *crtc) {
+  if (crtc->vertical_adjustment_in_progress) {
+    return;
+  }
+  crtc->vertical_adjustment_in_progress = true;
+  crtc->r5_opened_the_run = takes_the_r5_state(crtc);
+}
+
 /* How many lines a VSYNC lasts. "This number of lines can be programmed on
    CRTC's 0, 3 and 4 (via register R3h). It is fixed at 16 for CRTC's 1 and
    2 (and for CRTC's 0, 3, 4 when R3h=0)" (ch. 16). C3h counts on four bits,
@@ -259,7 +285,7 @@ static void enter_scanline(crtc_t *crtc) {
          taking the arming back, C4 having just moved off R4 and the last
          line with it. */
       if (crtc->last_line) {
-        crtc->vertical_adjustment_in_progress = true;
+        open_the_adjustment(crtc);
       }
       enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
     }
@@ -307,7 +333,23 @@ static void enter_scanline(crtc_t *crtc) {
        if necessary" (ch. 19.6.2, 19.6.3), which makes it the last of them. */
     uint8_t next_c5 =
         crtc->vertical_adjustment_in_progress ? (uint8_t)((crtc->c5 + 1) & C5_BITS) : 0;
-    bool r5_lines_spent = next_c5 == r[5];
+    open_the_adjustment(crtc);
+    /* The state a type 1 latches is not cleared by taking R5 back to 0:
+       "the state is not deactivated, C4 does not return to 0 and C5 loops".
+       Only a later R5 closes it — "if C5+1 reaches an R5>0, then the
+       additional management changes C4 to 0 before deactivating its state"
+       (ch. 11.3.2) — so a program can hold a frame open as long as it likes
+       and close it on a line of its own choosing, which is what that
+       chapter offers it.
+
+       The hold is not endless, because "C4, however, continues to be
+       compared to R4 to process the change from C4 to 0": C4 climbs the
+       seven bits it has and comes back round to R4, which is where the
+       state is read again. */
+    bool r5_taken_to_zero_mid_run = crtc->r5_opened_the_run && r[5] == 0;
+    bool c4_came_round_to_r4 =
+        r5_taken_to_zero_mid_run && crtc->c4 == r[4] && row_is_on_its_last_scanline(crtc);
+    bool r5_lines_spent = next_c5 == r[5] && !r5_taken_to_zero_mid_run;
     bool interlace_line_falls_here =
         r5_lines_spent && crtc->interlace_line_owed && !crtc->interlace_line_given;
     if (crtc->interlace_line_given || (r5_lines_spent && !interlace_line_falls_here)) {
@@ -316,8 +358,17 @@ static void enter_scanline(crtc_t *crtc) {
     } else {
       crtc->interlace_line_given = crtc->interlace_line_given || interlace_line_falls_here;
       crtc->c5 = next_c5;
-      crtc->vertical_adjustment_in_progress = true;
-      if (row_is_on_its_last_scanline(crtc)) {
+      if (c4_came_round_to_r4) {
+        /* "The additional management, however, remains activated": the run
+           does not end on that comparison, the state is only taken afresh
+           on it — and the R5 the program cancelled is the R5 it reads, so
+           the state is not taken again. C5 goes on counting from where it
+           stood, and the run ends where it wraps round to the 0 R5 now
+           holds, which is ch. 11.3.1's overflow arriving late. */
+        crtc->r5_opened_the_run = takes_the_r5_state(crtc);
+        crtc->c9 = 0;
+        enter_character_row(crtc, 0);
+      } else if (row_is_on_its_last_scanline(crtc)) {
         crtc->c9 = 0;
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       } else {
@@ -354,7 +405,7 @@ static void enter_scanline(crtc_t *crtc) {
          the last of them (ch. 19.6.1). C4 has already been incremented once
          for all the additional lines there are. */
       crtc->interlace_line_given = true;
-      crtc->vertical_adjustment_in_progress = true;
+      open_the_adjustment(crtc);
       crtc->c9 = next_c9;
       if (row_ended_on_r4) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
@@ -369,7 +420,7 @@ static void enter_scanline(crtc_t *crtc) {
          once again exceed 1. It is then R5 which controls the end ... To
          stop this management, program R5 with C9+1" (ch. 13.2.6). */
       crtc->adjustment_on_its_last_line = r5_lines_spent && r[0] == 1;
-      crtc->vertical_adjustment_in_progress = true;
+      open_the_adjustment(crtc);
       crtc->c9 = next_c9;
       if (row_ended_on_r4) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
@@ -479,7 +530,7 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
     /* "The current line becomes the 'first' adjustment line" (ch. 10.3.1.2),
        and a line already begun is past the disarm below (ch. 13.2.6). The
        arming itself was done on the characters C0 named 0 and 1. */
-    crtc->vertical_adjustment_in_progress = true;
+    open_the_adjustment(crtc);
   }
   /* The chip arms on any last line and asks what it is for afterwards: ch.
      12.1 gives the window, "this management of additional line(s) is managed
