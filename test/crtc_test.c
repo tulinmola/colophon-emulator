@@ -743,6 +743,113 @@ static void an_r8_write_answers_the_scenarios_the_chapter_draws(void) {
   }
 }
 
+/* Ch. 11.2.2 and 11.2.3 each draw the frame's additional lines, one table
+   for each way a chip counts them, and the two are the test below. A type 0
+   holds the row still and spends C9 on them, so C4 stays where the last row
+   left it and C9 climbs; the second table is headed for a type 1 and a type
+   2, which keep them on a counter of their own — "on these circuits, the C5
+   and C9 counters are dissociated" — so the row goes on being counted and
+   C4 on advancing while C5 counts the lines beside them. The chapter
+   initializes R4=10, R5=16, R9=3, R1=40 and R0=63 (ch. 11.2.1), so the
+   lines run from C4=11 with R9 written to 10 on the fifth of them, which
+   its tables annotate; the rest are a standard frame's. */
+static void each_type_counts_the_adjustment_lines_its_own_way(void) {
+  static const struct {
+    uint8_t type;
+    const char *drawn; /* the row and scanline of each line, as the page has it */
+  } cases[] = {
+      {0, "11/0 11/1 11/2 11/3 11/4 11/5 11/6 11/7 11/8 11/9 11/10 11/11 11/12 11/13 11/14 11/15"},
+      {1, "11/0 11/1 11/2 11/3 12/0 12/1 12/2 12/3 12/4 12/5 12/6 12/7 12/8 12/9 12/10 13/0"},
+      {2, "11/0 11/1 11/2 11/3 12/0 12/1 12/2 12/3 12/4 12/5 12/6 12/7 12/8 12/9 12/10 13/0"},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 10);
+    write_register(9, 3);
+    write_register(5, 16);
+    write_register(6, 25);
+    write_register(7, 60);
+    char drawn[128] = "";
+    int length = 0;
+    int counted = 0;
+    bool standing = false;
+    bool written = false;
+    for (long character = 0; character < 40L * 64 * 400 && counted < 16; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 != 0) {
+        continue;
+      }
+      bool running = crtc.vertical_adjustment_in_progress;
+      if (running && !standing) {
+        length = 0;
+        counted = 0;
+      }
+      standing = running;
+      if (!running) {
+        continue;
+      }
+      length += snprintf(drawn + length, sizeof drawn - (size_t)length,
+                         counted ? " %d/%d" : "%d/%d", crtc.c4, crtc.c9);
+      counted++;
+      /* The page writes R9 on the line after the one it marks, so the row
+         that moved did so on the value it was counting against. */
+      if (counted == 5 && !written) {
+        write_register(9, 10);
+        written = true;
+      }
+    }
+    TEST_EQUAL(counted, 16);
+    if (strcmp(drawn, cases[index].drawn) != 0) {
+      TEST_FAIL("type %u drew %s, where the table says %s", cases[index].type, drawn,
+                cases[index].drawn);
+    }
+  }
+
+  /* And however they are counted, R5 says how many there are: the run ends
+     "when the number of the next additional line reaches R5" on either
+     counter (ch. 11.3.1, 11.3.2). */
+  for (uint8_t type = 0; type < 3; type++) {
+    for (uint8_t r5 = 1; r5 <= 6; r5++) {
+      crtc_init(&crtc, type);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(3, 0x8E);
+      write_register(4, 10);
+      write_register(9, 3);
+      write_register(5, r5);
+      write_register(6, 25);
+      write_register(7, 60);
+      int lines = 0;
+      bool standing = false;
+      bool seen = false;
+      for (long character = 0; character < 40L * 64 * 400; character++) {
+        crtc_tick(&crtc);
+        if (crtc.c0 != 0) {
+          continue;
+        }
+        bool running = crtc.vertical_adjustment_in_progress;
+        if (running && !standing) {
+          lines = 0;
+        }
+        if (running) {
+          lines++;
+        }
+        if (standing && !running && seen) {
+          break;
+        }
+        seen = seen || running;
+        standing = running;
+      }
+      TEST_EQUAL(lines, r5);
+    }
+  }
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -2748,6 +2855,7 @@ int main(void) {
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
   TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
+  TEST_RUN(each_type_counts_the_adjustment_lines_its_own_way);
   TEST_RUN(an_interlace_pulse_fixes_a_type_1_on_an_even_field);
   TEST_RUN(an_r8_write_answers_the_scenarios_the_chapter_draws);
   TEST_RUN(only_type_1_drives_the_status_port);

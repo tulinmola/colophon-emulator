@@ -19,6 +19,7 @@ static const uint8_t writable_bits[18] = {
    again (ch. 10.3.1.1, 12.1). */
 #define C4_BITS 0x7F
 #define C9_BITS 0x1F
+#define C5_BITS 0x1F
 
 void crtc_init(crtc_t *crtc, uint8_t type) {
   *crtc = (crtc_t){0};
@@ -60,6 +61,19 @@ static uint8_t display_skew(const crtc_t *crtc) { return (crtc->registers[8] >> 
    investigation and no evidence from outside this repository grades. */
 static bool interlace_asked(const crtc_t *crtc) {
   return display_skew(crtc) != SKEW_BORDER_ON && (crtc->registers[8] & 1) != 0;
+}
+
+/* Whether this type counts the frame's additional lines on a counter of
+   their own, leaving the row to go on counting itself: "on CRTCs 0, 3 and
+   4, there is no specific C5 counter and C9 is used for comparison with R5.
+   On CRTCs 1 and 2, there is a specific counter C5 used in conjunction with
+   C9" (ch. 11.1). What the two do with C4 follows from that — "on CRTC's 1
+   and 2, C4 increments regardless of the value of R4 each time C9=R9, as
+   long as C5 has not reached R5", where a type 0 "is incremented only on
+   the last line" and types 3 and 4 not at all. That last is not here: those
+   two are given a type 0's single increment. */
+static bool counts_the_adjustment_on_c5(const crtc_t *crtc) {
+  return crtc->type == 1 || crtc->type == 2;
 }
 
 /* Whether this type settles the coming frame's parity ahead of the frame, on
@@ -195,6 +209,7 @@ static void begin_frame(crtc_t *crtc) {
   crtc->vertical_adjustment_in_progress = false;
   crtc->adjustment_on_its_last_line = false;
   crtc->c9 = 0;
+  crtc->c5 = 0;
   crtc->interlace_line_given = false;
   enter_character_row(crtc, 0);
 }
@@ -282,8 +297,36 @@ static void enter_scanline(crtc_t *crtc) {
     }
   }
 
-  if (crtc->vertical_adjustment_armed) {
-    /* R5 is a quantity of lines, and C9 is compared with R9 before its
+  if (crtc->vertical_adjustment_armed && counts_the_adjustment_on_c5(crtc)) {
+    /* The row keeps its own count through all of it — "C9 is zeroed when
+       C9=R9 and C4 is incremented" (ch. 11.2.3) — and C5 alone counts the
+       lines, the run ending "when the number of the next additional line
+       (C5+1 on CRTC 2, C9+1 on CRTC 0) reaches R5" (ch. 11.3.1, 11.3.2).
+       The first line is entered before it is counted, ch. 11.2.3's table
+       opening at C5=0 on it. Interlace asks for its own "after the R5 lines
+       if necessary" (ch. 19.6.2, 19.6.3), which makes it the last of them. */
+    uint8_t next_c5 =
+        crtc->vertical_adjustment_in_progress ? (uint8_t)((crtc->c5 + 1) & C5_BITS) : 0;
+    bool r5_lines_spent = next_c5 == r[5];
+    bool interlace_line_falls_here =
+        r5_lines_spent && crtc->interlace_line_owed && !crtc->interlace_line_given;
+    if (crtc->interlace_line_given || (r5_lines_spent && !interlace_line_falls_here)) {
+      crtc->vertical_adjustment_armed = false;
+      begin_frame(crtc);
+    } else {
+      crtc->interlace_line_given = crtc->interlace_line_given || interlace_line_falls_here;
+      crtc->c5 = next_c5;
+      crtc->vertical_adjustment_in_progress = true;
+      if (row_is_on_its_last_scanline(crtc)) {
+        crtc->c9 = 0;
+        enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
+      } else {
+        crtc->c9 = (uint8_t)((crtc->c9 + 1) & C9_BITS);
+      }
+    }
+  } else if (crtc->vertical_adjustment_armed) {
+    /* This is the counting of the three that keep no C5 (ch. 11.1).
+       R5 is a quantity of lines, and C9 is compared with R9 before its
        increment: the line the chip would move to becomes the adjustment's
        own unless that line has reached R5 (ch. 13.2.4). Once C4 has left R4
        behind, C9 can no longer be zeroed, which is what lets it climb past
@@ -354,7 +397,8 @@ static void enter_scanline(crtc_t *crtc) {
      together, "and in additional management one only once if C4 was worth
      R4" (ch. 13.2.1). */
   crtc->c4_increment_armed =
-      row_is_on_its_last_scanline(crtc) && (!crtc->vertical_adjustment_armed || crtc->c4 == r[4]);
+      row_is_on_its_last_scanline(crtc) &&
+      (!crtc->vertical_adjustment_armed || crtc->c4 == r[4] || counts_the_adjustment_on_c5(crtc));
   crtc->c9_processing_managed = false;
 }
 

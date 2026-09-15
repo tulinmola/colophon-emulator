@@ -8,7 +8,7 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and four things are not its alone. The first
+ * Type 0 is the type implemented, and five things are not its alone. The first
  * is what a machine can read of the chip: the registers each type hands back
  * on the read port, and the status register type 1 alone has, are answered for
  * types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program names the chip by
@@ -53,16 +53,30 @@
  * here — all but one of the rules dies when it is taken away. The one that
  * does not is the parity the frame takes back when the mode is left, which a
  * pulse cannot show because ParityC9's turn and C4's correction cancel: the
- * disc moves on it, in a group that says so in a picture. Every other
- * behaviour below is type 0's whatever the type is set to, and a number naming
- * none of the five is neither refused nor corrected.
+ * disc moves on it, in a group that says so in a picture. The fifth is where a
+ * frame's additional lines are counted. "On CRTCs 0, 3 and 4, there is no
+ * specific C5 counter and C9 is used for comparison with R5. On CRTCs 1 and 2,
+ * there is a specific counter C5 used in conjunction with C9" (ch. 11.1), so
+ * on those two the row goes on being counted and C4 on advancing through the
+ * lines — "regardless of the value of R4 each time C9=R9, as long as C5 has
+ * not reached R5" — where the other three hold the row where it stands. No
+ * line the disc grades moves on it: what stands behind it is ch. 11.2.2 and
+ * 11.2.3's own tables and a test of our own. Two things that counter carries
+ * are not here. Ch. 11.3.2's R5 taken to 0 in the middle of a run leaves a
+ * type 1 with "the state not deactivated, C4 (not returning) to 0 and C5
+ * (looping)", where this ends the run when C5 comes round, and it is what
+ * Shaker's C (E) fails on. And a line too narrow to reach the disarm gives
+ * those two no additional line where it gives the other three one, ch. 13.2's
+ * window being a type 0's. Every other behaviour below is type 0's whatever
+ * the type is set to, and a number naming none of the five is neither refused
+ * nor corrected.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
  * rules, the counter widths a program can overrun, the last line decided while
- * C0 is 0 or 1, the vertical adjustment spent on C9 — armed on every last
- * line, taken back where R5 is cancelled in time or the last line itself is
- * unmade, opened by an R4 or R9 moved under a standing last line, and past
+ * C0 is 0 or 1, the vertical adjustment a type 0 spends on C9 — armed on every
+ * last line, taken back where R5 is cancelled in time or the last line itself
+ * is unmade, opened by an R4 or R9 moved under a standing last line, and past
  * taking back once begun — and the block that stops one VSYNC condition
  * serving twice. Of R8 everything but the cursor's skew is read: the frame
  * parity this chip keeps in two states rather than one, the line either
@@ -241,12 +255,15 @@ typedef struct {
   /* Counters, named as the Compendium names them (ch. 3.1). Each is
      narrower than the byte holding it, and a program can leave one above
      its limit; the widths are what bring it back (ch. 10.3.1.1, 12.1). */
-  uint8_t c0;  /* horizontal character counter, 8 bits; after a tick it names
-                  the character that tick drew */
-  uint8_t c9;  /* scanline within the character row, 5 bits; drives RA. Type
-                  0 has no C5 and spends C9 on the vertical adjustment too
-                  (ch. 11.2.2) */
-  uint8_t c4;  /* character row counter, 7 bits */
+  uint8_t c0; /* horizontal character counter, 8 bits; after a tick it names
+                 the character that tick drew */
+  uint8_t c9; /* scanline within the character row, 5 bits; drives RA */
+  uint8_t c4; /* character row counter, 7 bits */
+  /* C5, the Vertical Total Adjust Counter, 5 bits: the counter types 1 and
+     2 keep the frame's additional lines on, "used in conjunction with C9 to
+     allow management of characters within the adjustment lines", where
+     types 0, 3 and 4 have none and spend C9 on those lines (ch. 11.1). */
+  uint8_t c5;
   uint8_t c3l; /* HSYNC width counter, 4 bits: R3 low nibble. A nibble of 0
                   is no HSYNC at all on this type, where types 2, 3 and 4
                   read it as 16 (ch. 14.1, 14.5) */
