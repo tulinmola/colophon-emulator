@@ -96,6 +96,77 @@ static void rmr_bit_4_reaches_a_request_not_yet_risen(void) {
   TEST_CHECK(!gate_array.interrupt_request);
 }
 
+/* The one step of R52 an acknowledge can arrive in front of. "If R52 is 31,
+   and the GATE ARRAY receives an end of HSYNC from the CRTC to increment
+   R52, but at the same time it receives the order to eliminate bit 5, what
+   happens?" — either "R52 goes from 31 to 32, then its bit 5 is eliminated,
+   and R52 goes to 0", leaving the next interrupt 52 lines off, or "bit 5 of
+   R52=31 is eliminated (which has no effect) and R52 changes to 32", leaving
+   it 20 (ch. 27.7.1). The counting is done "on the first cycles of treatment
+   of the Gate Array" (ch. 27.7.2), which gives the race a place and not a
+   boundary. Three quarters against one is ours, and what fixes it is the
+   disc rather than the chapter.
+
+   What decides the quarter is "the actual execution length of the
+   instruction following the EI instruction", which is why Shaker's B (R)
+   times forty-eight of them: five end on a quarter that beats the step and
+   answer #C4 where the other forty-three answer #CC. */
+static void an_acknowledge_races_r52_past_31(void) {
+  static const struct {
+    uint8_t quarter;
+    uint8_t left; /* what the counter is left holding */
+  } cases[] = {
+      {0, 32}, /* heard while 31 stands: the step goes on to 32 unharmed */
+      {1, 32},
+      {2, 32},
+      {3, 0}, /* heard after it: bit 5 is there to be taken, and 32 goes to 0 */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    reset_state();
+    pulse_hsyncs(31);
+    TEST_EQUAL(gate_array.r52, 31);
+    /* The character the step is taken in, stopped where the acknowledge
+       falls: the end of a HSYNC is read on the character after it begins. */
+    gate_array_tick(&gate_array, true, false);
+    gate_array_tick(&gate_array, false, false);
+    TEST_EQUAL(gate_array.r52, 32);
+    gate_array.cpu_phase = cases[index].quarter;
+    gate_array_interrupt_acknowledged(&gate_array);
+    TEST_EQUAL(gate_array.r52, cases[index].left);
+    /* Whichever order the two arrive in, the request has been answered. */
+    TEST_CHECK(!gate_array.interrupt_request);
+  }
+}
+
+/* And the race lasts that character only. Once the next one has begun, the
+   step is an ordinary bit 5 and the acknowledge takes it away from any
+   quarter. */
+static void a_step_taken_earlier_is_no_race(void) {
+  reset_state();
+  pulse_hsyncs(31);
+  gate_array_tick(&gate_array, true, false);
+  gate_array_tick(&gate_array, false, false); /* the step to 32 */
+  TEST_EQUAL(gate_array.r52, 32);
+  gate_array_tick(&gate_array, false, false); /* a character with no step */
+  gate_array.cpu_phase = 0;
+  gate_array_interrupt_acknowledged(&gate_array);
+  TEST_EQUAL(gate_array.r52, 0);
+}
+
+/* Nor is a step that finds bit 5 already set a race: there is nothing new to
+   take away, and the acknowledge takes it from every quarter. */
+static void only_the_step_past_31_races(void) {
+  reset_state();
+  pulse_hsyncs(40);
+  TEST_EQUAL(gate_array.r52, 40);
+  gate_array_tick(&gate_array, true, false);
+  gate_array_tick(&gate_array, false, false);
+  TEST_EQUAL(gate_array.r52, 41);
+  gate_array.cpu_phase = 0;
+  gate_array_interrupt_acknowledged(&gate_array);
+  TEST_EQUAL(gate_array.r52, 9); /* 41 with bit 5 taken away */
+}
+
 static void r52_loops_at_52_and_holds_the_request(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(51);
@@ -453,6 +524,9 @@ int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(pen_selects_and_ink_paints);
   TEST_RUN(rmr_owns_roms_and_mode);
+  TEST_RUN(an_acknowledge_races_r52_past_31);
+  TEST_RUN(a_step_taken_earlier_is_no_race);
+  TEST_RUN(only_the_step_past_31_races);
   TEST_RUN(r52_loops_at_52_and_holds_the_request);
   TEST_RUN(acknowledge_kills_bit_5);
   TEST_RUN(rmr_bit_4_clears_counter_and_request);

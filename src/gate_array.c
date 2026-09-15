@@ -42,6 +42,9 @@ void gate_array_write(gate_array_t *gate_array, uint8_t data) {
    27.3.1). */
 static void count_hsync_end(gate_array_t *gate_array) {
   gate_array->r52 = (gate_array->r52 + 1) & 0x3F;
+  /* The one step that can race an acknowledge, because it is the step that
+     puts bit 5 there for an acknowledge to take away (ch. 27.7.1). */
+  gate_array->r52_gained_bit_five_this_character = gate_array->r52 == 32;
   if (gate_array->r52 == 52) {
     gate_array->r52 = 0;
     gate_array->interrupt_due = true;
@@ -66,6 +69,8 @@ static bool vsync_check_due(gate_array_t *gate_array) {
 }
 
 void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
+  /* The race lasts the character its step was taken in and no longer. */
+  gate_array->r52_gained_bit_five_this_character = false;
   /* What the last HSYNC end asked for rises here, a character after it was
      asked: "an interrupt always starts 1 µsec after the end of the HSYNC
      regardless of the CRTC" (Compendium ch. 27.6.1), and the diagrams under
@@ -145,9 +150,31 @@ void gate_array_advance_phase(gate_array_t *gate_array) {
    RMR's bit 4 does withdraw one: the acknowledge answers the interrupt the
    processor was offered, and the counter has since asked for another. The
    difference shows only for an acknowledge inside that microsecond. No
-   outside evidence settles it; a test holds each half where it stands. */
+   outside evidence settles it; a test holds each half where it stands.
+
+   That same microsecond is where ch. 27.7.1's race is run. An end of HSYNC
+   that takes R52 from 31 to 32 and an order to eliminate bit 5 can arrive
+   together, and the chapter gives the two orders two outcomes: "R52 goes
+   from 31 to 32, then its bit 5 is eliminated, and R52 goes to 0", where
+   "the next interrupt cannot occur before 52 lines"; or "bit 5 of R52=31 is
+   eliminated (which has no effect) and R52 changes to 32", where it "cannot
+   occur before 20 lines". Which is had depends on "the actual execution
+   length of the instruction following the EI instruction", and that length
+   is what leaves the acknowledge on one character quarter or another.
+
+   Three quarters against one is ours. The chapter names no cycle — it says
+   only that the counting "is a priori carried out on the first cycles of
+   treatment of the Gate Array" (ch. 27.7.2), which gives the race a place
+   and not a boundary. What fixes it here is Shaker's B (R), which times
+   forty-eight instructions through this window and answers every one of
+   them on this line and no other: a quarter either way leaves thirty-two
+   lines wrong, and no rule reading the quarter alone or R52 alone fits at
+   all. Nothing finer than a quarter is measured. */
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array) {
   gate_array->interrupt_request = false;
+  if (gate_array->r52_gained_bit_five_this_character && gate_array->cpu_phase != 3) {
+    return;
+  }
   gate_array->r52 &= 0x1F;
 }
 

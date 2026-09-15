@@ -86,6 +86,9 @@ typedef struct {
      "an interrupt always starts 1 µsec after the end of the HSYNC"
      (Compendium ch. 27.6.1). */
   bool interrupt_due;
+  /* Set on the character whose HSYNC end carried R52 from 31 to 32 — the one
+     step an acknowledge can arrive in front of (ch. 27.7.1). */
+  bool r52_gained_bit_five_this_character;
   uint8_t hsyncs_until_vsync_check; /* the two-HSYNC delay after a VSYNC
                                        starts (ch. 27.3.2); 0 = not armed */
   bool hsync_previous;

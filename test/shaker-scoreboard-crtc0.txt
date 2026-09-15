@@ -2,9 +2,9 @@ What Longshot's Shaker 2.7 said about this machine, built as a type 0
 CRTC, module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-7 of them printed self-graded lines, 38 in all: 30 agree with Longshot's
-silicon and 8 do not. That is 79% of what this reader can score, and no
-measure at all of the other 57 groups.
+6 of them printed self-graded lines, 33 in all: 30 agree with Longshot's
+silicon and 3 do not. That is 91% of what this reader can score, and no
+measure at all of the other 58 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -74,12 +74,7 @@ B (RETURN)  R5 STORIES                                                          
 B (F0)      BOUNGA!                                                                          recorded, ungraded
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
 B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
-B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                5 graded, 5 wrong
-    ! CB 46      :#CC                         ED 57      :#CC >WRONG (Exp #C4)
-    ! DD CB 07 46:#CC                         ED 5F      :#CC >WRONG (Exp #C4)
-    ! ED A1      :#CC >WRONG (Exp #C4)        CB 86      :#CC
-    ! 2B         :#CC >WRONG (Exp #C4)        FD CB 00 16:#CC
-    ! FD 2B      :#CC >WRONG (Exp #C4)        07         :#CC
+B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
 B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
 B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
 B (T)       R3 JIT INTERACTIVE MODE ANALYZER                                                 recorded, ungraded

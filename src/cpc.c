@@ -273,8 +273,19 @@ uint64_t cpc_tick(cpc_t *cpc) {
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
     /* Interrupt acknowledge: the Gate Array drops INT and kills R52's bit
        5; the data bus floats, &FF by convention (in mode 1 the byte is
-       ignored; the Compendium ch. 27.5 finds it undetermined on hardware). */
-    gate_array_interrupt_acknowledged(&cpc->gate_array);
+       ignored; the Compendium ch. 27.5 finds it undetermined on hardware).
+       The Gate Array hears it once: a cycle held over four character
+       quarters would answer ch. 27.7.1's race for all four. It is heard on
+       the quarter the cycle begins in, against the one sentence that speaks
+       to when — "the end of the M1 signal during an interrupt occurs after
+       the TWait cycles of the Z80A, in other words after the execution of
+       the instruction following the EI" (ch. 27.7.1). Heard at that end the
+       window always closes on the same quarter, so every instruction would
+       get the same answer, and the five Shaker grades differently come back
+       wrong. */
+    if ((before & (Z80_M1 | Z80_IORQ)) != (Z80_M1 | Z80_IORQ)) {
+      gate_array_interrupt_acknowledged(&cpc->gate_array);
+    }
     pins = z80_set_data(pins, 0xFF);
   } else if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
     uint16_t address = z80_address(pins);
