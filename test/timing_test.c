@@ -1,5 +1,6 @@
 /*
- * timing_test — how long each instruction takes on a CPC, in microseconds.
+ * timing_test — how long each instruction takes on a CPC, in microseconds,
+ * and where inside one its write reaches the CRTC.
  *
  * The Gate Array holds the CPU off the RAM for three cycles in four, so
  * every machine cycle stretches until the next window and every instruction
@@ -11,6 +12,9 @@
  * independently and agreeing row for row. Both are quoted below; a row
  * where they differ is marked and tested against neither until someone
  * settles it on hardware.
+ *
+ * A duration cannot say where inside a run the write lands, and two of them
+ * are set here against the microsecond the Compendium puts each on.
  *
  * Sources:
  * - "Timings" (Kevin Thacker's cpctech),
@@ -257,6 +261,79 @@ static void check(const timing *entries, size_t count, measurement how) {
   }
 }
 
+/* Where inside an instruction its write reaches the CRTC, which no duration
+   can say: OUT (C),r puts it on its second-to-last microsecond and OUTI on
+   its last, so two instructions land a microsecond apart from the same
+   start. The "just in time" techniques a demo uses to move a register on the
+   character it is read at stand or fall on which.
+
+   "An output entry with an "OUT(C),R8" occurs on the 3rd NOP for a CRTC
+   equipped with a GATE ARRAY, and on the 4th NOP for an ASIC that emulates a
+   CRTC (CRTC's 3 and 4)", and "the update of a CRTC register takes place on
+   the 5th µsec of the OUTI instruction, regardless of the type of CRTC,
+   while there is a difference of 1 µsec when the update takes place with the
+   OUT(C),R8 instruction" (ch. 4.4.4). Ch. 13.7.1, writing about a type 1,
+   names the same two microseconds.
+
+   Counted from the character the opcode fetch falls on and read off the
+   register rather than off the bus, because the microsecond the chapter
+   names is the one the CRTC takes the value in, and the Gate Array holds an
+   I/O cycle up across several characters after the processor has raised it.
+   A NOP is a microsecond is a character here: the Gate Array "gives a 1 MHz
+   rate for the AY-3-8912, the CRTC, and clocks the Z80A at 4 MHz" (ch.
+   4.4.4), which is why the third NOP is two characters after the first.
+
+   The ASIC's extra microsecond is not here: cpc.c wires a Gate Array
+   whatever the chip is built as, and the head of crtc.h leaves the per-type
+   divergences of this timing out of what it claims. */
+static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
+  static const struct {
+    const char *mnemonic;
+    uint8_t opcodes[2];
+    uint8_t b; /* OUTI puts B on the bus already decremented, so both address &BD00 */
+    uint8_t characters_after_the_fetch;
+  } cases[] = {
+      {"OUT (C),C", {0xED, 0x49}, 0xBD, 2}, /* the 3rd microsecond */
+      {"OUTI", {0xED, 0xA3}, 0xBE, 4},      /* and the 5th */
+  };
+  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
+    power_on();
+    /* A line wide enough for the characters to be told apart, and then a
+       register clear of R0 for the instruction to land in. */
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 63));
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 12));
+    memcpy(lower_rom + UNDER_TEST, cases[index].opcodes, 2);
+    cpc.cpu.pc = UNDER_TEST;
+    cpc.cpu.sp = 0x8000;
+    cpc.cpu.b = cases[index].b;
+    cpc.cpu.c = 0x2A; /* what OUT (C),C carries */
+    cpc.cpu.h = 0x90;
+    cpc.cpu.l = 0x00;
+    ram[0x9000] = 0x2A; /* and what OUTI fetches */
+    int fetch = -1;
+    int landed = -1;
+    for (int tick = 0; tick < 200 && landed < 0; tick++) {
+      cpc_tick(&cpc);
+      if (fetch < 0 && (cpc.pins & (Z80_M1 | Z80_MREQ)) == (Z80_M1 | Z80_MREQ) &&
+          z80_address(cpc.pins) == UNDER_TEST) {
+        fetch = cpc.crtc.c0;
+      }
+      if (fetch >= 0 && cpc.crtc.registers[12] == 0x2A) {
+        landed = cpc.crtc.c0;
+      }
+    }
+    if (fetch < 0 || landed < 0) {
+      TEST_FAIL("%s never reached the CRTC", cases[index].mnemonic);
+      continue;
+    }
+    if (landed - fetch != cases[index].characters_after_the_fetch) {
+      TEST_FAIL("%s reached the CRTC %d characters after its fetch, the Compendium says %d",
+                cases[index].mnemonic, landed - fetch, cases[index].characters_after_the_fetch);
+    }
+  }
+}
+
 static void every_instruction_takes_whole_microseconds(void) {
   check(repeated, sizeof repeated / sizeof repeated[0], REPEATED);
 }
@@ -267,6 +344,7 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
+  TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("timing");
 }
