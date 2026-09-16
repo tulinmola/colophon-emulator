@@ -1095,6 +1095,59 @@ static void a_type_1_takes_no_state_where_c4_is_past_r4(void) {
   TEST_EQUAL(lines, 32);
 }
 
+/* A last line can be made as well as unmade. "It is therefore not necessary
+   to anticipate the programming of R4 (or R9) on the current line for the
+   last line condition to be true on the following line. It is possible to
+   modify R4 or R9 on the current line as long as C0<2 to validate the 'Last
+   Line' state (and thus validate the reset of C4 on the following line)"
+   (ch. 12.2). So a row that was going to be an ordinary one ends the frame,
+   and C4 comes back to 0 under it.
+
+   The chapter's window is C0<2 and it counts where a write is made, which
+   settles the first two cases below. The third is outside it: this type "no
+   longer repeats this test on the other values of C0>1". The write at C0=1
+   is the one this file reads a character later, where it is in force — the
+   same place the chapter's converse is read, a write there unmaking a last
+   line and spending it on an adjustment instead. */
+static void a_write_can_make_a_last_line_as_well_as_unmake_one(void) {
+  static const struct {
+    uint8_t written_at; /* the character the write is made on */
+    bool ends_the_frame;
+  } cases[] = {
+      {0, true},  /* inside the chapter's window */
+      {1, true},  /* its last character */
+      {2, false}, /* outside it, and no test is repeated there */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 0);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 10);
+    write_register(9, 3);
+    write_register(5, 0);
+    write_register(6, 25);
+    write_register(7, 60);
+    bool written = false;
+    bool ended = false;
+    /* Row 4 is an ordinary one until R4 is written to name it. */
+    for (long character = 0; character < 40L * 64 * 20; character++) {
+      if (!written && crtc.c4 == 4 && crtc.c9 == 3 && crtc.c0 == cases[index].written_at) {
+        write_register(4, 4);
+        written = true;
+      }
+      crtc_tick(&crtc);
+      if (written && crtc.c0 == 0 && crtc.c9 == 0) {
+        ended = crtc.c4 == 0;
+        break;
+      }
+    }
+    TEST_CHECK(written);
+    TEST_EQUAL(ended, cases[index].ends_the_frame);
+  }
+}
+
 static void unselected_chip_ignores_the_bus(void) {
   crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
@@ -3108,6 +3161,7 @@ int main(void) {
   TEST_RUN(an_r8_write_answers_the_scenarios_the_chapter_draws);
   TEST_RUN(only_type_1_drives_the_status_port);
   TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
+  TEST_RUN(a_write_can_make_a_last_line_as_well_as_unmake_one);
   TEST_RUN(unselected_chip_ignores_the_bus);
   TEST_RUN(hsync_falls_where_r2_and_r3_put_it);
   TEST_RUN(vsync_holds_eight_scanlines_from_row_30);

@@ -1091,8 +1091,69 @@ static bool read_a_declared_verdict(const char *line, bool *failed) {
   return false;
 }
 
+/* Whether a bracket on the line hands the passing outcome to named CRTC
+   types, and if it does, whether this machine is one of them. "(OK FOR CRT
+   3+4 ONLY)" is an OK a type 0 was never going to have. The disc writes both
+   "CRT" and "CRTC" for the same thing. */
+static bool the_ok_is_handed_to_types(const char *line, uint8_t type, bool *ours) {
+  for (const char *opening = strchr(line, '('); opening != NULL;
+       opening = strchr(opening + 1, '(')) {
+    const char *closing = strchr(opening, ')');
+    if (closing == NULL) {
+      return false;
+    }
+    if (!holds_text(opening, closing, "ok for")) {
+      continue;
+    }
+    for (const char *at = opening; at + 3 <= closing; at++) {
+      if (!matches_ignoring_case(at, "crt", 3)) {
+        continue;
+      }
+      const char *numbers = at + 3;
+      if (numbers < closing && (*numbers == 'c' || *numbers == 'C')) {
+        numbers++;
+      }
+      while (numbers < closing && *numbers == ' ') {
+        numbers++;
+      }
+      *ours = names_the_crtc_type(numbers, closing, type);
+      return true;
+    }
+  }
+  return false;
+}
+
+/* And a verdict a group states in a word of its own. Shaker rings a failure
+   with x's, a line ending ":xKOx", where it prints a bare "KO" for an
+   outcome it is only naming, as module A's group 4 does in saying which of
+   two ways its counter went. The x's are what keep this reading off those.
+
+   The ring is read only where a bracket says which CRTC types the passing
+   outcome belongs to. The group that prints these grades some of its lines
+   for one type and some for another, and says so in that bracket where it
+   says so at all: "UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY)" is a
+   ring this machine was always going to earn. A ring with no bracket names
+   no type, and this reader has no way to learn which machine it was written
+   for — module C's group R grades the same question for a type 0 and
+   answers it the other way, so taking an unnamed ring for this machine's
+   own would book a right answer as a fault.
+
+   The bare ":OK" beside them is not read either. The same group prints it
+   where the machine answered — "UPD R4=0 WHEN C4=1 & C9=7 >> C4=2 (Ovf)
+   :OK" — and group 4 prints the same bare word for the branch its counter
+   took, so the word alone cannot be told apart by its shape. */
+static bool read_a_marked_failure(const char *line, uint8_t type, bool *failed) {
+  bool ours = false;
+  if (!ends_with(line, ":xKOx") || !the_ok_is_handed_to_types(line, type, &ours)) {
+    return false;
+  }
+  *failed = ours;
+  return true;
+}
+
 static bool read_verdict(const char *line, uint8_t type, bool *failed) {
-  return read_a_measured_verdict(line, type, failed) || read_a_declared_verdict(line, failed);
+  return read_a_measured_verdict(line, type, failed) || read_a_marked_failure(line, type, failed) ||
+         read_a_declared_verdict(line, failed);
 }
 
 static bool appears_in_previous_screen(const char *line) {
@@ -1609,6 +1670,19 @@ static const verdict_case printed_lines[] = {
     {"OUTI ON C0=0,R0=0, RES: #1F :WRONG!", true, true},
     {"C4==R4 & C9<>R9: UPD R9=C9  WHEN C0==1. C4=>00 IF 1:0 WRONG", true, true},
     {"OUTI ON R7 LAST CHANCE 5TH uSec ON C0=0 - RES: #1E :GOOD", true, false},
+    /* A failure the disc rings with x's, and the clause that hands the
+       passing outcome to types this machine is not one of — where the
+       marked failure is the answer asked for rather than a fault. A ring
+       with no such bracket names no type and is not read at all, nor is a
+       bracket that names types without handing them the pass. */
+    {"PREV R9=7 R4=38 >> UPD R4=1 WHEN C4=1 & C9=7 >> C4=0       :xKOx", false, false},
+    {"X (CRTC 3+4 ONLY):xKOx", false, false},
+    {"PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):xKOx", true, false},
+    /* A bare KO names which of two ways a counter went and grades nothing,
+       which is why only the ringed one is read. */
+    {"UPDATE R0=7F, OUT ON HCC=3E :KO", false, false},
+    {"UPDATE R0=7F, OUT ON HCC=39 :OK", false, false},
+    {"OK: C0=..3F..40..41.. / KO: C0=..3F..00..01..", false, false},
     /* A verdict a group states by the bare fact of printing it, which is a
        convention this reader does not know and must not guess at. */
     {"VERY BAD TRIP FOR YOUR EMULATOR!!!", false, false},
@@ -1725,6 +1799,13 @@ static const verdict_case_by_type lines_by_type[] = {
     /* The rest are gathered for every type the bracket passes over. */
     {"X=#0011 (CRTC 0:#11/ OTHERS:#22)", 0, true, false},
     {"X=#0011 (CRTC 0:#11/ OTHERS:#22)", 1, true, true},
+    /* A ringed failure with the passing outcome handed to types this
+       machine is not one of: the answer asked for on a 0, and a fault on a
+       3, which the bracket names. */
+    {"PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):xKOx", 0, true, false},
+    {"PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):xKOx", 3, true, true},
+    {"X (OK FOR CRTC 3+4 ONLY):xKOx", 0, true, false},
+    {"X (OK FOR CRTC 3+4 ONLY):xKOx", 3, true, true},
     /* A bracket that names some types and gathers no rest grades nothing on
        a machine it passes over, and grades on one it names. */
     {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", 0, false, false},
@@ -2078,7 +2159,10 @@ int main(int argc, char **argv) {
   fprintf(file, "module's menu stands as \"showed only the menu\": it was run and kept, not\n");
   fprintf(file, "skipped. A line marked ! is a test this machine failed: either the\n");
   fprintf(file, "module said so, or the machine's value differs from the one Longshot's\n");
-  fprintf(file, "silicon produced.\n\n");
+  fprintf(file, "silicon produced. A module can also state a failure and mean it for\n");
+  fprintf(file, "another type: where a line hands the passing outcome to CRTC types this\n");
+  fprintf(file, "machine is not one of, the failure it marks is the answer asked for, and\n");
+  fprintf(file, "the line stands unmarked.\n\n");
   fprintf(file, "Not every difference here is this machine's doing. What a module prints\n");
   fprintf(file, "depends on the phase it booted on, and at least one group has been measured\n");
   fprintf(file, "printing a graded line on one phase and none on another with the emulator\n");

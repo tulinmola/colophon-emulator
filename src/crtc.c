@@ -495,12 +495,34 @@ static void enter_character(crtc_t *crtc) {
 }
 
 /* Decided while C0 is 0 or 1, and this type "no longer repeats this test on
-   the other values of C0>1" (ch. 12.2, 10.3.1.2), so a register written
-   later in the line can neither take the state back nor set it.
-   Re-evaluating it on an R4 or R9 update is type 2's rule (ch. 12.4.1). */
+   the other values of C0>1" (ch. 12.2, 10.3.1.2). A write still reaches that
+   window from outside it: a write is in force on the character after the one
+   it was made on (ch. 13.2.1), so one made while C0 names 1 is read while it
+   names 2. Reading the chapter's window at the character a write lands on,
+   where the chapter counts the character it was made on, is ours.
+
+   What such a write does there the chapter gives both ways. It can make the
+   comparison hold — "It is therefore not necessary to anticipate the
+   programming of R4 (or R9) on the current line for the last line condition
+   to be true on the following line. It is possible to modify R4 or R9 on the
+   current line as long as C0<2 to validate the 'Last Line' state (and thus
+   validate the reset of C4 on the following line)" — and it can break one,
+   which "activates the vertical adjustment ... and the current line becomes
+   the 'first' additional line": that is the adjustment below rather than a
+   state taken back here, so only the making is read at C0=2. Later than that
+   it reaches neither: "If R4 and/or R9 are modified mid-line when C0 > 1
+   while the last line state is true (and there are no additional lines via
+   vertical adjustment), this does not change C4 and C9, which will remain at
+   0" (ch. 12.2). A comparison standing again on an R4 or R9 update is type
+   2's rule (ch. 12.4.1).
+
+   R8 reaches this comparison as it reaches the converse below, by moving
+   the parity the row's limit is read up to, and the chapter names only R4
+   and R9. Whether the chip lets it is the same open question that comment
+   puts, answered the same way and graded by nothing. */
 static void decide_last_line(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
-  if (crtc->c0 < 2) {
+  if (crtc->c0 < 2 || (crtc->c0 == 2 && !crtc->last_line)) {
     crtc->last_line = crtc->c4 == r[4] && row_is_on_its_last_scanline(crtc);
   }
 }

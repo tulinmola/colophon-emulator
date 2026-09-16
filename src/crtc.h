@@ -76,14 +76,19 @@
  * neither of them takes the state. One thing that counter carries is not
  * here: a line too narrow to reach the disarm gives types 1 and 2 no
  * additional line where it gives the other three one, ch. 13.2's window being
- * a type 0's. Every other behaviour below is type 0's
- * whatever the type is set to, and a number naming none of the five is neither
- * refused nor corrected.
+ * a type 0's. Every other behaviour below is type 0's whatever the type is
+ * set to, and a number naming none of the five is neither refused nor
+ * corrected. One of those is worth naming because the disc grades it: a type
+ * 1 takes R4 written with the value C4 already holds as the frame's end
+ * wherever on the line it lands — "if we were on the last line (C9=R9), then
+ * C9 goes to 0, C4=0" (ch. 12.3) — where a type 0 reads that comparison only
+ * while C0 is under 2, and it is a type 0's window this chip keeps.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
  * rules, the counter widths a program can overrun, the last line decided while
- * C0 is 0 or 1, the vertical adjustment a type 0 spends on C9 — armed on every
+ * C0 is 0 or 1 and made at C0=2 by a write that lands there, the vertical
+ * adjustment a type 0 spends on C9 — armed on every
  * last line, taken back where R5 is cancelled in time or the last line itself
  * is unmade, opened by an R4 or R9 moved under a standing last line, and past
  * taking back once begun — and the block that stops one VSYNC condition
@@ -280,8 +285,9 @@ typedef struct {
                   and types 1 and 2 never read that nibble at all (ch. 16) */
 
   /* This line ends the frame. Decided while C0 is 0 or 1 and held for the
-     rest of the line, so a register written afterwards cannot take it back
-     (ch. 10.3.1.2). */
+     rest of the line, so a register written afterwards cannot take it back;
+     and once more at C0=2 where it is not yet true, which is where a write
+     made at C0=1 lands (ch. 10.3.1.2, 12.2). */
   bool last_line;
   bool vertical_adjustment_armed;
   /* Whether an adjustment has actually begun, as against being armed for

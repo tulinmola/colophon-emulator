@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-6 of them printed self-graded lines, 34 in all: 22 agree with Longshot's
-silicon and 12 do not. That is 65% of what this reader can score, and no
-measure at all of the other 64 groups.
+7 of them printed self-graded lines, 35 in all: 23 agree with Longshot's
+silicon and 12 do not. That is 66% of what this reader can score, and no
+measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -20,7 +20,10 @@ expectation is the one scored. A group that got no further than its
 module's menu stands as "showed only the menu": it was run and kept, not
 skipped. A line marked ! is a test this machine failed: either the
 module said so, or the machine's value differs from the one Longshot's
-silicon produced.
+silicon produced. A module can also state a failure and mean it for
+another type: where a line hands the passing outcome to CRTC types this
+machine is not one of, the failure it marks is the answer asked for, and
+the line stands unmarked.
 
 Not every difference here is this machine's doing. What a module prints
 depends on the phase it booted on, and at least one group has been measured
@@ -61,7 +64,8 @@ A (CAPS)    INTERACTIVE TEST MODE X TO Y (16 INTERACTIVE TST)                   
 A (TAB)     HSYNC START POSITION (4 INTERACTIVE TST)                                         recorded, ungraded
 A (T)       R2 UPD DURING & AFTER HSYNC (6 TST)                                              recorded, ungraded
 A (Y)       R3 UPD DURING HSYNC (8 TST)                                                      recorded, ungraded
-A (U)       R4 & R9 CHECKING (54 TST)                                                        recorded, ungraded
+A (U)       R4 & R9 CHECKING (54 TST)                                                        1 graded, 0 wrong
+      PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):xKOx
 A (I)       VSYNC CONDITIONS (413 TST)                                                       recorded, ungraded
 A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded
 A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded
