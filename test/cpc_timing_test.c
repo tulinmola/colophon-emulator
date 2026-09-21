@@ -1,5 +1,7 @@
 /*
- * cpc_timing_test — how long each instruction takes on a CPC, in microseconds.
+ * cpc_timing_test — how long each instruction takes on a CPC, in
+ * microseconds, where inside one its write reaches the CRTC, and what taking
+ * an interrupt costs.
  *
  * The Gate Array holds the CPU off the RAM for three cycles in four, so
  * every machine cycle stretches until the next window and every instruction
@@ -12,13 +14,16 @@
  * where they differ is marked and tested against neither until someone
  * settles it on hardware.
  *
+ * A duration cannot say where inside a run the write lands, and two of them
+ * are set here against the microsecond the Compendium puts each on.
+ *
  * Sources:
  * - "Timings" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/instrtim.html — "The following table
  *   gives the complete execution time for all CPU instructions. These
  *   timings have been measured."
- * - "The Amstrad CPC CRTC Compendium" v1.10 (Longshot / Logon System),
- *   https://shaker.logonsystem.eu/ACCC1.10-EN.pdf ch. 26, "Duration of
+ * - "The Amstrad CPC CRTC Compendium" v1.11 (Longshot / Logon System),
+ *   https://shaker.logonsystem.eu/ACCC1.11-EN.pdf ch. 26, "Duration of
  *   instr. on the CPC".
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
@@ -152,7 +157,7 @@ static const timing self_looping[] = {
 static void power_on(void) {
   memset(ram, 0, sizeof ram);
   memset(lower_rom, 0, sizeof lower_rom); /* NOPs everywhere */
-  cpc_init(&cpc, ram, sizeof ram, lower_rom);
+  cpc_init(&cpc, ram, sizeof ram, lower_rom, 0);
 }
 
 /* Two ways to hold an instruction still long enough to time it, because
@@ -257,6 +262,206 @@ static void check(const timing *entries, size_t count, measurement how) {
   }
 }
 
+/* Where inside an instruction its write reaches the CRTC, which no duration
+   can say: OUT (C),r puts it on its second-to-last microsecond and OUTI on
+   its last, so two instructions land a microsecond apart from the same
+   start. The "just in time" techniques a demo uses to move a register on the
+   character it is read at stand or fall on which.
+
+   "An output entry with an "OUT(C),R8" occurs on the 3rd NOP for a CRTC
+   equipped with a GATE ARRAY, and on the 4th NOP for an ASIC that emulates a
+   CRTC (CRTC's 3 and 4)", and "the update of a CRTC register takes place on
+   the 5th µsec of the OUTI instruction, regardless of the type of CRTC,
+   while there is a difference of 1 µsec when the update takes place with the
+   OUT(C),R8 instruction" (ch. 4.4.4). Ch. 13.7.1, writing about a type 1,
+   names the same two microseconds.
+
+   Counted from the character the opcode fetch falls on and read off the
+   register rather than off the bus, because the microsecond the chapter
+   names is the one the CRTC takes the value in, and the Gate Array holds an
+   I/O cycle up across several characters after the processor has raised it.
+   A NOP is a microsecond is a character here: the Gate Array "gives a 1 MHz
+   rate for the AY-3-8912, the CRTC, and clocks the Z80A at 4 MHz" (ch.
+   4.4.4), which is why the third NOP is two characters after the first.
+
+   The ASIC's extra microsecond is not here: cpc.c wires a Gate Array
+   whatever the chip is built as, and the head of crtc.h leaves the per-type
+   divergences of this timing out of what it claims. */
+static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
+  static const struct {
+    const char *mnemonic;
+    uint8_t opcodes[2];
+    uint8_t b; /* OUTI puts B on the bus already decremented, so both address &BD00 */
+    uint8_t characters_after_the_fetch;
+  } cases[] = {
+      {"OUT (C),C", {0xED, 0x49}, 0xBD, 2}, /* the 3rd microsecond */
+      {"OUTI", {0xED, 0xA3}, 0xBE, 4},      /* and the 5th */
+  };
+  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
+    power_on();
+    /* A line wide enough for the characters to be told apart, and then a
+       register clear of R0 for the instruction to land in. */
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 63));
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 12));
+    memcpy(lower_rom + UNDER_TEST, cases[index].opcodes, 2);
+    cpc.cpu.pc = UNDER_TEST;
+    cpc.cpu.sp = 0x8000;
+    cpc.cpu.b = cases[index].b;
+    cpc.cpu.c = 0x2A; /* what OUT (C),C carries */
+    cpc.cpu.h = 0x90;
+    cpc.cpu.l = 0x00;
+    ram[0x9000] = 0x2A; /* and what OUTI fetches */
+    int fetch = -1;
+    int landed = -1;
+    for (int tick = 0; tick < 200 && landed < 0; tick++) {
+      cpc_tick(&cpc);
+      if (fetch < 0 && (cpc.pins & (Z80_M1 | Z80_MREQ)) == (Z80_M1 | Z80_MREQ) &&
+          z80_address(cpc.pins) == UNDER_TEST) {
+        fetch = cpc.crtc.c0;
+      }
+      if (fetch >= 0 && cpc.crtc.registers[12] == 0x2A) {
+        landed = cpc.crtc.c0;
+      }
+    }
+    if (fetch < 0 || landed < 0) {
+      TEST_FAIL("%s never reached the CRTC", cases[index].mnemonic);
+      continue;
+    }
+    if (landed - fetch != cases[index].characters_after_the_fetch) {
+      TEST_FAIL("%s reached the CRTC %d characters after its fetch, the Compendium says %d",
+                cases[index].mnemonic, landed - fetch, cases[index].characters_after_the_fetch);
+    }
+  }
+}
+
+/* How long an interrupt costs, which no duration in the tables above covers.
+   "The Z80A RST #38 instruction lasts 4 µsec when called by code. When an
+   interrupt occurs, the call in #38 lasts 5 µsec" (ch. 27.4), and the chapter
+   offers its own way of telling: "to test it, just compare the time taken by
+   an RST #38 and the time taken by an interrupt with a fixed time code on
+   19968 NOP's". Both halves of that comparison are run below.
+
+   Both agree. The microsecond beyond the RST's four is the acknowledge's:
+   Zilog's Figure 9 (UM0080) has the processor add two wait states to it
+   and sample WAIT in the second alone, so the Gate Array's pattern
+   stretches it once rather than twice. Shaker's D (I) times the first
+   interrupt into a field of DEC DEs entered exactly one interrupt period
+   after the last, and reads silicon's value only at five, with the
+   request raised where gate_array.c raises it.
+
+   Measured across the interrupt and the instruction after it, because an
+   entry that leaves the processor out of step with the character clock is
+   paid for by the next instruction rather than by itself. What is measured
+   is the cost after a NOP; the cost after an instruction leaving the clock
+   on another quarter is not the same, and is not pinned here. */
+static void an_interrupt_costs_five_microseconds_where_an_rst_costs_four(void) {
+  /* The two NOPs the span is measured over: the handler's first and second,
+     a microsecond each once the processor is back in step. SETTLED is long
+     enough that the cadence is certainly steady, and nothing turns on how
+     long — any value from one to fifty-nine gives the same answer. */
+  enum { THE_TWO_NOPS = 8, SETTLED = 30 };
+  power_on();
+  /* A line wide enough to interrupt on, and NOPs everywhere including the
+     handler, so every ordinary step is one microsecond. */
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 63));
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 2));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 46));
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 3));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 0x0E));
+  cpc.cpu.pc = UNDER_TEST;
+  cpc.cpu.sp = 0x8000;
+  cpc.cpu.iff1 = true;
+  cpc.cpu.iff2 = true;
+  cpc.cpu.im = 1;
+  long previous = 0;
+  long across = 0;
+  long after = 0;
+  int steady = 0;
+  int stage = 0;
+  int heard_on = -1;
+  long m1_ended_at = -1;
+  long withdrawn_at = -1;
+  bool acknowledging = false;
+  bool requested = false;
+  for (long tick = 0; tick < 4000000 && stage < 2; tick++) {
+    uint64_t pins = cpc_tick(&cpc);
+    bool acknowledge = (pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ);
+    if (heard_on < 0 && acknowledging && !acknowledge) {
+      heard_on = cpc.gate_array.cpu_phase;
+      m1_ended_at = tick;
+    }
+    acknowledging = acknowledge;
+    if (withdrawn_at < 0 && requested && !gate_array_interrupt(&cpc.gate_array)) {
+      withdrawn_at = tick;
+    }
+    requested = gate_array_interrupt(&cpc.gate_array);
+    if (!z80_instruction_complete(&cpc.cpu)) {
+      continue;
+    }
+    long step = tick + 1 - previous;
+    if (stage == 1) {
+      after = step;
+      stage = 2;
+    } else if (step == 4) {
+      steady++;
+    } else if (steady < SETTLED) {
+      steady = 0;
+    }
+    if (step > 4 && steady >= SETTLED && stage == 0) {
+      across = step;
+      stage = 1;
+    }
+    previous = tick + 1;
+  }
+  if (stage < 2) {
+    TEST_FAIL("no interrupt arrived to time");
+    return;
+  }
+  TEST_EQUAL(across + after - THE_TWO_NOPS, 20);
+  /* And the quarter the acknowledge's M1 ends on, which is where the Gate
+     Array hears it and where ch. 27.7.1's race in gate_array.c is run. No
+     duration fixes it: a cycle can be moved within its microsecond and
+     leave every length above unchanged. */
+  TEST_EQUAL(heard_on, 1);
+  /* Heard there, and not where IORQ began: INT drops on that very cycle. */
+  TEST_EQUAL(withdrawn_at, m1_ended_at);
+
+  /* And the other half of the chapter's comparison, which does agree: an
+     RST #38 reached from code, looping on itself so that every iteration is
+     a settled one. */
+  power_on();
+  for (int at = UNDER_TEST; at < UNDER_TEST + 64; at++) {
+    lower_rom[at] = 0xFF; /* RST #38, each returning into the next */
+  }
+  lower_rom[0x38] = 0xC9; /* RET, straight back */
+  cpc.cpu.pc = UNDER_TEST;
+  cpc.cpu.sp = 0x8000;
+  cpc.cpu.iff1 = false;
+  long rst = 0;
+  long ret = 0;
+  long settled = 0;
+  int taken = 0;
+  for (long tick = 0; tick < 4000 && taken < 6; tick++) {
+    cpc_tick(&cpc);
+    if (!z80_instruction_complete(&cpc.cpu)) {
+      continue;
+    }
+    long step = tick + 1 - settled;
+    settled = tick + 1;
+    if (++taken > 2) { /* the first pair is entered mid-stride */
+      if (taken % 2 == 1) {
+        rst = step;
+      } else {
+        ret = step;
+      }
+    }
+  }
+  TEST_EQUAL(rst, 16); /* four microseconds, as ch. 27.4 has it */
+  TEST_EQUAL(ret, 12);
+}
+
 static void every_instruction_takes_whole_microseconds(void) {
   check(repeated, sizeof repeated / sizeof repeated[0], REPEATED);
 }
@@ -267,6 +472,8 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
+  TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
+  TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("cpc timing");
 }

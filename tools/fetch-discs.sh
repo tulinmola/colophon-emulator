@@ -7,8 +7,8 @@
 # it against real machines; the site offers the image for download with no
 # terms beside it, and the Compendium it accompanies is CC BY-NC-ND. The
 # image is used here as a real disc: written by a real tool in the DATA
-# format, catalogued and loaded through the real AMSDOS ROM. What the tests
-# inside it show is the next question.
+# format, catalogued and loaded through the real AMSDOS ROM — and as the
+# suite it is, run module by module by the tier of its own name.
 #
 # Pinned by content, validated on 2026-09-02. The 2.6 image the site once
 # served at /Shaker_CSL/shaker26.dsk now answers with the portal page.

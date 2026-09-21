@@ -42,13 +42,23 @@ void cpc_remap(cpc_t *cpc) {
 /* Port B is wired to the outside world and to the CRTC: bit 7 the cassette,
    bit 6 the printer's ready line inverted, bit 5 the expansion port, bit 4
    the refresh-rate link, bits 3-1 the manufacturer's, and bit 0 the CRTC's
-   VSYNC straight through ("8255 PPI"). Nothing is connected to the printer
-   here and reads high; the cassette reads what is at the play head, and with
-   no deck in nothing drives it, so it reads high with the other inputs. */
+   VSYNC straight through ("8255 PPI"). Bit 7 is driven by the tape circuit
+   rather than pulled anywhere, so it reads what is at the play head and
+   reads low with no tape in the deck, and bit 6 is pulled up and stands high
+   with no printer on the far end.
+
+   Bit 5 is low on a measurement rather than on a derivation. "8255 PPI"
+   gives it as 0 where no device is connected, and Shaker's D (R) names #5E
+   for a 50Hz Amstrad with the VSYNC down and #5F with it up, which is what
+   these levels answer. Amstrad's own CPC6128 circuit diagram nevertheless
+   pulls that pin up through NR101 and carries it to the expansion connector
+   and nowhere else, which would leave it high on a bare board; the disc
+   interface's link to the same pin is the likeliest reconciliation, and the
+   sheet that would settle it is one we have not seen. */
 static void present_port_b(cpc_t *cpc) {
-  uint8_t levels = 0xE0;
-  if (cpc->tape != NULL && !tape_level(cpc->tape)) {
-    levels &= (uint8_t)~PORT_B_CASSETTE;
+  uint8_t levels = 0x40;
+  if (cpc->tape != NULL && tape_level(cpc->tape)) {
+    levels |= PORT_B_CASSETTE;
   }
   if (cpc->fifty_hz) {
     levels |= 0x10;
@@ -151,8 +161,13 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
        writes: whatever the CPU happened to put on the address bus lands in
        the selected register. For IN A,(n) that byte is A, which is the
        documented three-microsecond way to write a register (Compendium ch.
-       4.4.2); for IN r,(C) it is B, which the document leaves undefined. */
-    data = crtc_data(crtc_bus(cpc, address, (uint8_t)(address >> 8)));
+       4.4.2); for IN r,(C) it is B, which the document leaves undefined.
+       The two read ports write nothing, so what goes in is only what comes
+       back where the chip declines to drive: a bus at rest, which is what a
+       real machine reads there — "my CPC CRTC 2 always returns 255 ... my
+       CPC CRTC 0 randomly returns 255 or 127" (ch. 21.3.2). */
+    uint8_t floating = (address & 0x0200) ? 0xFF : (uint8_t)(address >> 8);
+    data = crtc_data(crtc_bus(cpc, address, floating));
   }
   if ((address & 0x0800) == 0) {
     present_port_b(cpc);
@@ -172,10 +187,11 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
   return data;
 }
 
-void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom) {
+void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
+              uint8_t crtc_type) {
   *cpc = (cpc_t){0};
   z80_init(&cpc->cpu);
-  crtc_init(&cpc->crtc);
+  crtc_init(&cpc->crtc, crtc_type);
   gate_array_init(&cpc->gate_array);
   ppi_init(&cpc->ppi);
   psg_init(&cpc->psg);
@@ -264,7 +280,8 @@ uint64_t cpc_tick(cpc_t *cpc) {
        banked RAM, whatever the CPU is looking at ("The Gate Array", MMR). */
     uint16_t address = cpc_video_address(cpc);
     uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
-    gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0, cpc->ram[address],
+    gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0,
+                     (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cpc->ram[address],
                      cpc->ram[address | 1], samples);
     monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
                     gate_array_csync(&cpc->gate_array));
@@ -296,10 +313,9 @@ uint64_t cpc_tick(cpc_t *cpc) {
   uint64_t before = cpc->pins;
   uint64_t pins = z80_tick(&cpc->cpu, bus);
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
-    /* Interrupt acknowledge: the Gate Array drops INT and kills R52's bit
-       5; the data bus floats, &FF by convention (in mode 1 the byte is
-       ignored; the Compendium ch. 27.5 finds it undetermined on hardware). */
-    gate_array_interrupt_acknowledged(&cpc->gate_array);
+    /* Interrupt acknowledge: the data bus floats, &FF by convention (in
+       mode 1 the byte is ignored; the Compendium ch. 27.5 finds it
+       undetermined on hardware). */
     pins = z80_set_data(pins, 0xFF);
   } else if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
     uint16_t address = z80_address(pins);
@@ -314,6 +330,16 @@ uint64_t cpc_tick(cpc_t *cpc) {
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
     bool first_tick = (before & (Z80_IORQ | Z80_RD)) != (Z80_IORQ | Z80_RD);
     pins = z80_set_data(pins, io_read(cpc, z80_address(pins), first_tick));
+  }
+  /* The Gate Array hears the acknowledge where M1 ends, and drops INT and
+     kills R52's bit 5 there: "the end of the M1 signal during an interrupt
+     occurs after the TWait cycles of the Z80A" (Compendium ch. 27.7.1).
+     Heard where IORQ begins instead, it reaches that chapter's race early,
+     and Shaker's B (R) prints #C4 for every instruction it times, where
+     silicon gives #CC for all but five. */
+  if ((before & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ) &&
+      (pins & (Z80_M1 | Z80_IORQ)) != (Z80_M1 | Z80_IORQ)) {
+    gate_array_interrupt_acknowledged(&cpc->gate_array);
   }
   cpc->pins = pins;
   return pins;

@@ -22,7 +22,7 @@ static cpc_t cpc;
 static cpc_t restored;
 
 static void power_on(cpc_t *machine, uint8_t *memory, uint32_t size) {
-  cpc_init(machine, memory, size, lower_rom);
+  cpc_init(machine, memory, size, lower_rom, 0);
   cpc_set_upper_rom(machine, 0, upper_rom);
 }
 
@@ -72,7 +72,10 @@ static void a_snapshot_is_refused_unless_it_is_one(void) {
   TEST_CHECK(!cpc_snapshot_load(&cpc, rubbish, sizeof rubbish, &problem));
   TEST_CHECK(problem != NULL);
 
-  memcpy(bytes, "MV - SNA", 8);
+  /* A snapshot's signature is a fixed-width field rather than a string: the
+     bytes go in without the terminator the literal carries. */
+  static const char signature[] = "MV - SNA";
+  memcpy(bytes, signature, sizeof signature - 1);
   memset(bytes + 8, 0, CPC_SNAPSHOT_HEADER_SIZE - 8);
   bytes[0x10] = 1;
   TEST_CHECK(!cpc_snapshot_load(&cpc, bytes, CPC_SNAPSHOT_HEADER_SIZE, &problem));

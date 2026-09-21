@@ -74,7 +74,7 @@
 /* Half of the Gate Array's own 4µs line sync, which is where the middle of
    that pulse lands once the beam is timed from it. A pulse the Gate Array
    cut short walks its middle left and the picture right, half a microsecond
-   for each one taken off (Compendium ch. 14.3). */
+   for each one taken off (Compendium ch. 14.3, 14.4). */
 #define CPC_LINE_SYNC_CENTRE 32
 
 /* One frame of the screen the firmware programs: 312 lines of 64 characters
@@ -103,14 +103,19 @@
 /* A matrix one line short loses a whole row of keys without a word. */
 typedef char cpc_keyboard_fits_the_matrix[CPC_KEYBOARD_LINES <= KEYBOARD_MAX_LINES ? 1 : -1];
 
-/* The keys a text-typing caller needs by name; the rest it finds through
-   cpc_key_for_character. */
+/* The keys a caller needs by name; the rest it finds through
+   cpc_key_for_character, which cannot reach the last four — three of them
+   print nothing at all, and the fourth repeats a character it already returns. */
 #define CPC_RETURN CPC_KEY(2, 2)
 #define CPC_SHIFT CPC_KEY(2, 5)
 #define CPC_SPACE CPC_KEY(5, 7)
 #define CPC_TAB CPC_KEY(8, 4)
 #define CPC_ESCAPE CPC_KEY(8, 2)
 #define CPC_DELETE CPC_KEY(9, 7)
+#define CPC_CONTROL CPC_KEY(2, 7)
+#define CPC_COPY CPC_KEY(1, 1)
+#define CPC_CAPS_LOCK CPC_KEY(8, 6)
+#define CPC_FUNCTION_0 CPC_KEY(1, 7)
 
 /* Where a character lives on a UK CPC keyboard, and whether shift is held to
  * reach it. Returns KEYBOARD_NO_KEY for a character the keyboard cannot
@@ -168,11 +173,15 @@ typedef struct {
   uint8_t *write_page[4];
 } cpc_t;
 
-/* Power-on. The lower ROM is readable at &0000 — it must be, or no first
- * instruction could ever be fetched. Upper ROM enabled and configuration 0
- * are conventions: the firmware writes both registers before anything could
- * observe their reset state. */
-void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom);
+/* Power-on with a CRTC built as the given type — only type 0's behaviour
+ * is implemented, and what a program can read of the chip is what follows
+ * the number given (crtc.h). The lower
+ * ROM is readable at &0000 — it must be, or no first instruction could ever
+ * be fetched. Upper ROM enabled and configuration 0 are conventions: the
+ * firmware writes both registers before anything could observe their reset
+ * state. */
+void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
+              uint8_t crtc_type);
 
 /* Fit a 16K ROM as upper ROM `number`; NULL empties the socket. */
 void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom);
