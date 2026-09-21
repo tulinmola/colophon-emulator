@@ -39,7 +39,8 @@
 #include <stdlib.h>
 #include <string.h>
 /* fork, waitpid and an anonymous shared mapping, so the five modules
-   run at once. The Makefile asks for POSIX on this file's behalf. */
+   run at once. These are POSIX rather than C99; the C library declares them
+   without being asked, and nothing in the build asks. */
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -47,6 +48,7 @@
 #include "cpc.h"
 #include "dsk.h"
 #include "png.h"
+#include "shaker_trace.h"
 #include "test.h"
 
 /* The modules draw in mode 2: 80 characters of 8 pixels across 25 rows of
@@ -271,7 +273,7 @@ static bool load_file(const char *directory, const char *file, uint8_t *into, si
 
 static void run_frames(long frames) {
   for (long tick = 0; tick < frames * CPC_TICKS_PER_STANDARD_FRAME; tick++) {
-    cpc_tick(&cpc);
+    shaker_trace_tick(&cpc, cpc_tick(&cpc));
   }
 }
 
@@ -1337,6 +1339,7 @@ static void print_capture(FILE *report, const capture *taken) {
 
 static void run_group(const char *module, const group *entry, FILE *report) {
   restore_machine();
+  shaker_trace_group(&cpc, entry->key, 2L * FRAMES_KEY_HELD);
   grid_left = NOMINAL_LEFT;
   grid_top = NOMINAL_TOP;
   capture_count = 0;
@@ -1992,6 +1995,7 @@ static bool run_every_module(void) {
     return false;
   }
 
+  shaker_trace_configure();
   /* Anything the parent has said but not yet written would be inherited by
      every child and said again by each of them. */
   fflush(NULL);
@@ -2007,6 +2011,7 @@ static bool run_every_module(void) {
          are its own from zero. TEST_RUN would have named the test it was
          about to run; nothing else does now. */
       test_current = modules[started].test_name;
+      shaker_trace_begin(modules[started].module, crtc_type);
       modules[started].run();
       module_result *result = &results[started];
       result->groups_run = total_groups_run;

@@ -29,13 +29,13 @@ FLOPPY_TEST_C = test/floppy_test.c
 DRIVE_TEST_C = test/drive_test.c
 UPD765_TEST_C = test/upd765_test.c
 FIRMWARE_TEST_C = test/firmware_test.c
-SHAKER_TEST_C = test/shaker_test.c
+SHAKER_TEST_C = test/shaker_test.c test/shaker_trace.c
 SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
 EXERCISER_C = test/z80_exerciser_test.c
 CORE_C = $(SRC_C) $(CRTC_C) $(GATE_ARRAY_C) $(MONITOR_C) $(PPI_C) $(PSG_C) $(KEYBOARD_C) $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(MACHINE_C) $(SNAPSHOT_C)
 PNG_C = cli/png.c
 CLI_C = cli/main.c
-SRC_ALL = $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/ppi.h src/psg.h src/keyboard.h src/cpc.h src/snapshot.h src/floppy.h src/dsk.h src/drive.h src/upd765.h $(PNG_C) $(CLI_C) cli/png.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SHAKER_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/test.h
+SRC_ALL = $(CORE_C) src/z80.h src/crtc.h src/gate_array.h src/monitor.h src/ppi.h src/psg.h src/keyboard.h src/cpc.h src/snapshot.h src/floppy.h src/dsk.h src/drive.h src/upd765.h $(PNG_C) $(CLI_C) cli/png.h $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(CPC_TEST_C) $(TIMING_TEST_C) $(SNAPSHOT_TEST_C) $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(FIRMWARE_TEST_C) $(SHAKER_TEST_C) $(SINGLE_STEP_C) $(EXERCISER_C) test/json.h test/shaker_trace.h test/test.h
 
 SINGLE_STEP_DATA = test/data/SingleStepTests/z80/v1
 EXERCISER_DATA = test/data/ZEXALL
@@ -45,7 +45,8 @@ EXERCISER_GROUPS ?= 12
 # Which of Shaker's modules to walk, and which group of one. MODULE=E runs
 # that module alone; MODULE=E GROUP=6 runs one group of it and keeps the
 # beam path of every screen it draws, which is a megabyte apiece. A group
-# needs the module it belongs to.
+# needs the module it belongs to. SHAKER_TRACE=prefix in the environment
+# writes what each group does as it does it; test/shaker_trace.h has the rest.
 MODULE ?=
 GROUP ?=
 
@@ -105,7 +106,7 @@ $(BUILD)/firmware_test: $(CORE_C) src/cpc.h $(FIRMWARE_TEST_C) test/test.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(CORE_C) $(FIRMWARE_TEST_C) -o $@
 
-$(BUILD)/shaker_test: $(CORE_C) $(PNG_C) src/cpc.h cli/png.h $(SHAKER_TEST_C) test/test.h
+$(BUILD)/shaker_test: $(CORE_C) $(PNG_C) src/cpc.h cli/png.h $(SHAKER_TEST_C) test/shaker_trace.h test/test.h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Icli -Itest $(CORE_C) $(PNG_C) $(SHAKER_TEST_C) -o $@
 
