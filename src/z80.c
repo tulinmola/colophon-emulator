@@ -36,10 +36,11 @@ enum {
   IO_WRITE_T4,
   /* The maskable interrupt acknowledge cycle: M1 with IORQ instead of MREQ,
      and two wait states the CPU inserts itself so a daisy chain has time to
-     settle. External WAIT extends it further, as on any other cycle. */
+     settle. External WAIT extends it further, sampled in the second. */
   INT_ACK_T1,
   INT_ACK_T2,
-  INT_ACK_WAIT,
+  INT_ACK_TW1,
+  INT_ACK_TW2,
   INT_ACK_T3,
   INT_ACK_T4,
   STRETCH_T, /* internal T-states: bus released, address held, counted down */
@@ -1573,19 +1574,29 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
       cpu->step = INT_ACK_T2;
       break;
 
+    /* Two wait states the processor adds itself, IORQ falling in the
+       first and WAIT sampled in the second alone (Zilog UM0080, Figure 9).
+       The netlist trace of floooh's instruction-timing article, cited at
+       z80_instruction_done, has IORQ from the first one's second
+       half-cycle. The manual's prose samples WAIT "during T2 and every
+       subsequent automatic WAIT state", which would take in the first as
+       well; on a CPC that makes the difference between the five
+       microseconds an interrupt costs by the Compendium (ch. 27.4) and
+       six, and it is the five that Shaker's D (I) reads silicon at. */
     case INT_ACK_T2:
-      pins |= Z80_IORQ;
-      cpu->stretch_remaining = 2;
-      cpu->step = INT_ACK_WAIT;
+      cpu->step = INT_ACK_TW1;
       break;
 
-    case INT_ACK_WAIT:
+    case INT_ACK_TW1:
+      pins |= Z80_IORQ;
+      cpu->step = INT_ACK_TW2;
+      break;
+
+    case INT_ACK_TW2:
       if (pins & Z80_WAIT) {
         return pins;
       }
-      if (--cpu->stretch_remaining == 0) {
-        cpu->step = INT_ACK_T3;
-      }
+      cpu->step = INT_ACK_T3;
       break;
 
     case INT_ACK_T3:

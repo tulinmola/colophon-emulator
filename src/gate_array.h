@@ -66,6 +66,14 @@
    Gate Array drives on R, G and B while the beam is blanked. */
 #define GATE_ARRAY_BLACK 20
 
+/* What an HSYNC end is to the interrupt generator: one step of R52, or the
+   check the frame makes two HSYNCs after its VSYNC began (ch. 27.3.2). */
+typedef enum {
+  GATE_ARRAY_NO_HSYNC_END = 0,
+  GATE_ARRAY_R52_STEP,
+  GATE_ARRAY_FRAME_CHECK,
+} gate_array_hsync_end_t;
+
 typedef struct {
   uint8_t pen;      /* the selected colour register: pens 0-15, 16 the border */
   uint8_t inks[17]; /* 5-bit hardware colour codes; [16] is the border */
@@ -82,15 +90,15 @@ typedef struct {
      maintained until acknowledged (ch. 27.3.1). */
   uint8_t r52;
   bool interrupt_request;
-  /* An HSYNC end that asks for an interrupt gets it a character later:
-     "an interrupt always starts 1 µsec after the end of the HSYNC"
+  /* What an HSYNC end does to the interrupt generator is decided when it
+     ends and done a character and a quarter later: "an interrupt always
+     starts 1 µsec after the end of the HSYNC regardless of the CRTC"
      (Compendium ch. 27.6.1). */
-  bool interrupt_due;
-  /* Set on the character whose HSYNC end carried R52 from 31 to 32 — the one
-     step an acknowledge can arrive in front of (ch. 27.7.1). */
-  bool r52_gained_bit_five_this_character;
-  uint8_t hsyncs_until_vsync_check; /* the two-HSYNC delay after a VSYNC
-                                       starts (ch. 27.3.2); 0 = not armed */
+  gate_array_hsync_end_t hsync_end_last_character; /* carried to the next */
+  gate_array_hsync_end_t hsync_end_to_act_on;      /* done on its quarter 1 */
+  bool interrupt_raised_this_cycle;                /* by that, until the next CPU cycle */
+  uint8_t hsyncs_until_vsync_check;                /* the two-HSYNC delay after a VSYNC
+                                                      starts (ch. 27.3.2); 0 = not armed */
   bool hsync_previous;
   bool vsync_previous;
 
@@ -127,7 +135,7 @@ void gate_array_init(gate_array_t *gate_array);
  * 11 pattern is the PAL's MMR, not ours, and is ignored. */
 void gate_array_write(gate_array_t *gate_array, uint8_t data);
 
-/* One character clock: watch the syncs, run the interrupt counter. */
+/* One character clock: watch the syncs. */
 void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync);
 
 /* The INT line, held from the moment the counter raises it until the CPU
@@ -139,7 +147,9 @@ static inline bool gate_array_interrupt(const gate_array_t *gate_array) {
 
 /* The CPU has acknowledged the interrupt: the request drops and bit 5 of
  * R52 dies, so the next interrupt comes no closer than 32 lines — or 20,
- * if the counter had already passed 32 (ch. 27.7.1). */
+ * if the counter had already passed 32 (ch. 27.7.1). Called on the cycle
+ * the acknowledge's M1 ends, after that cycle's gate_array_advance_phase;
+ * a request raised on that same cycle is left standing. */
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array);
 
 /* The composite sync on its way to the monitor, asserted when active. It is
@@ -150,7 +160,8 @@ static inline bool gate_array_csync(const gate_array_t *gate_array) {
   return gate_array->sig_hsync != gate_array->sig_vsync;
 }
 
-/* Move on by one of the CPU's four cycles. */
+/* Move on by one of the CPU's four cycles, counting an HSYNC end for the
+ * interrupt generator on the cycle it falls due. */
 void gate_array_advance_phase(gate_array_t *gate_array);
 
 /* Whether a character clock falls on the cycle just reached — the moment

@@ -30,7 +30,8 @@ void gate_array_write(gate_array_t *gate_array, uint8_t data) {
            arriving anyway. Nothing we can run grades the difference. */
         gate_array->r52 = 0;
         gate_array->interrupt_request = false;
-        gate_array->interrupt_due = false;
+        gate_array->hsync_end_last_character = GATE_ARRAY_NO_HSYNC_END;
+        gate_array->hsync_end_to_act_on = GATE_ARRAY_NO_HSYNC_END;
       }
       break;
     default: /* 11: the PAL's MMR — another chip's business */
@@ -38,16 +39,18 @@ void gate_array_write(gate_array_t *gate_array, uint8_t data) {
   }
 }
 
+static void raise_interrupt(gate_array_t *gate_array) {
+  gate_array->interrupt_request = true;
+  gate_array->interrupt_raised_this_cycle = true;
+}
+
 /* R52 counts to 51 and loops; the loop asks for the request (Compendium ch.
    27.3.1). */
-static void count_hsync_end(gate_array_t *gate_array) {
+static void step_r52(gate_array_t *gate_array) {
   gate_array->r52 = (gate_array->r52 + 1) & 0x3F;
-  /* The one step that can race an acknowledge, because it is the step that
-     puts bit 5 there for an acknowledge to take away (ch. 27.7.1). */
-  gate_array->r52_gained_bit_five_this_character = gate_array->r52 == 32;
   if (gate_array->r52 == 52) {
     gate_array->r52 = 0;
-    gate_array->interrupt_due = true;
+    raise_interrupt(gate_array);
   }
 }
 
@@ -55,11 +58,11 @@ static void count_hsync_end(gate_array_t *gate_array) {
    where the frame's own check takes the place of R52's count (Compendium
    ch. 27.3.2). Counts those two down and is true on the second alone.
 
-   What it asks for waits the same microsecond R52's own request waits: ch.
-   27.6.1 says an interrupt starts a microsecond after the end of the HSYNC
-   "regardless of the CRTC", and ch. 27.3.2 says nothing either way. It is
-   the same request out of the same counter, so it is given the same delay;
-   nothing we can run tells the two apart. */
+   What it does is done when R52's own step would be: ch. 27.6.1 says an
+   interrupt starts a microsecond after the end of the HSYNC "regardless of
+   the CRTC", and ch. 27.3.2 says nothing either way. It is the same
+   request out of the same counter, so it is given the same delay; nothing
+   we can run tells the two apart. */
 static bool vsync_check_due(gate_array_t *gate_array) {
   if (gate_array->hsyncs_until_vsync_check == 0) {
     return false;
@@ -68,18 +71,25 @@ static bool vsync_check_due(gate_array_t *gate_array) {
   return gate_array->hsyncs_until_vsync_check == 0;
 }
 
-void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
-  /* The race lasts the character its step was taken in and no longer. */
-  gate_array->r52_gained_bit_five_this_character = false;
-  /* What the last HSYNC end asked for rises here, a character after it was
-     asked: "an interrupt always starts 1 µsec after the end of the HSYNC
-     regardless of the CRTC" (Compendium ch. 27.6.1), and the diagrams under
-     it put the interrupt R3+1 microseconds after C0 reaches R2 for every
-     width they draw — 15 for an R3 of 14, 9 for 8, 2 for 1. */
-  if (gate_array->interrupt_due) {
-    gate_array->interrupt_request = true;
-    gate_array->interrupt_due = false;
+static void act_on_hsync_end(gate_array_t *gate_array, gate_array_hsync_end_t hsync_end) {
+  if (hsync_end == GATE_ARRAY_FRAME_CHECK) {
+    /* An interrupt only if bit 5 of R52 is set — the last one comfortably
+       far away — and R52 returns to 0 either way. */
+    if (gate_array->r52 & 0x20) {
+      raise_interrupt(gate_array);
+    }
+    gate_array->r52 = 0;
+  } else if (hsync_end == GATE_ARRAY_R52_STEP) {
+    step_r52(gate_array);
   }
+}
+
+void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
+  /* The diagrams under ch. 27.6.1 put the interrupt R3+1 microseconds
+     after C0 reaches R2 for every width they draw — 15 for an R3 of 14, 9
+     for 8, 2 for 1. */
+  gate_array->hsync_end_to_act_on = gate_array->hsync_end_last_character;
+  gate_array->hsync_end_last_character = GATE_ARRAY_NO_HSYNC_END;
 
   bool hsync_started = hsync && !gate_array->hsync_previous;
   bool hsync_ended = gate_array->hsync_previous && !hsync;
@@ -129,51 +139,55 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
     /* Mode changes take effect after the HSYNC ("The Gate Array"); the
        sub-microsecond placement waits for Shaker. */
     gate_array->mode = gate_array->mode_pending;
-    if (vsync_check_due(gate_array)) {
-      /* An interrupt only if bit 5 of R52 is set — the last one comfortably
-         far away — and R52 returns to 0 either way. */
-      if (gate_array->r52 & 0x20) {
-        gate_array->interrupt_due = true;
-      }
-      gate_array->r52 = 0;
-    } else {
-      count_hsync_end(gate_array);
-    }
+    gate_array->hsync_end_last_character =
+        vsync_check_due(gate_array) ? GATE_ARRAY_FRAME_CHECK : GATE_ARRAY_R52_STEP;
   }
 }
 
 void gate_array_advance_phase(gate_array_t *gate_array) {
   gate_array->cpu_phase = (uint8_t)((gate_array->cpu_phase + 1) & 3);
+  gate_array->interrupt_raised_this_cycle = false;
+  /* On the character's second quarter, which is a NOP's T3 here. "The INT
+     signal of the Z80A is positioned at T3 level" (ch. 27.7.2), and an
+     instruction whose last T-state goes before it is not warned in time
+     and runs one more instruction first. Shaker's D (I) times a DEC DE,
+     whose last T-state falls on quarter 0, against a request raised in the
+     same microsecond, and prints the answer that misses it: #59, silicon's
+     value on CRTCs 0, 1 and 2, where types 3 and 4 give #58. */
+  if (gate_array->cpu_phase == 1 && gate_array->hsync_end_to_act_on != GATE_ARRAY_NO_HSYNC_END) {
+    gate_array_hsync_end_t hsync_end = gate_array->hsync_end_to_act_on;
+    gate_array->hsync_end_to_act_on = GATE_ARRAY_NO_HSYNC_END;
+    act_on_hsync_end(gate_array, hsync_end);
+  }
 }
 
-/* A request asked for by the HSYNC just ended is not withdrawn here, where
-   RMR's bit 4 does withdraw one: the acknowledge answers the interrupt the
-   processor was offered, and the counter has since asked for another. The
-   difference shows only for an acknowledge inside that microsecond. No
-   outside evidence settles it; a test holds each half where it stands.
+/* The acknowledge is heard where the processor's M1 ends: "the end of the M1
+   signal during an interrupt occurs after the TWait cycles of the Z80A"
+   (Compendium ch. 27.7.1). That is on this chip's quarter 1 however the
+   cycle began, since its second automatic wait lets it through only where
+   this chip opens its window; which microsecond it is depends on where the
+   cycle began, and that is how the length of the interrupted instruction
+   reaches the race below.
 
-   That same microsecond is where ch. 27.7.1's race is run. An end of HSYNC
-   that takes R52 from 31 to 32 and an order to eliminate bit 5 can arrive
-   together, and the chapter gives the two orders two outcomes: "R52 goes
-   from 31 to 32, then its bit 5 is eliminated, and R52 goes to 0", where
-   "the next interrupt cannot occur before 52 lines"; or "bit 5 of R52=31 is
-   eliminated (which has no effect) and R52 changes to 32", where it "cannot
-   occur before 20 lines". Which is had depends on "the actual execution
-   length of the instruction following the EI instruction", and that length
-   is what leaves the acknowledge on one character quarter or another.
+   The chapter's race is then settled by nothing but which comes first. An
+   end of HSYNC that takes R52 from 31 to 32 and an order to eliminate bit 5
+   can arrive together, and the chapter gives the two orders two outcomes:
+   "R52 goes from 31 to 32, then its bit 5 is eliminated, and R52 goes to
+   0", where "the next interrupt cannot occur before 52 lines"; or "bit 5 of
+   R52=31 is eliminated (which has no effect) and R52 changes to 32", where
+   it "cannot occur before 20 lines". Counted on the quarter an acknowledge
+   is heard on, the count goes first. Shaker's B (R) times forty-eight
+   instructions through this window and this order answers every one of
+   them as silicon does.
 
-   Three quarters against one is ours. The chapter names no cycle — it says
-   only that the counting "is a priori carried out on the first cycles of
-   treatment of the Gate Array" (ch. 27.7.2), which gives the race a place
-   and not a boundary. What fixes it here is Shaker's B (R), which times
-   forty-eight instructions through this window and answers every one of
-   them on this line and no other: a quarter either way leaves thirty-two
-   lines wrong, and no rule reading the quarter alone or R52 alone fits at
-   all. Nothing finer than a quarter is measured. */
+   A request raised on the very cycle the acknowledge is heard is not
+   withdrawn with it, where RMR's bit 4 does withdraw one: the acknowledge
+   answers the interrupt the processor was offered, and the counter has
+   since asked for another. No outside evidence settles it; a test holds
+   each half where it stands. */
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array) {
-  gate_array->interrupt_request = false;
-  if (gate_array->r52_gained_bit_five_this_character && gate_array->cpu_phase != 3) {
-    return;
+  if (!gate_array->interrupt_raised_this_cycle) {
+    gate_array->interrupt_request = false;
   }
   gate_array->r52 &= 0x1F;
 }

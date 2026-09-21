@@ -130,10 +130,10 @@
  * increment falls on a last line it is ch. 13.2.6's worked table beginning
  * rather than a row ending, so the adjustment outlives the widening and C9 is
  * measured against R5 for the rest of the frame (ch. 13.2.1, 13.2.4, 13.2.6,
- * 16.4.1.2). Taking that up cost Shaker's C (P) its graded line, and the line
- * is worth less than it looks: read at three boot phases in forty on a chip
- * altered in no way at all, and at six in forty on this one, always with the
- * same right answer. The HSYNC's width is counted per character rather than
+ * 16.4.1.2). Taking that up costs Shaker's C (P) its graded line at most
+ * boot phases, and the line is worth less than it looks: read at three in
+ * forty on a chip altered in no way at all, and at six in forty on this one,
+ * always with the same right answer. The HSYNC's width is counted per character rather than
  * per line and goes on counting. R4 and R9 written under a frozen chip are
  * read here, where ch. 13.2.1 says they are no longer considered and
  * ch. 13.2.4 then wants them for the last line it assesses at C0=0; the

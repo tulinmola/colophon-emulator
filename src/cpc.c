@@ -271,21 +271,9 @@ uint64_t cpc_tick(cpc_t *cpc) {
   uint64_t before = cpc->pins;
   uint64_t pins = z80_tick(&cpc->cpu, bus);
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
-    /* Interrupt acknowledge: the Gate Array drops INT and kills R52's bit
-       5; the data bus floats, &FF by convention (in mode 1 the byte is
-       ignored; the Compendium ch. 27.5 finds it undetermined on hardware).
-       The Gate Array hears it once: a cycle held over four character
-       quarters would answer ch. 27.7.1's race for all four. It is heard on
-       the quarter the cycle begins in, against the one sentence that speaks
-       to when — "the end of the M1 signal during an interrupt occurs after
-       the TWait cycles of the Z80A, in other words after the execution of
-       the instruction following the EI" (ch. 27.7.1). Heard at that end the
-       window always closes on the same quarter, so every instruction would
-       get the same answer, and the five Shaker grades differently come back
-       wrong. */
-    if ((before & (Z80_M1 | Z80_IORQ)) != (Z80_M1 | Z80_IORQ)) {
-      gate_array_interrupt_acknowledged(&cpc->gate_array);
-    }
+    /* Interrupt acknowledge: the data bus floats, &FF by convention (in
+       mode 1 the byte is ignored; the Compendium ch. 27.5 finds it
+       undetermined on hardware). */
     pins = z80_set_data(pins, 0xFF);
   } else if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
     uint16_t address = z80_address(pins);
@@ -300,6 +288,16 @@ uint64_t cpc_tick(cpc_t *cpc) {
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
     bool first_tick = (before & (Z80_IORQ | Z80_RD)) != (Z80_IORQ | Z80_RD);
     pins = z80_set_data(pins, io_read(cpc, z80_address(pins), first_tick));
+  }
+  /* The Gate Array hears the acknowledge where M1 ends, and drops INT and
+     kills R52's bit 5 there: "the end of the M1 signal during an interrupt
+     occurs after the TWait cycles of the Z80A" (Compendium ch. 27.7.1).
+     Heard where IORQ begins instead, it reaches that chapter's race early,
+     and Shaker's B (R) prints #C4 for every instruction it times, where
+     silicon gives #CC for all but five. */
+  if ((before & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ) &&
+      (pins & (Z80_M1 | Z80_IORQ)) != (Z80_M1 | Z80_IORQ)) {
+    gate_array_interrupt_acknowledged(&cpc->gate_array);
   }
   cpc->pins = pins;
   return pins;

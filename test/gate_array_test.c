@@ -9,14 +9,32 @@
 
 static gate_array_t gate_array;
 
-/* One HSYNC: assert, end it, and give the line one character more. R52
-   counts the end, and what that end asks for arrives on the character
-   after it (ch. 27.6.1), so a pulse that stopped at the end would leave
-   every test here reading the moment before. */
+/* One of the CPU's cycles, as cpc_tick runs it: the character clock falls on
+   quarter 0. */
+static void advance(bool hsync, bool vsync) {
+  gate_array_advance_phase(&gate_array);
+  if (gate_array_character_clock(&gate_array)) {
+    gate_array_tick(&gate_array, hsync, vsync);
+  }
+}
+
+/* On to the next character clock and through it to quarter 1, where the
+   interrupt generator counts. */
+static void character(bool hsync, bool vsync) {
+  do {
+    advance(hsync, vsync);
+  } while (!gate_array_character_clock(&gate_array));
+  advance(hsync, vsync);
+}
+
+/* One HSYNC: assert, end it, and give the line one character more. The
+   interrupt generator acts on the end a character after it (ch. 27.6.1),
+   so a pulse that stopped at the end would leave every test here reading
+   the moment before. */
 static void pulse_hsync(void) {
-  gate_array_tick(&gate_array, true, false);
-  gate_array_tick(&gate_array, false, false);
-  gate_array_tick(&gate_array, false, false);
+  character(true, false);
+  character(false, false);
+  character(false, false);
 }
 
 static void pulse_hsyncs(int count) {
@@ -64,23 +82,29 @@ static void rmr_owns_roms_and_mode(void) {
   TEST_EQUAL(gate_array.mode, 1);
 }
 
-/* The end of an HSYNC asks for the interrupt; it rises a character later.
-   "An interrupt always starts 1 µsec after the end of the HSYNC regardless
-   of the CRTC", and the diagrams below that put it R3+1 microseconds after
-   C0 reaches R2 — 15 for an R3 of 14, 9 for 8, 2 for 1 (ch. 27.6.1,
-   27.6.2). */
+/* The end of an HSYNC is counted a character later, and the interrupt it
+   asks for rises then: "an interrupt always starts 1 µsec after the end of
+   the HSYNC regardless of the CRTC", and the diagrams below that put it
+   R3+1 microseconds after C0 reaches R2 — 15 for an R3 of 14, 9 for 8, 2
+   for 1 (ch. 27.6.1, 27.6.2). Within that character it rises on quarter 1,
+   a NOP's T3 here, where "the INT signal of the Z80A is positioned at T3
+   level" (ch. 27.7.2). */
 static void the_request_rises_a_character_after_the_hsync(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(51);
   TEST_CHECK(!gate_array.interrupt_request);
 
-  gate_array_tick(&gate_array, true, false);
+  character(true, false);
+  character(false, false); /* the end R52 counts */
+  TEST_EQUAL(gate_array.r52, 51);
   TEST_CHECK(!gate_array.interrupt_request);
-  gate_array_tick(&gate_array, false, false); /* the end R52 counts */
+  do {
+    advance(false, false);
+  } while (!gate_array_character_clock(&gate_array));
+  TEST_CHECK(!gate_array.interrupt_request); /* the character, on quarter 0 */
+  advance(false, false);
   TEST_EQUAL(gate_array.r52, 0);
-  TEST_CHECK(!gate_array.interrupt_request);
-  gate_array_tick(&gate_array, false, false);
-  TEST_CHECK(gate_array.interrupt_request);
+  TEST_CHECK(gate_array.interrupt_request); /* and on quarter 1 */
 }
 
 /* And an interrupt asked for by an HSYNC that has just ended is cancelled
@@ -89,11 +113,12 @@ static void the_request_rises_a_character_after_the_hsync(void) {
 static void rmr_bit_4_reaches_a_request_not_yet_risen(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(51);
-  gate_array_tick(&gate_array, true, false);
-  gate_array_tick(&gate_array, false, false);
+  character(true, false);
+  character(false, false);
   gate_array_write(&gate_array, 0x90); /* RMR with bit 4 */
-  gate_array_tick(&gate_array, false, false);
+  character(false, false);
   TEST_CHECK(!gate_array.interrupt_request);
+  TEST_EQUAL(gate_array.r52, 0);
 }
 
 /* The one step of R52 an acknowledge can arrive in front of. "If R52 is 31,
@@ -102,69 +127,67 @@ static void rmr_bit_4_reaches_a_request_not_yet_risen(void) {
    happens?" — either "R52 goes from 31 to 32, then its bit 5 is eliminated,
    and R52 goes to 0", leaving the next interrupt 52 lines off, or "bit 5 of
    R52=31 is eliminated (which has no effect) and R52 changes to 32", leaving
-   it 20 (ch. 27.7.1). The counting is done "on the first cycles of treatment
-   of the Gate Array" (ch. 27.7.2), which gives the race a place and not a
-   boundary. Three quarters against one is ours, and what fixes it is the
-   disc rather than the chapter.
-
-   What decides the quarter is "the actual execution length of the
-   instruction following the EI instruction", which is why Shaker's B (R)
-   times forty-eight of them: five end on a quarter that beats the step and
-   answer #C4 where the other forty-three answer #CC. */
+   it 20 (ch. 27.7.1). The chip answers by order alone: an acknowledge heard
+   before the count leaves 32, and one heard after it 0. Both are heard on
+   quarter 1, where the machine hears them, a character apart. Where the
+   processor's acknowledge ends is timing_test's to pin, and which order
+   an instruction's length leads to is graded only by Shaker's B (R). */
 static void an_acknowledge_races_r52_past_31(void) {
-  static const struct {
-    uint8_t quarter;
-    uint8_t left; /* what the counter is left holding */
-  } cases[] = {
-      {0, 32}, /* heard while 31 stands: the step goes on to 32 unharmed */
-      {1, 32},
-      {2, 32},
-      {3, 0}, /* heard after it: bit 5 is there to be taken, and 32 goes to 0 */
-  };
-  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
-    reset_state();
-    pulse_hsyncs(31);
-    TEST_EQUAL(gate_array.r52, 31);
-    /* The character the step is taken in, stopped where the acknowledge
-       falls: the end of a HSYNC is read on the character after it begins. */
-    gate_array_tick(&gate_array, true, false);
-    gate_array_tick(&gate_array, false, false);
-    TEST_EQUAL(gate_array.r52, 32);
-    gate_array.cpu_phase = cases[index].quarter;
-    gate_array_interrupt_acknowledged(&gate_array);
-    TEST_EQUAL(gate_array.r52, cases[index].left);
-    /* Whichever order the two arrive in, the request has been answered. */
-    TEST_CHECK(!gate_array.interrupt_request);
-  }
-}
-
-/* And the race lasts that character only. Once the next one has begun, the
-   step is an ordinary bit 5 and the acknowledge takes it away from any
-   quarter. */
-static void a_step_taken_earlier_is_no_race(void) {
   reset_state();
   pulse_hsyncs(31);
-  gate_array_tick(&gate_array, true, false);
-  gate_array_tick(&gate_array, false, false); /* the step to 32 */
+  TEST_EQUAL(gate_array.r52, 31);
+  character(true, false);
+  character(false, false);                        /* the end that will take R52 to 32 */
+  gate_array_interrupt_acknowledged(&gate_array); /* heard first */
+  character(false, false);
   TEST_EQUAL(gate_array.r52, 32);
-  gate_array_tick(&gate_array, false, false); /* a character with no step */
-  gate_array.cpu_phase = 0;
-  gate_array_interrupt_acknowledged(&gate_array);
+
+  reset_state();
+  pulse_hsyncs(31);
+  character(true, false);
+  character(false, false);
+  character(false, false); /* counted: 32 */
+  TEST_EQUAL(gate_array.r52, 32);
+  gate_array_interrupt_acknowledged(&gate_array); /* heard after */
   TEST_EQUAL(gate_array.r52, 0);
 }
 
 /* Nor is a step that finds bit 5 already set a race: there is nothing new to
-   take away, and the acknowledge takes it from every quarter. */
+   take away, and the acknowledge takes it either side of the count. */
 static void only_the_step_past_31_races(void) {
-  reset_state();
+  for (int heard_after = 0; heard_after <= 1; heard_after++) {
+    reset_state();
+    pulse_hsyncs(40);
+    TEST_EQUAL(gate_array.r52, 40);
+    character(true, false);
+    character(false, false);
+    if (!heard_after) {
+      gate_array_interrupt_acknowledged(&gate_array);
+    }
+    character(false, false);
+    if (heard_after) {
+      gate_array_interrupt_acknowledged(&gate_array);
+    }
+    TEST_EQUAL(gate_array.r52, 9); /* 41 with bit 5 taken away */
+  }
+}
+
+/* Whether an HSYNC end is the frame's check is settled when it ends, though
+   what it does waits: one that ended the character before a VSYNC began is
+   not among the two HSYNCs after it (ch. 27.3.2). */
+static void an_hsync_ending_before_the_vsync_is_not_counted_after_it(void) {
+  gate_array_init(&gate_array);
   pulse_hsyncs(40);
-  TEST_EQUAL(gate_array.r52, 40);
-  gate_array_tick(&gate_array, true, false);
-  gate_array_tick(&gate_array, false, false);
+  character(true, false);
+  character(false, false); /* the end, not yet acted on */
+  character(false, true);  /* VSYNC begins, and that end is acted on */
   TEST_EQUAL(gate_array.r52, 41);
-  gate_array.cpu_phase = 0;
-  gate_array_interrupt_acknowledged(&gate_array);
-  TEST_EQUAL(gate_array.r52, 9); /* 41 with bit 5 taken away */
+  pulse_hsync(); /* the first after the VSYNC */
+  TEST_EQUAL(gate_array.r52, 42);
+  TEST_CHECK(!gate_array.interrupt_request);
+  pulse_hsync(); /* the second: the check, with bit 5 of 42 set */
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(gate_array.interrupt_request);
 }
 
 static void r52_loops_at_52_and_holds_the_request(void) {
@@ -210,29 +233,33 @@ static void rmr_bit_4_clears_counter_and_request(void) {
 static void the_vsync_checks_request_waits_the_same_character(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(40);
-  gate_array_tick(&gate_array, false, true); /* VSYNC begins */
-  pulse_hsync();                             /* counts: R52 = 41 */
+  character(false, true); /* VSYNC begins */
+  pulse_hsync();          /* counts: R52 = 41 */
 
-  gate_array_tick(&gate_array, true, false);
-  gate_array_tick(&gate_array, false, false); /* the end the check falls on */
-  TEST_EQUAL(gate_array.r52, 0);
+  character(true, false);
+  character(false, false); /* the end the check falls on */
+  TEST_EQUAL(gate_array.r52, 41);
   TEST_CHECK(!gate_array.interrupt_request);
-  gate_array_tick(&gate_array, false, false);
+  character(false, false);
+  TEST_EQUAL(gate_array.r52, 0);
   TEST_CHECK(gate_array.interrupt_request);
 }
 
-/* And the acknowledge does not reach a request the last HSYNC end asked
-   for, where RMR's bit 4 does: it answers the interrupt the processor was
-   offered, and the counter has since asked for another. */
-static void an_acknowledge_leaves_a_request_not_yet_risen(void) {
+/* And the acknowledge does not reach a request raised on the cycle it is
+   heard on, where RMR's bit 4 does: it answers the interrupt the processor
+   was offered, and the counter has since asked for another. */
+static void an_acknowledge_leaves_a_request_just_risen(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(51);
-  gate_array_tick(&gate_array, true, false);
-  gate_array_tick(&gate_array, false, false); /* the end that asks */
-  gate_array_interrupt_acknowledged(&gate_array);
-  TEST_CHECK(!gate_array.interrupt_request);
-  gate_array_tick(&gate_array, false, false);
+  character(true, false);
+  character(false, false);
+  character(false, false); /* the count that asks, this very cycle */
   TEST_CHECK(gate_array.interrupt_request);
+  gate_array_interrupt_acknowledged(&gate_array);
+  TEST_CHECK(gate_array.interrupt_request);
+  advance(false, false);
+  gate_array_interrupt_acknowledged(&gate_array); /* a cycle on, it does */
+  TEST_CHECK(!gate_array.interrupt_request);
 }
 
 static void vsync_check_interrupts_only_from_afar(void) {
@@ -240,8 +267,8 @@ static void vsync_check_interrupts_only_from_afar(void) {
      set, and R52 returns to 0 either way (Compendium ch. 27.3.2). */
   gate_array_init(&gate_array);
   pulse_hsyncs(40);
-  gate_array_tick(&gate_array, false, true); /* VSYNC begins */
-  pulse_hsync();                             /* counts: R52 = 41 */
+  character(false, true); /* VSYNC begins */
+  pulse_hsync();          /* counts: R52 = 41 */
   TEST_CHECK(!gate_array.interrupt_request);
   pulse_hsync(); /* the check: bit 5 of 41 is set */
   TEST_CHECK(gate_array.interrupt_request);
@@ -249,7 +276,7 @@ static void vsync_check_interrupts_only_from_afar(void) {
 
   gate_array_init(&gate_array);
   pulse_hsyncs(20);
-  gate_array_tick(&gate_array, false, true);
+  character(false, true);
   pulse_hsyncs(2); /* bit 5 of 21 is clear: too close, no interrupt */
   TEST_CHECK(!gate_array.interrupt_request);
   TEST_EQUAL(gate_array.r52, 0);
@@ -515,7 +542,7 @@ static void suppression_does_not_revoke_a_held_request(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(52); /* raised, nobody listening */
   pulse_hsyncs(20);
-  gate_array_tick(&gate_array, false, true);
+  character(false, true);
   pulse_hsyncs(2); /* the check suppresses a new request only */
   TEST_CHECK(gate_array.interrupt_request);
 }
@@ -525,15 +552,15 @@ int main(void) {
   TEST_RUN(pen_selects_and_ink_paints);
   TEST_RUN(rmr_owns_roms_and_mode);
   TEST_RUN(an_acknowledge_races_r52_past_31);
-  TEST_RUN(a_step_taken_earlier_is_no_race);
   TEST_RUN(only_the_step_past_31_races);
+  TEST_RUN(an_hsync_ending_before_the_vsync_is_not_counted_after_it);
   TEST_RUN(r52_loops_at_52_and_holds_the_request);
   TEST_RUN(acknowledge_kills_bit_5);
   TEST_RUN(rmr_bit_4_clears_counter_and_request);
   TEST_RUN(the_request_rises_a_character_after_the_hsync);
   TEST_RUN(rmr_bit_4_reaches_a_request_not_yet_risen);
   TEST_RUN(the_vsync_checks_request_waits_the_same_character);
-  TEST_RUN(an_acknowledge_leaves_a_request_not_yet_risen);
+  TEST_RUN(an_acknowledge_leaves_a_request_just_risen);
   TEST_RUN(vsync_check_interrupts_only_from_afar);
   TEST_RUN(suppression_does_not_revoke_a_held_request);
   TEST_RUN(mode_0_paints_two_fat_pixels_a_byte);

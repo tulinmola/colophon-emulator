@@ -342,32 +342,20 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
    an RST #38 and the time taken by an interrupt with a fixed time code on
    19968 NOP's". Both halves of that comparison are run below.
 
-   The RST agrees at four microseconds. The interrupt does not: it costs six
-   here, and the six is not arbitrary. Ch. 27.6.2's diagrams put the Gate
-   Array's request a character after the end of the HSYNC, which cpc_test
-   holds it to, and Shaker's B (R) times forty-eight instructions through an
-   interrupt and answers all forty-eight only when the request and this delay
-   together come to seven microseconds. One character plus six is what that
-   leaves.
-
-   It cannot all be right. Ch. 27.4 wants five, and Shaker's D (I), the one
-   line left failing on the type 0 record, wants four — it reads silicon's
-   value at a four-microsecond entry and misses at five and six, and it is
-   unmoved by the request delay, so it is a witness the other two are not.
-   Four with a three-character request would answer both groups and neither
-   chapter. Three numbers, four claims, and no assignment satisfying all of
-   them: something in the shape of this is missing rather than mistuned.
-
-   So the measurement is written down rather than adjusted, because every
-   adjustment tried costs more than it buys. Moving it fails here, which is
-   the warning the record on its own cannot give.
+   Both agree. The microsecond beyond the RST's four is the acknowledge's:
+   Zilog's Figure 9 (UM0080) has the processor add two wait states to it
+   and sample WAIT in the second alone, so the Gate Array's pattern
+   stretches it once rather than twice. Shaker's D (I) times the first
+   interrupt into a field of DEC DEs entered exactly one interrupt period
+   after the last, and reads silicon's value only at five, with the
+   request raised where gate_array.c raises it.
 
    Measured across the interrupt and the instruction after it, because an
    entry that leaves the processor out of step with the character clock is
    paid for by the next instruction rather than by itself. What is measured
    is the cost after a NOP; the cost after an instruction leaving the clock
    on another quarter is not the same, and is not pinned here. */
-static void an_interrupt_costs_six_microseconds_where_an_rst_costs_four(void) {
+static void an_interrupt_costs_five_microseconds_where_an_rst_costs_four(void) {
   /* The two NOPs the span is measured over: the handler's first and second,
      a microsecond each once the processor is back in step. SETTLED is long
      enough that the cadence is certainly steady, and nothing turns on how
@@ -392,12 +380,23 @@ static void an_interrupt_costs_six_microseconds_where_an_rst_costs_four(void) {
   long after = 0;
   int steady = 0;
   int stage = 0;
-  int acknowledged_on = -1;
+  int heard_on = -1;
+  long m1_ended_at = -1;
+  long withdrawn_at = -1;
+  bool acknowledging = false;
+  bool requested = false;
   for (long tick = 0; tick < 4000000 && stage < 2; tick++) {
     uint64_t pins = cpc_tick(&cpc);
-    if (acknowledged_on < 0 && (pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
-      acknowledged_on = cpc.gate_array.cpu_phase;
+    bool acknowledge = (pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ);
+    if (heard_on < 0 && acknowledging && !acknowledge) {
+      heard_on = cpc.gate_array.cpu_phase;
+      m1_ended_at = tick;
     }
+    acknowledging = acknowledge;
+    if (withdrawn_at < 0 && requested && !gate_array_interrupt(&cpc.gate_array)) {
+      withdrawn_at = tick;
+    }
+    requested = gate_array_interrupt(&cpc.gate_array);
     if (!z80_instruction_complete(&cpc.cpu)) {
       continue;
     }
@@ -420,12 +419,14 @@ static void an_interrupt_costs_six_microseconds_where_an_rst_costs_four(void) {
     TEST_FAIL("no interrupt arrived to time");
     return;
   }
-  /* Six microseconds, where ch. 27.4 measures five. */
-  TEST_EQUAL(across + after - THE_TWO_NOPS, 24);
-  /* And the quarter the acknowledge begins on, which is what ch. 27.7.1's
-     race in gate_array.c reads and which no duration fixes: a cycle can be
-     moved within its microsecond and leave every length above unchanged. */
-  TEST_EQUAL(acknowledged_on, 0);
+  TEST_EQUAL(across + after - THE_TWO_NOPS, 20);
+  /* And the quarter the acknowledge's M1 ends on, which is where the Gate
+     Array hears it and where ch. 27.7.1's race in gate_array.c is run. No
+     duration fixes it: a cycle can be moved within its microsecond and
+     leave every length above unchanged. */
+  TEST_EQUAL(heard_on, 1);
+  /* Heard there, and not where IORQ began: INT drops on that very cycle. */
+  TEST_EQUAL(withdrawn_at, m1_ended_at);
 
   /* And the other half of the chapter's comparison, which does agree: an
      RST #38 reached from code, looping on itself so that every iteration is
@@ -472,7 +473,7 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
   TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
-  TEST_RUN(an_interrupt_costs_six_microseconds_where_an_rst_costs_four);
+  TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("timing");
 }

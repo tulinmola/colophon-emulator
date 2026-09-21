@@ -2,9 +2,9 @@ What Longshot's Shaker 2.7 said about this machine, built as a type 0
 CRTC, module by module and in the order each module's own menu prints.
 
 64 groups run, 22 left to another CRTC type.
-6 of them printed self-graded lines, 32 in all: 31 agree with Longshot's
-silicon and 1 do not. That is 97% of what this reader can score, and no
-measure at all of the other 58 groups.
+7 of them printed self-graded lines, 33 in all: 33 agree with Longshot's
+silicon and 0 do not. That is 100% of what this reader can score, and no
+measure at all of the other 57 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -102,14 +102,15 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
       R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
       R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
       R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
-C (P)       ALL      : ADD LINE R8                                                           recorded, ungraded
+C (P)       ALL      : ADD LINE R8                                                           1 graded, 0 wrong
+      R5=1 ON LAST LINE-1/R9=6 ON LAST LINE. C4=#26 (exp #26)
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
 C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  recorded, ungraded
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's
-D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               3 graded, 1 wrong
-    ! TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)
+D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               3 graded, 0 wrong
+      TEST INT ON INST DEC DE   :#59 (CRTC 3+4:#58/ OTHERS:#59)
       Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)
       Break ED xx on Pending Int #00 (Exp#00)
 D (R)       VSYNC TORTURE (LOCK MECHANISM)                                                   7 graded, 0 wrong
