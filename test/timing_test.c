@@ -1,6 +1,7 @@
 /*
  * timing_test — how long each instruction takes on a CPC, in microseconds,
- * and where inside one its write reaches the CRTC.
+ * where inside one its write reaches the CRTC, and what taking an interrupt
+ * costs.
  *
  * The Gate Array holds the CPU off the RAM for three cycles in four, so
  * every machine cycle stretches until the next window and every instruction
@@ -334,6 +335,132 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
   }
 }
 
+/* How long an interrupt costs, which no duration in the tables above covers.
+   "The Z80A RST #38 instruction lasts 4 µsec when called by code. When an
+   interrupt occurs, the call in #38 lasts 5 µsec" (ch. 27.4), and the chapter
+   offers its own way of telling: "to test it, just compare the time taken by
+   an RST #38 and the time taken by an interrupt with a fixed time code on
+   19968 NOP's". Both halves of that comparison are run below.
+
+   The RST agrees at four microseconds. The interrupt does not: it costs six
+   here, and the six is not arbitrary. Ch. 27.6.2's diagrams put the Gate
+   Array's request a character after the end of the HSYNC, which cpc_test
+   holds it to, and Shaker's B (R) times forty-eight instructions through an
+   interrupt and answers all forty-eight only when the request and this delay
+   together come to seven microseconds. One character plus six is what that
+   leaves.
+
+   It cannot all be right. Ch. 27.4 wants five, and Shaker's D (I), the one
+   line left failing on the type 0 record, wants four — it reads silicon's
+   value at a four-microsecond entry and misses at five and six, and it is
+   unmoved by the request delay, so it is a witness the other two are not.
+   Four with a three-character request would answer both groups and neither
+   chapter. Three numbers, four claims, and no assignment satisfying all of
+   them: something in the shape of this is missing rather than mistuned.
+
+   So the measurement is written down rather than adjusted, because every
+   adjustment tried costs more than it buys. Moving it fails here, which is
+   the warning the record on its own cannot give.
+
+   Measured across the interrupt and the instruction after it, because an
+   entry that leaves the processor out of step with the character clock is
+   paid for by the next instruction rather than by itself. What is measured
+   is the cost after a NOP; the cost after an instruction leaving the clock
+   on another quarter is not the same, and is not pinned here. */
+static void an_interrupt_costs_six_microseconds_where_an_rst_costs_four(void) {
+  /* The two NOPs the span is measured over: the handler's first and second,
+     a microsecond each once the processor is back in step. SETTLED is long
+     enough that the cadence is certainly steady, and nothing turns on how
+     long — any value from one to fifty-nine gives the same answer. */
+  enum { THE_TWO_NOPS = 8, SETTLED = 30 };
+  power_on();
+  /* A line wide enough to interrupt on, and NOPs everywhere including the
+     handler, so every ordinary step is one microsecond. */
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 63));
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 2));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 46));
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 3));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 0x0E));
+  cpc.cpu.pc = UNDER_TEST;
+  cpc.cpu.sp = 0x8000;
+  cpc.cpu.iff1 = true;
+  cpc.cpu.iff2 = true;
+  cpc.cpu.im = 1;
+  long previous = 0;
+  long across = 0;
+  long after = 0;
+  int steady = 0;
+  int stage = 0;
+  int acknowledged_on = -1;
+  for (long tick = 0; tick < 4000000 && stage < 2; tick++) {
+    uint64_t pins = cpc_tick(&cpc);
+    if (acknowledged_on < 0 && (pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
+      acknowledged_on = cpc.gate_array.cpu_phase;
+    }
+    if (!z80_instruction_complete(&cpc.cpu)) {
+      continue;
+    }
+    long step = tick + 1 - previous;
+    if (stage == 1) {
+      after = step;
+      stage = 2;
+    } else if (step == 4) {
+      steady++;
+    } else if (steady < SETTLED) {
+      steady = 0;
+    }
+    if (step > 4 && steady >= SETTLED && stage == 0) {
+      across = step;
+      stage = 1;
+    }
+    previous = tick + 1;
+  }
+  if (stage < 2) {
+    TEST_FAIL("no interrupt arrived to time");
+    return;
+  }
+  /* Six microseconds, where ch. 27.4 measures five. */
+  TEST_EQUAL(across + after - THE_TWO_NOPS, 24);
+  /* And the quarter the acknowledge begins on, which is what ch. 27.7.1's
+     race in gate_array.c reads and which no duration fixes: a cycle can be
+     moved within its microsecond and leave every length above unchanged. */
+  TEST_EQUAL(acknowledged_on, 0);
+
+  /* And the other half of the chapter's comparison, which does agree: an
+     RST #38 reached from code, looping on itself so that every iteration is
+     a settled one. */
+  power_on();
+  for (int at = UNDER_TEST; at < UNDER_TEST + 64; at++) {
+    lower_rom[at] = 0xFF; /* RST #38, each returning into the next */
+  }
+  lower_rom[0x38] = 0xC9; /* RET, straight back */
+  cpc.cpu.pc = UNDER_TEST;
+  cpc.cpu.sp = 0x8000;
+  cpc.cpu.iff1 = false;
+  long rst = 0;
+  long ret = 0;
+  long settled = 0;
+  int taken = 0;
+  for (long tick = 0; tick < 4000 && taken < 6; tick++) {
+    cpc_tick(&cpc);
+    if (!z80_instruction_complete(&cpc.cpu)) {
+      continue;
+    }
+    long step = tick + 1 - settled;
+    settled = tick + 1;
+    if (++taken > 2) { /* the first pair is entered mid-stride */
+      if (taken % 2 == 1) {
+        rst = step;
+      } else {
+        ret = step;
+      }
+    }
+  }
+  TEST_EQUAL(rst, 16); /* four microseconds, as ch. 27.4 has it */
+  TEST_EQUAL(ret, 12);
+}
+
 static void every_instruction_takes_whole_microseconds(void) {
   check(repeated, sizeof repeated / sizeof repeated[0], REPEATED);
 }
@@ -345,6 +472,7 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
   TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
+  TEST_RUN(an_interrupt_costs_six_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("timing");
 }
