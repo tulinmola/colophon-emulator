@@ -130,7 +130,7 @@ static void rmr_bit_4_reaches_a_request_not_yet_risen(void) {
    it 20 (ch. 27.7.1). The chip answers by order alone: an acknowledge heard
    before the count leaves 32, and one heard after it 0. Both are heard on
    quarter 1, where the machine hears them, a character apart. Where the
-   processor's acknowledge ends is timing_test's to pin, and which order
+   processor's acknowledge ends is cpc_timing_test's to pin, and which order
    an instruction's length leads to is graded only by Shaker's B (R). */
 static void an_acknowledge_races_r52_past_31(void) {
   reset_state();

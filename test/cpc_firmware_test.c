@@ -1,5 +1,5 @@
 /*
- * firmware_test — boot the real firmware and read the screen back.
+ * cpc_firmware_test — boot the real firmware and read the screen back.
  *
  * The acceptance tier for the machine. Everything here is judged by
  * Locomotive Software and Amstrad rather than by us: the boot screen is
@@ -179,7 +179,7 @@ static void expect_screen_contains(const char *text) {
 
 static void type_key(keyboard_key key, bool shifted) {
   if (shifted) {
-    keyboard_press(&cpc.keyboard, KEYBOARD_SHIFT);
+    keyboard_press(&cpc.keyboard, CPC_SHIFT);
   }
   keyboard_press(&cpc.keyboard, key);
   run_frames(FRAMES_PER_KEY);
@@ -190,7 +190,7 @@ static void type_key(keyboard_key key, bool shifted) {
 static void type_text(const char *text) {
   for (const char *at = text; *at != '\0'; at++) {
     bool shifted = false;
-    keyboard_key key = *at == '\n' ? KEYBOARD_RETURN : keyboard_key_for_character(*at, &shifted);
+    keyboard_key key = *at == '\n' ? CPC_RETURN : cpc_key_for_character(*at, &shifted);
     if (key == KEYBOARD_NO_KEY) {
       TEST_FAIL("this keyboard has no '%c'", *at);
       return;
@@ -551,5 +551,5 @@ int main(int argc, char **argv) {
   TEST_RUN(a_shaker_module_runs_off_the_disc);
   TEST_RUN(amsdos_saves_a_file_onto_the_disc);
   TEST_RUN(amsdos_reports_a_missing_disc);
-  return TEST_REPORT("firmware");
+  return TEST_REPORT("cpc firmware");
 }

@@ -69,7 +69,7 @@
 #define NOMINAL_TOP 70
 
 /* The boot screen stops changing at frame 42; this waits well past it, as
-   firmware_test does. The module then loads off the disc, which the slowest
+   cpc_firmware_test does. The module then loads off the disc, which the slowest
    of the five finishes inside 400 frames. A key must be held long enough
    for the fifty-times-a-second scan to see it. */
 #define FRAMES_TO_PROMPT 78
@@ -279,7 +279,7 @@ static void run_frames(long frames) {
 
 static void press(keyboard_key key, bool shifted) {
   if (shifted) {
-    keyboard_press(&cpc.keyboard, KEYBOARD_SHIFT);
+    keyboard_press(&cpc.keyboard, CPC_SHIFT);
   }
   keyboard_press(&cpc.keyboard, key);
   run_frames(FRAMES_KEY_HELD);
@@ -290,7 +290,7 @@ static void press(keyboard_key key, bool shifted) {
 static void type_text(const char *text) {
   for (const char *at = text; *at != '\0'; at++) {
     bool shifted = false;
-    keyboard_key key = *at == '\n' ? KEYBOARD_RETURN : keyboard_key_for_character(*at, &shifted);
+    keyboard_key key = *at == '\n' ? CPC_RETURN : cpc_key_for_character(*at, &shifted);
     if (key == KEYBOARD_NO_KEY) {
       TEST_FAIL("this keyboard has no '%c'", *at);
       return;
@@ -300,15 +300,14 @@ static void type_text(const char *text) {
 }
 
 /* The menus offer keys that carry no character, which is why
-   keyboard_key_for_character cannot reach them. Every key a menu names is
+   cpc_key_for_character cannot reach them. Every key a menu names is
    either one character or one of these. */
 static const struct {
   const char *name;
   keyboard_key key;
 } named_keys[] = {
-    {"COPY", KEYBOARD_COPY},     {"CAPS", KEYBOARD_CAPS_LOCK}, {"TAB", KEYBOARD_TAB},
-    {"RETURN", KEYBOARD_RETURN}, {"CTRL", KEYBOARD_CONTROL},   {"F0", KEYBOARD_FUNCTION_0},
-    {"SPACE", KEYBOARD_SPACE},
+    {"COPY", CPC_COPY},    {"CAPS", CPC_CAPS_LOCK}, {"TAB", CPC_TAB},     {"RETURN", CPC_RETURN},
+    {"CTRL", CPC_CONTROL}, {"F0", CPC_FUNCTION_0},  {"SPACE", CPC_SPACE},
 };
 
 static keyboard_key key_named(const char *name, bool *shifted) {
@@ -325,7 +324,7 @@ static keyboard_key key_named(const char *name, bool *shifted) {
   if (character >= 'A' && character <= 'Z') {
     character = (char)(character + ('a' - 'A'));
   }
-  return keyboard_key_for_character(character, shifted);
+  return cpc_key_for_character(character, shifted);
 }
 
 static bool power_on(void) {

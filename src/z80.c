@@ -1511,6 +1511,24 @@ bool z80_instruction_complete(const z80_t *cpu) {
   return cpu->step == M1_T1 && cpu->prefix == 0 && cpu->accepting == ACCEPT_NONE;
 }
 
+z80_cycle z80_next_cycle(const z80_t *cpu) {
+  switch (cpu->step) {
+    case M1_T1:
+    case MEM_READ_T1:
+    case MEM_WRITE_T1:
+      return Z80_CYCLE_MEMORY;
+    case IO_READ_T1:
+    case IO_WRITE_T1:
+      return Z80_CYCLE_PORT;
+    case STRETCH_T:
+      return Z80_CYCLE_INTERNAL;
+    case INT_ACK_T1:
+      return Z80_CYCLE_INTERRUPT;
+    default:
+      return Z80_CYCLE_NONE;
+  }
+}
+
 uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
   /* NMI is edge-triggered and latched: a pulse anywhere within an instruction
      is remembered until it can be taken. INT is a level, and only its state

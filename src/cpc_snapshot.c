@@ -1,9 +1,9 @@
 /*
- * snapshot.c — the header, field by field.
+ * cpc_snapshot.c — the header, field by field.
  */
 #include <string.h>
 
-#include "snapshot.h"
+#include "cpc_snapshot.h"
 
 /* Where each field sits in the header, in the order the format lists them.
    Named rather than counted, because an off-by-one here is a machine that
@@ -61,13 +61,13 @@ static void write16(uint8_t *bytes, size_t at, uint16_t value) {
   bytes[at + 1] = (uint8_t)(value >> 8);
 }
 
-size_t snapshot_size(const cpc_t *cpc) {
+size_t cpc_snapshot_size(const cpc_t *cpc) {
   /* The format writes 64K or 128K and nothing between. */
-  return SNAPSHOT_HEADER_SIZE + (cpc->ram_size >= 0x20000 ? 0x20000u : 0x10000u);
+  return CPC_SNAPSHOT_HEADER_SIZE + (cpc->ram_size >= 0x20000 ? 0x20000u : 0x10000u);
 }
 
-bool snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const char **problem) {
-  if (length < SNAPSHOT_HEADER_SIZE) {
+bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const char **problem) {
+  if (length < CPC_SNAPSHOT_HEADER_SIZE) {
     *problem = "too short to hold a snapshot header";
     return false;
   }
@@ -85,7 +85,7 @@ bool snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const char *
     *problem = "declares a memory dump that is neither 64K nor 128K";
     return false;
   }
-  if (length < SNAPSHOT_HEADER_SIZE + dump) {
+  if (length < CPC_SNAPSHOT_HEADER_SIZE + dump) {
     *problem = "is shorter than the memory dump it declares";
     return false;
   }
@@ -162,13 +162,13 @@ bool snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const char *
     cpc->psg.registers[index] = bytes[AT_PSG_REGISTERS + index];
   }
 
-  memcpy(cpc->ram, bytes + SNAPSHOT_HEADER_SIZE, dump);
+  memcpy(cpc->ram, bytes + CPC_SNAPSHOT_HEADER_SIZE, dump);
   cpc_remap(cpc);
   return true;
 }
 
-bool snapshot_save(const cpc_t *cpc, uint8_t *bytes, size_t capacity, const char **problem) {
-  size_t needed = snapshot_size(cpc);
+bool cpc_snapshot_save(const cpc_t *cpc, uint8_t *bytes, size_t capacity, const char **problem) {
+  size_t needed = cpc_snapshot_size(cpc);
   if (capacity < needed) {
     *problem = "there is not room for the snapshot";
     return false;
@@ -239,8 +239,8 @@ bool snapshot_save(const cpc_t *cpc, uint8_t *bytes, size_t capacity, const char
     bytes[AT_PSG_REGISTERS + index] = cpc->psg.registers[index];
   }
 
-  size_t dump = needed - SNAPSHOT_HEADER_SIZE;
+  size_t dump = needed - CPC_SNAPSHOT_HEADER_SIZE;
   write16(bytes, AT_DUMP_KILOBYTES, (uint16_t)(dump / 1024));
-  memcpy(bytes + SNAPSHOT_HEADER_SIZE, cpc->ram, dump);
+  memcpy(bytes + CPC_SNAPSHOT_HEADER_SIZE, cpc->ram, dump);
   return true;
 }

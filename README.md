@@ -6,13 +6,13 @@ For centuries, a scribe finishing a manuscript would add a colophon at the end: 
 
 A lot of it is already gone.
 
-Colophon opens those boxes. It runs Amstrad CPC games and watches them from the inside, revealing how the screen was drawn, how the levels were packed, how the music was squeezed out of a tiny sound chip. Then it writes the note that was never written, and puts it in a public archive where anyone can read it.
+Colophon opens those boxes. It runs the games of the old machines — an Amstrad CPC and a ZX Spectrum so far — and watches them from the inside, revealing how the screen was drawn, how the levels were packed, how the music was squeezed out of a tiny sound chip. Then it writes the note that was never written, and puts it in a public archive where anyone can read it.
 
 Preserving these games means more than keeping the files alive. It means understanding them, while there's still someone around to check we got it right.
 
 ## Building
 
-A C compiler and `make` are the whole toolchain. No configure step, no dependencies: the CPC is from 1984, and its workshop may as well be.
+A C compiler and `make` are the whole toolchain. No configure step, no dependencies: these machines are from the early eighties, and their workshop may as well be.
 
 ```sh
 make        # build
@@ -23,25 +23,36 @@ make roms   # fetch the firmware, once
 Then run a machine and look at it:
 
 ```sh
-build/emulator boot --type 'PRINT 2+2\n' --screenshot sum.png
-build/emulator boot --disc game.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
+build/emulator boot --machine cpc6128 --type 'PRINT 2+2\n' --screenshot sum.png
+build/emulator boot --machine cpc6128 --disc game.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
+build/emulator boot --machine spectrum48 --type 'p2+2\n' --wait 10 --screenshot sinclair.png
 ```
 
-`boot` starts a machine from reset and `run` picks one up from a snapshot; both then run for a fixed number of frames, type whatever `--type` was given, wait as long as `--wait` says, and write what they are asked for — a PNG of the screen, an SNA snapshot of the machine, a map of every write it made, the disc as it now stands, or all of them. Nothing consults a clock, so the same command writes the same bytes every time. [The command line](docs/command-line.en.md) sets out the rest.
+Which machine must always be said; there is no default, because none of them is the ordinary case. `boot` starts a machine from reset and `run` picks one up from a snapshot; both then run for a fixed number of frames, type whatever `--type` was given, wait as long as `--wait` says, and write what they are asked for — a PNG of the screen, an SNA snapshot of the machine, a map of every write it made, the disc as it now stands, or all of them. Nothing consults a clock, so the same command writes the same bytes every time. [The command line](docs/command-line.en.md) sets out the rest.
 
-The firmware images are Amstrad's. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here.
+The firmware images are Amstrad's, and the CPC's are Locomotive Software's as well. `make roms` fetches them, pinned by hash, under the permission Amstrad granted in 1999 to distribute them with emulators; they are never committed here. Amstrad have kindly given their permission for the redistribution of their copyrighted material but retain that copyright.
 
 For development there are also `make format` (clang-format, config in `.clang-format`), `make format-check`, and `make lint` (clang-tidy, config in `.clang-tidy`).
 
 ## Where it stands
 
-There is nothing to play yet, but there is something to see. The Z80 came first — cycle-stepped, complete, every instruction the machine knows, undocumented ones included — and the CPC has been built around it a chip at a time: the memory map with its RAM banking and ROM paging, a 6845 CRTC counting out the frame at one character per microsecond, a Gate Array raising the 300Hz heartbeat and turning bytes into colour, and a monitor that takes the one composite sync wire and separates it the way a tube does. Given the firmware, the machine now boots it, and the Ready prompt arrives on the screen in the right colours, in the right place.
+There is something to play, and more of the machine to see than there is of the game. The Z80 came first — cycle-stepped, complete, every instruction the machine knows, undocumented ones included — and it belongs to neither machine: it is a chip, ticked once a clock, and whatever is wired around it decides what its pins mean.
+
+An Amstrad CPC was built around it a chip at a time: the memory map with its RAM banking and ROM paging, a 6845 CRTC counting out the frame at one character per microsecond, a Gate Array raising the 300Hz heartbeat and turning bytes into colour, and a monitor that takes the one composite sync wire and separates it the way a tube does. Given the firmware, the machine boots it, and the Ready prompt arrives on the screen in the right colours, in the right place.
 
 It can hear you, too. The keyboard is a grid of switches read the long way round — the CPU asks the 8255, which asks the sound chip, which reads the grid — and with that path in place you can type at the prompt and BASIC will answer. And it runs at the right speed: the Gate Array keeps the CPU off the memory for three cycles in four so the video always wins, which stretches every instruction onto a whole microsecond and costs the processor a quarter of its nominal 4MHz — the tax that makes a CPC a CPC.
 
 It can also be stopped and picked up again: a machine writes itself out as an SNA snapshot, and another reads it back and carries on.
 
 And there is a disc, and a controller to read it. A disc image becomes a medium — cylinders, sides, and the sectors lying under the head with the identities they announce, the wrong lengths some of them claim, and the several readings a protected one keeps — laid out on its track where a formatter would have put it. A drive turns it at 300 rpm, and a µPD765 finds each sector as its identity comes round and hands the bytes over one every 32µs, the way the chip did. Given AMSDOS, the machine catalogues a disc somebody else wrote and loads a program off it, and Shaker's own modules run from theirs.
+
+A ZX Spectrum stands beside it now, and it is one chip where a CPC is two. The Ferranti ULA counts out the frame, reads the screen, turns bytes into pixels, raises the interrupt and gates the keyboard, and the board around it is little more than sixteen kilobytes of ROM and eight address lines running to forty keys. It boots its firmware, shows the message Sinclair put in it, and answers arithmetic typed at the keyboard — and its picture is read back off the beam rather than out of the display file, so the serialiser, the composite sync and the tube are all in the path that is checked. It contends for its own memory, which on a machine whose screen and processor share one bank is what makes its timing what it is: the ULA takes the bus by stopping the processor's clock, so a held T-state is one the processor never runs while the beam runs on without it.
+
+And there is a tape, which both machines take. A `.tap` is bytes at the Spectrum ROM's own timings, and so a Spectrum's alone; a `.tzx` — which the CPC calls a `.cdt` — records the timings themselves, and is what a tape that brought a loader of its own needs, as most commercial releases did. It is one format under two names, so it is one reader, and its timings are counted in a Spectrum's T-states wherever they are played: a 4MHz board holds every pulse a seventh longer than the number says. The deck plays the edges and the firmware measures the time between them, as it did on hardware — a Spectrum taking a reel it cannot stop, a CPC starting and stopping its own through the motor line a Spectrum never had.
+
+No machine is the default, and none will be. A command that does not say which one it wants is a question rather than an instruction, and the emulator answers it with the list of what it has.
+
+None of it has to be watched from a command line. The [player](https://github.com/tulinmola/colophon-player) compiles this same C to WebAssembly and carries a machine into a page, with a debugger beside it: the processor, the memory, the screen, the drive and the track under its head, each on a panel of its own, and a few seconds of the recent past to step back through. That is where the games are played.
 
 [The machine](docs/machine.en.md) is the full accounting, chip by chip, of what is there and what is not.
 
@@ -61,15 +72,16 @@ An emulator that looks right and an emulator that is right are different things,
 
 ```sh
 make test               # fast, hermetic, no network — runs on every change
+make test-sanitized     # the same, under the address and behaviour sanitizers
 make test-firmware      # boots the real firmware and types at it
 make test-shaker        # sets what Shaker's modules say against the record
 make test-shaker CRTC=1 # the same, on a machine a program names a type 1
 make test-single-step   # the complete SingleStepTests corpus
 make test-exerciser     # the Z80 instruction set exerciser
-make test-all           # all five, with Shaker against both records
+make test-all           # all six, with Shaker against both records
 ```
 
-Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — and all three machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table the ROM itself carries. The 6128 also catalogues Shaker's disc through the real AMSDOS and loads a file off it, and both are checked against a reading of the image that never went near the controller.
+Today every instruction the Z80 knows passes [SingleStepTests](https://github.com/SingleStepTests/z80) per cycle — 1,604,000 cases, each fixing the state of the bus after every clock — a Spectrum's instructions take the length the published contention tables give them at 23,004 positions in its frame, and all four machines boot their own firmware and answer `PRINT 2+2` correctly, with the letters read back through the character table each ROM itself carries. The 6128 also catalogues Shaker's disc through the real AMSDOS and loads a file off it, and both are checked against a reading of the image that never went near the controller.
 
 [The evidence](docs/evidence.en.md) sets out what each tier proves, what it costs, and what is still to come.
 
@@ -101,8 +113,16 @@ No scribe worked alone. Every claim in this codebase cites its source at the lin
 - ["Reading the keyboard and Joysticks"](https://cpctech.cpcwiki.de/docs/keyboard.html), ["8255 PPI"](https://cpctech.cpcwiki.de/docs/8255cpc.html) and ["AY-3-8912 PSG"](https://cpctech.cpcwiki.de/docs/psg.html) (Kevin Thacker) — the key matrix position by position, the six-step dance that reads one line of it, what each port of the 8255 is wired to, and the rule that a port turned to input presents &FF to whatever is on the other side. Our keyboard, `ppi.c` and `psg.c` are built on them.
 - ["Interrupts on the CPC/CPC+ and KC Compact"](https://cpctech.cpcwiki.de/docs/ints.html) (Kevin Thacker) — the interrupt counter's behaviour from the programmer's side; RMR bit 4 clearing the pending request along with the counter.
 - ["Amstrad CPC Ram Paging"](https://cpctech.cpcwiki.de/docs/rampage.html), ["I/O port allocation"](https://cpctech.cpcwiki.de/docs/iopord.html) (Mark Rison & Kevin Thacker) and ["Expansion ROM Selection"](https://cpctech.cpcwiki.de/docs/exprom.html), from Kevin Thacker's cpctech — the 6128 PAL's partial decode of its register, the address-bit I/O decoding that lets one access reach several devices at once, and the upper ROM latch with its fallback to BASIC. The machine's I/O decode follows them.
+- [The Sinclair Wiki](https://sinclair.wiki.zxnet.co.uk/) — the ZX Spectrum as its field settled it: the ULA answering any even port and what a read of one gives back, the display file's scattered addressing, the forty keys as eight half-rows on the upper address lines, and the two tables our contention is held against — the delay owed at each T-state of a frame, and, opcode by opcode, which address stands on the bus and for how long. Our `ula.c` and `spectrum.c` are built on them.
+- ["The Keyboard"](http://www.zxdesign.info/keyboard.shtml) and ["Interrupts"](http://www.zxdesign.info/interrupts.shtml) (Chris Smith) — the ULA read off its own silicon: the half-rows wire-ANDed together when more than one address line is held low, and why the interrupt falls at the same offset into a line as the first displayed byte rather than at a line's start. Our frame's two origins are his.
+- [libspectrum's `timings.c`](https://sourceforge.net/p/fuse-emulator/libspectrum/ci/master/tree/timings.c) (Philip Kendall, Fuse) — the 48K frame as a table: 24 + 128 + 24 + 48 T-states to a line, 312 lines to a frame, the interrupt held 32, the first displayed byte 14336 after it. It splits the borders where Chris Smith's measurement does not, and `ula.h` says so rather than choosing.
+- ["TZX format" v1.13](https://worldofspectrum.net/TZXformat.html) (Tomaz Kac, maintained by Martijn van der Heide) — the tape as a sequence of pulses rather than bytes: the standard ROM timings a `.tap` is replayed at, the pilot a header gets and the shorter one a data block gets, and that the level starts low and every pulse turns it over. It is also the CPC's `.cdt`, which is why one reader serves both machines. Our `tzx.c` plays what it tabulates.
+- ["Tape-Image (.CDT) file format"](https://cpctech.cpcwiki.de/docs/cdtcpc.html) (Kevin Thacker's cpctech) — the CPC's half of that format, and the half that would otherwise be got wrong: "All timings are in Spectrum T-States", so a 4MHz board holds every pulse for longer than the number says; and the two blocks an Amstrad reads differently from a Spectrum, one of which it "MUST ignore". `tzx.c` is told which machine it is feeding for those two alone.
+- [The complete Spectrum ROM disassembly](https://worldofspectrum.org/documentation/) (Ian Logan and Frank O'Hara) — the firmware routine by routine. `LD-BYTES` at &0556 and its entry conditions are what the tape is graded by: the ROM measures the edges, and a block that arrives whole is the ROM's verdict rather than ours.
+- [The World of Spectrum FAQ](https://worldofspectrum.org/faq/reference/48kreference.htm) — the 48K reference, and the ["Emulator file formats"](https://worldofspectrum.org/faq/reference/formats.htm) beside it: FLASH swapping ink and paper every 16 frames, the write to port 0xFE, the SNA header field by field, including the program counter pushed on the stack and the two bytes it costs, and the two-byte length that opens every block of a `.tap`.
+- ["Sinclair ZX Specifications"](https://www.problemkaputt.de/zxdocs.htm) (Martin Korth) — the Spectrum keyboard's legends key by key: what each carries plain, under caps shift, and under symbol shift.
 - [json.org](https://www.json.org) — the grammar behind the test harness's hand-rolled JSON reader.
 - [The PNG Specification](https://www.w3.org/TR/png-3/), with [RFC 1950](https://www.rfc-editor.org/rfc/rfc1950) and [RFC 1951](https://www.rfc-editor.org/rfc/rfc1951) — chunks, CRC-32, the zlib wrapper and its Adler-32, and deflate's stored block, which is the only one we emit. Enough to write a screenshot without a dependency.
-- Amstrad's permission to distribute the firmware ROMs, given by [Cliff Lawson in 1999](https://groups.google.com/g/comp.sys.amstrad.8bit/c/HtpBU2Bzv_U/m/HhNDSU3MksAJ) on comp.sys.amstrad.8bit: keep the copyright messages intact, acknowledge Amstrad's copyright, charge nobody for them. Never rescinded, and the ground every emulator in the field stands on. `tools/fetch-roms.sh` relies on it.
+- Amstrad's permission to distribute the firmware ROMs, given by [Cliff Lawson in 1999](https://worldofspectrum.net/app/themes/wosc-classic/static/legacy/amstrad-roms.txt) — answering for the Spectrum ROMs on comp.sys.sinclair and [cross-posting](https://groups.google.com/g/comp.sys.amstrad.8bit/c/HtpBU2Bzv_U/m/HhNDSU3MksAJ) to comp.sys.amstrad.8bit because it applies to the CPC's too: keep the copyright messages intact, acknowledge Amstrad's copyright, charge nobody for them. The same answer notes that the CPC firmware is also Locomotive Software's, whose permission is a separate matter. Never rescinded, and the ground every emulator in the field stands on. `tools/fetch-roms.sh` relies on it.
 
 A source earns a line here the day code starts using it, not before.

@@ -1,7 +1,7 @@
 /*
- * timing_test — how long each instruction takes on a CPC, in microseconds,
- * where inside one its write reaches the CRTC, and what taking an interrupt
- * costs.
+ * cpc_timing_test — how long each instruction takes on a CPC, in
+ * microseconds, where inside one its write reaches the CRTC, and what taking
+ * an interrupt costs.
  *
  * The Gate Array holds the CPU off the RAM for three cycles in four, so
  * every machine cycle stretches until the next window and every instruction
@@ -475,5 +475,5 @@ int main(void) {
   TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
-  return TEST_REPORT("timing");
+  return TEST_REPORT("cpc timing");
 }

@@ -37,12 +37,15 @@ void cpc_remap(cpc_t *cpc) {
   }
 }
 
+#define PORT_B_CASSETTE 0x80
+
 /* Port B is wired to the outside world and to the CRTC: bit 7 the cassette,
    bit 6 the printer's ready line inverted, bit 5 the expansion port, bit 4
    the refresh-rate link, bits 3-1 the manufacturer's, and bit 0 the CRTC's
    VSYNC straight through ("8255 PPI"). Bit 7 is driven by the tape circuit
-   rather than pulled anywhere, so it rests low with nothing playing, and
-   bit 6 is pulled up and stands high with no printer on the far end.
+   rather than pulled anywhere, so it reads what is at the play head and
+   reads low with no tape in the deck, and bit 6 is pulled up and stands high
+   with no printer on the far end.
 
    Bit 5 is low on a measurement rather than on a derivation. "8255 PPI"
    gives it as 0 where no device is connected, and Shaker's D (R) names #5E
@@ -54,6 +57,9 @@ void cpc_remap(cpc_t *cpc) {
    sheet that would settle it is one we have not seen. */
 static void present_port_b(cpc_t *cpc) {
   uint8_t levels = 0x40;
+  if (cpc->tape != NULL && tape_level(cpc->tape)) {
+    levels |= PORT_B_CASSETTE;
+  }
   if (cpc->fifty_hz) {
     levels |= 0x10;
   }
@@ -64,11 +70,22 @@ static void present_port_b(cpc_t *cpc) {
   ppi_present(&cpc->ppi, PPI_PORT_B, levels);
 }
 
-/* Port C's low nibble selects a keyboard line and its top two bits are the
-   PSG's BDIR and BC1 ("8255 PPI"). */
+/* The nibble selects sixteen lines and the board wires ten, so the six above
+   them are open and read &FF. Which lines exist is the board's to know, not
+   the matrix's. */
+static uint8_t selected_line(const cpc_t *cpc, uint8_t line) {
+  return line < CPC_KEYBOARD_LINES ? keyboard_line(&cpc->keyboard, line) : 0xFF;
+}
+
+/* Port C's low nibble selects a keyboard line, bit 4 turns the cassette
+   motor, bit 5 is what the machine writes to tape, and the top two bits are
+   the PSG's BDIR and BC1 ("8255 PPI"). Nothing here records, so bit 5 goes
+   nowhere; the motor is taken up in cpc_tick, where the reel is turned. */
+#define PORT_C_MOTOR 0x10
+
 static void run_psg(cpc_t *cpc) {
   uint8_t port_c = ppi_output_of(&cpc->ppi, PPI_PORT_C);
-  psg_present_port_a(&cpc->psg, keyboard_line(&cpc->keyboard, port_c & 0x0F));
+  psg_present_port_a(&cpc->psg, selected_line(cpc, port_c & 0x0F));
   psg_function function = (psg_function)(port_c >> 6);
   uint8_t bus = psg_access(&cpc->psg, function, ppi_output_of(&cpc->ppi, PPI_PORT_A));
   ppi_present(&cpc->ppi, PPI_PORT_A, bus);
@@ -228,8 +245,33 @@ uint16_t cpc_video_address(const cpc_t *cpc) {
   return (uint16_t)(((ma & 0x3000) << 2) | ((ra & 0x07) << 11) | ((ma & 0x03FF) << 1));
 }
 
+void cpc_insert_tape(cpc_t *cpc, tape_t *tape) { cpc->tape = tape; }
+
 uint64_t cpc_tick(cpc_t *cpc) {
   gate_array_advance_phase(&cpc->gate_array);
+  /* The motor line is held, not sampled: the board turns the reel for as
+     long as the bit is set, whether or not the processor is looking at the
+     8255 ("8255 PPI"). It turns for no other reason: PC4 runs through R113 to
+     the base of Q101, the motor transistor, and no pull-up is fitted anywhere
+     on that line — Amstrad fitted six on port B and none at all on port C —
+     so while the nibble is an input, which is how the 8255 comes out of
+     reset, the transistor has no base current and the reel stands still
+     (CPC464, CPC664 and CPC6128 service manuals, circuit diagrams).
+
+     PLAY is pressed here every tick the line is high rather than once, which
+     is what a motor line is. A source that stopped the tape short of its end
+     would therefore be started again on the next tick — no Amstrad block
+     stops one, and tzx.c sends both candidates to the next block instead. */
+  if (cpc->tape != NULL) {
+    const bool motor_driven =
+        !cpc->ppi.port_c_upper_input && (ppi_output_of(&cpc->ppi, PPI_PORT_C) & PORT_C_MOTOR) != 0;
+    if (motor_driven) {
+      tape_play(cpc->tape);
+    } else {
+      tape_stop(cpc->tape);
+    }
+    tape_tick(cpc->tape);
+  }
   if (gate_array_character_clock(&cpc->gate_array)) {
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
     gate_array_tick(&cpc->gate_array, (cpc->crtc_pins & CRTC_HSYNC) != 0,
@@ -309,6 +351,85 @@ void cpc_finish_instruction(cpc_t *cpc) {
   for (int guard = 0; guard < 256 && !z80_instruction_complete(&cpc->cpu); guard++) {
     cpc_tick(cpc);
   }
+}
+
+/* The UK layout, positions from the matrix table in "Reading the keyboard
+   and Joysticks". Keys that carry no character — cursors, function keys,
+   Copy, Caps Lock, the joystick lines — are absent. */
+typedef struct {
+  keyboard_key key;
+  char plain;
+  char shifted;
+} legend;
+
+static const legend legends[] = {
+    {CPC_KEY(2, 1), '[', '{'},
+    {CPC_KEY(2, 3), ']', '}'},
+    {CPC_KEY(2, 6), '\\', '`'},
+    {CPC_KEY(3, 0), '^', '\0'}, /* shift gives the pound sign, not ASCII */
+    {CPC_KEY(3, 1), '-', '='},
+    {CPC_KEY(3, 2), '@', '|'},
+    {CPC_KEY(3, 3), 'p', 'P'},
+    {CPC_KEY(3, 4), ';', '+'},
+    {CPC_KEY(3, 5), ':', '*'},
+    {CPC_KEY(3, 6), '/', '?'},
+    /* The source crosses these two keys, printing "> ," here and "< ." on
+       line 4 bit 7; the firmware's own translation puts the full stop
+       here and the comma there. */
+    {CPC_KEY(3, 7), '.', '>'},
+    {CPC_KEY(4, 0), '0', '_'},
+    {CPC_KEY(4, 1), '9', ')'},
+    {CPC_KEY(4, 2), 'o', 'O'},
+    {CPC_KEY(4, 3), 'i', 'I'},
+    {CPC_KEY(4, 4), 'l', 'L'},
+    {CPC_KEY(4, 5), 'k', 'K'},
+    {CPC_KEY(4, 6), 'm', 'M'},
+    {CPC_KEY(4, 7), ',', '<'},
+    {CPC_KEY(5, 0), '8', '('},
+    {CPC_KEY(5, 1), '7', '\''},
+    {CPC_KEY(5, 2), 'u', 'U'},
+    {CPC_KEY(5, 3), 'y', 'Y'},
+    {CPC_KEY(5, 4), 'h', 'H'},
+    {CPC_KEY(5, 5), 'j', 'J'},
+    {CPC_KEY(5, 6), 'n', 'N'},
+    {CPC_KEY(5, 7), ' ', ' '},
+    {CPC_KEY(6, 0), '6', '&'},
+    {CPC_KEY(6, 1), '5', '%'},
+    {CPC_KEY(6, 2), 'r', 'R'},
+    {CPC_KEY(6, 3), 't', 'T'},
+    {CPC_KEY(6, 4), 'g', 'G'},
+    {CPC_KEY(6, 5), 'f', 'F'},
+    {CPC_KEY(6, 6), 'b', 'B'},
+    {CPC_KEY(6, 7), 'v', 'V'},
+    {CPC_KEY(7, 0), '4', '$'},
+    {CPC_KEY(7, 1), '3', '#'},
+    {CPC_KEY(7, 2), 'e', 'E'},
+    {CPC_KEY(7, 3), 'w', 'W'},
+    {CPC_KEY(7, 4), 's', 'S'},
+    {CPC_KEY(7, 5), 'd', 'D'},
+    {CPC_KEY(7, 6), 'c', 'C'},
+    {CPC_KEY(7, 7), 'x', 'X'},
+    {CPC_KEY(8, 0), '1', '!'},
+    {CPC_KEY(8, 1), '2', '"'},
+    {CPC_KEY(8, 3), 'q', 'Q'},
+    {CPC_KEY(8, 5), 'a', 'A'},
+    {CPC_KEY(8, 7), 'z', 'Z'},
+};
+
+keyboard_key cpc_key_for_character(char character, bool *shifted) {
+  for (size_t index = 0; index < sizeof legends / sizeof legends[0]; index++) {
+    if (legends[index].plain == character) {
+      *shifted = false;
+      return legends[index].key;
+    }
+  }
+  for (size_t index = 0; index < sizeof legends / sizeof legends[0]; index++) {
+    if (legends[index].shifted == character && character != '\0') {
+      *shifted = true;
+      return legends[index].key;
+    }
+  }
+  return KEYBOARD_NO_KEY;
 }
 
 uint8_t cpc_peek(const cpc_t *cpc, uint16_t address) {

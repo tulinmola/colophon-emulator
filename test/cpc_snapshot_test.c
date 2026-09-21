@@ -1,5 +1,5 @@
 /*
- * snapshot_test — save a machine, restore it, insist it is the same one.
+ * cpc_snapshot_test — a CPC written down and picked up again.
  *
  * The round trip is the strong test here: every field the format carries
  * has to survive being written and read, and a machine restored from its
@@ -10,14 +10,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "snapshot.h"
+#include "cpc_snapshot.h"
 #include "test.h"
 
 static uint8_t ram[0x20000];
 static uint8_t other_ram[0x20000];
 static uint8_t lower_rom[0x4000];
 static uint8_t upper_rom[0x4000];
-static uint8_t bytes[SNAPSHOT_HEADER_SIZE + 0x20000];
+static uint8_t bytes[CPC_SNAPSHOT_HEADER_SIZE + 0x20000];
 static cpc_t cpc;
 static cpc_t restored;
 
@@ -60,30 +60,30 @@ static void a_half_done_instruction_cannot_be_saved(void) {
     }
   }
   TEST_CHECK(!z80_instruction_complete(&cpc.cpu));
-  TEST_CHECK(!snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
   cpc_finish_instruction(&cpc);
-  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
 }
 
 static void a_snapshot_is_refused_unless_it_is_one(void) {
   power_on(&cpc, ram, sizeof ram);
   const char *problem = NULL;
-  static const uint8_t rubbish[SNAPSHOT_HEADER_SIZE + 16] = {0};
-  TEST_CHECK(!snapshot_load(&cpc, rubbish, sizeof rubbish, &problem));
+  static const uint8_t rubbish[CPC_SNAPSHOT_HEADER_SIZE + 16] = {0};
+  TEST_CHECK(!cpc_snapshot_load(&cpc, rubbish, sizeof rubbish, &problem));
   TEST_CHECK(problem != NULL);
 
   /* A snapshot's signature is a fixed-width field rather than a string: the
      bytes go in without the terminator the literal carries. */
   static const char signature[] = "MV - SNA";
   memcpy(bytes, signature, sizeof signature - 1);
-  memset(bytes + 8, 0, SNAPSHOT_HEADER_SIZE - 8);
+  memset(bytes + 8, 0, CPC_SNAPSHOT_HEADER_SIZE - 8);
   bytes[0x10] = 1;
-  TEST_CHECK(!snapshot_load(&cpc, bytes, SNAPSHOT_HEADER_SIZE, &problem));
-  TEST_CHECK(!snapshot_load(&cpc, bytes, 4, &problem));
+  TEST_CHECK(!cpc_snapshot_load(&cpc, bytes, CPC_SNAPSHOT_HEADER_SIZE, &problem));
+  TEST_CHECK(!cpc_snapshot_load(&cpc, bytes, 4, &problem));
 
   bytes[0x10] = 9; /* a version from the future */
   bytes[0x6B] = 64;
-  TEST_CHECK(!snapshot_load(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!cpc_snapshot_load(&cpc, bytes, sizeof bytes, &problem));
 }
 
 static void a_machine_survives_the_round_trip(void) {
@@ -110,11 +110,11 @@ static void a_machine_survives_the_round_trip(void) {
   cpc.crtc.address_register = 12;
 
   const char *problem = NULL;
-  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
-  TEST_EQUAL(snapshot_size(&cpc), SNAPSHOT_HEADER_SIZE + 0x20000);
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(cpc_snapshot_size(&cpc), CPC_SNAPSHOT_HEADER_SIZE + 0x20000);
 
   power_on(&restored, other_ram, sizeof other_ram);
-  TEST_CHECK(snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
 
   TEST_EQUAL(restored.cpu.a, cpc.cpu.a);
   TEST_EQUAL(restored.cpu.f, cpc.cpu.f);
@@ -179,12 +179,12 @@ static void machines_restored_from_one_snapshot_agree(void) {
   TEST_CHECK(counter_when_saved != 0); /* or the program never ran */
 
   const char *problem = NULL;
-  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
 
   power_on(&restored, other_ram, sizeof other_ram);
-  TEST_CHECK(snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
   power_on(&twin, twin_ram, sizeof twin_ram);
-  TEST_CHECK(snapshot_load(&twin, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&twin, bytes, sizeof bytes, &problem));
 
   /* The restored machine picks up the count where it was left. */
   TEST_EQUAL(restored.ram[0x9000], counter_when_saved);
@@ -205,14 +205,14 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
   load_a_running_program();
   power_on(&cpc, ram, sizeof ram);
   const char *problem = NULL;
-  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
   bytes[0x42] = 9;         /* the selected register */
   bytes[0x43 + 4] = 0xFF;  /* R4 is seven bits wide */
   bytes[0x43 + 8] = 0xFF;  /* R8's writable bits have a hole in them */
   bytes[0x43 + 16] = 0xAA; /* R16 is a lightpen latch, read-only */
 
   power_on(&restored, other_ram, sizeof other_ram);
-  TEST_CHECK(snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
   TEST_EQUAL(restored.crtc.registers[4], 0x7F);
   TEST_EQUAL(restored.crtc.registers[8], 0xF3);
   TEST_EQUAL(restored.crtc.registers[16], 0x00);
@@ -232,9 +232,9 @@ static void the_memory_map_comes_back_with_it(void) {
   TEST_EQUAL(cpc_peek(&cpc, 0x4000), 0x77);
 
   const char *problem = NULL;
-  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
   power_on(&restored, other_ram, sizeof other_ram);
-  TEST_CHECK(snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
   TEST_EQUAL(restored.mmr, 0xC7);
   TEST_EQUAL(cpc_peek(&restored, 0x4000), 0x77);
   TEST_EQUAL(cpc_peek(&restored, 0x0000), 0x00); /* the ROM stayed off */
@@ -245,19 +245,19 @@ static void a_64k_snapshot_loads_into_a_64k_machine(void) {
   power_on(&cpc, ram, 0x10000);
   run(&cpc, 40000);
   const char *problem = NULL;
-  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
-  TEST_EQUAL(snapshot_size(&cpc), SNAPSHOT_HEADER_SIZE + 0x10000);
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(cpc_snapshot_size(&cpc), CPC_SNAPSHOT_HEADER_SIZE + 0x10000);
   TEST_EQUAL(bytes[0x6B], 64);
 
   power_on(&restored, other_ram, 0x10000);
-  TEST_CHECK(snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
   TEST_EQUAL(restored.cpu.pc, cpc.cpu.pc);
 
   /* And a 128K snapshot will not fit in it. */
   power_on(&cpc, ram, sizeof ram);
-  TEST_CHECK(snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
   power_on(&restored, other_ram, 0x10000);
-  TEST_CHECK(!snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
 }
 
 int main(void) {
@@ -268,5 +268,5 @@ int main(void) {
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
-  return TEST_REPORT("snapshot");
+  return TEST_REPORT("cpc snapshot");
 }
