@@ -2859,27 +2859,21 @@ static void a_skew_does_not_move_the_video_pointer(void) {
 /* Ch. 19.2.4 keys the substitution on "the condition C0=R1 not being met
    during the line", and ch. 19.2.5 repeats it: "The condition C0=R1 is just
    replaced by the condition C0=R0 in this case." R1 standing beyond the
-   line's end is the plainest way to miss the condition but not the only
-   one — an R1 of 0 loses to the opening on the character they share (ch.
-   18.3.1) — and a line that misses it any way earns the same border: half a
-   character early with no delay, a whole one at the deferred place with
-   one. */
-static void every_way_of_missing_r1_borders_alike(void) {
-  static const uint8_t missing_r1[] = {64, 0};
-
-  for (size_t way = 0; way < sizeof missing_r1 / sizeof missing_r1[0]; way++) {
-    for (uint8_t skew = 0; skew <= 2; skew++) {
-      program_standard();
-      write_register(1, missing_r1[way]);
-      write_register(8, (uint8_t)(skew << 4));
-      TEST_CHECK(run_to_row(1));
-      for (int character = 1; character <= 64; character++) {
-        uint64_t pins = crtc_tick(&crtc);
-        bool border = skew != 0 && crtc.c0 == skew - 1;
-        bool half = skew == 0 && crtc.c0 == 63;
-        TEST_EQUAL((pins & CRTC_DISPTMG) != 0, !border);
-        TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, !border && !half);
-      }
+   line's end is the plainest way to miss the condition, and a line that
+   misses it earns the same border whatever the delay: half a character
+   early with none, a whole one at the deferred place with one. */
+static void a_line_that_misses_r1_borders_at_r0(void) {
+  for (uint8_t skew = 0; skew <= 2; skew++) {
+    program_standard();
+    write_register(1, 64);
+    write_register(8, (uint8_t)(skew << 4));
+    TEST_CHECK(run_to_row(1));
+    for (int character = 1; character <= 64; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      bool border = skew != 0 && crtc.c0 == skew - 1;
+      bool half = skew == 0 && crtc.c0 == 63;
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, !border);
+      TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, !border && !half);
     }
   }
 }
@@ -3094,14 +3088,77 @@ static void the_r6_border_is_shut_for_the_whole_frame(void) {
   TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
 }
 
-static void an_r1_of_zero_leaves_the_line_displayed(void) {
-  /* Both conditions land on the same character, and the document gives the
-     opening priority (ch. 18.3.1). */
-  program_standard();
-  write_register(1, 0);
-  TEST_CHECK(run_to_row(1));
-  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
-  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+/* "If R1 is zeroed then no more characters are displayed, regardless of the
+   CRTC of a CPC" (ch. 17.1): the opening and C0=R1 land on the same
+   character, and the border has it — whatever the delay, and on the frame's
+   first line too, where an R6 of 0 has rules of its own (ch. 18.3.2). */
+static void an_r1_of_zero_borders_every_line(void) {
+  static const uint8_t r6s[] = {25, 0};
+  for (size_t index = 0; index < sizeof r6s / sizeof r6s[0]; index++) {
+    for (uint8_t skew = 0; skew <= 2; skew++) {
+      program_standard();
+      write_register(1, 0);
+      write_register(6, r6s[index]);
+      write_register(8, (uint8_t)(skew << 4));
+      TEST_CHECK(run_to_row(1));
+      uint64_t pins = 0;
+      do {
+        pins = crtc_tick(&crtc);
+      } while (crtc.c4 != 0 || crtc.c9 != 0 || crtc.c0 != 0);
+      for (int character = 0; character < 64 * 16; character++) {
+        if (pins & CRTC_DISPTMG) {
+          TEST_FAIL("R6=%u skew %u: C4=%u C9=%u C0=%u displayed with R1 at 0", r6s[index], skew,
+                    crtc.c4, crtc.c9, crtc.c0);
+          return;
+        }
+        pins = crtc_tick(&crtc);
+      }
+    }
+  }
+}
+
+/* Ch. 17.5.1's four drawings for types 0, 1 and 2: an OUT R1,0 whose write
+   reaches the chip before the line's C0=0, or on it, is "just in time" and
+   the line is BORDER; one reaching it on C0=1 is "too late" and the line is
+   displayed, to be bordered from the next. Written where this harness
+   writes everything, after the tick that named the character; the
+   character a write lands on keeps the pins it was given (see crtc.c). */
+static void r1_of_zero_is_just_in_time_up_to_the_lines_c0_of_0(void) {
+  static const struct {
+    uint8_t lands_on; /* C0 when the write reaches the chip */
+    bool line_displayed;
+  } cases[] = {{0x3E, false}, {0x3F, false}, {0x00, false}, {0x01, true}};
+  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
+    program_standard();
+    TEST_CHECK(run_to_row(1));
+    while (crtc.c0 != cases[index].lands_on) {
+      crtc_tick(&crtc);
+    }
+    write_register(1, 0);
+    /* The rest of the line the write lands on, or the whole of the next one
+       where it lands before C0=0: C0 2 to 63 carry the answer either way,
+       and C0=1 too wherever the write came before it. */
+    while (crtc.c0 != 1) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c0 == 1) {
+        TEST_CHECK(!(pins & CRTC_DISPTMG));
+      }
+    }
+    int displayed = 0;
+    for (int character = 2; character <= 63; character++) {
+      displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
+    }
+    TEST_EQUAL(displayed, cases[index].line_displayed ? 62 : 0);
+    /* And whichever it was, the line after it is border. */
+    while (crtc.c0 != 63) {
+      crtc_tick(&crtc);
+    }
+    displayed = 0;
+    for (int character = 0; character <= 63; character++) {
+      displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
+    }
+    TEST_EQUAL(displayed, 0);
+  }
 }
 
 static void a_c0_that_overflowed_does_not_open_the_display(void) {
@@ -3227,7 +3284,7 @@ int main(void) {
   TEST_RUN(the_border_on_function_moves_no_comparison);
   TEST_RUN(the_border_on_function_silences_the_interlace_bits);
   TEST_RUN(a_skew_does_not_move_the_video_pointer);
-  TEST_RUN(every_way_of_missing_r1_borders_alike);
+  TEST_RUN(a_line_that_misses_r1_borders_at_r0);
   TEST_RUN(an_r1_moved_behind_c0_earns_the_missed_border);
   TEST_RUN(a_skew_cancelled_in_time_leaves_the_border_where_it_was);
   TEST_RUN(the_border_on_function_leaves_the_r6_border_standing);
@@ -3237,7 +3294,8 @@ int main(void) {
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);
   TEST_RUN(the_r6_border_is_shut_for_the_whole_frame);
-  TEST_RUN(an_r1_of_zero_leaves_the_line_displayed);
+  TEST_RUN(an_r1_of_zero_borders_every_line);
+  TEST_RUN(r1_of_zero_is_just_in_time_up_to_the_lines_c0_of_0);
   TEST_RUN(a_c0_that_overflowed_does_not_open_the_display);
   TEST_RUN(a_sync_width_of_zero_makes_no_hsync);
   return TEST_REPORT("crtc");

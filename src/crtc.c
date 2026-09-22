@@ -719,34 +719,35 @@ static void begin_syncs(crtc_t *crtc) {
   }
 }
 
-/* The character the R1 border is raised on: where C0 meets R1, or where C0
-   meets R0 having not met R1 all line, since "the condition C0=R1 not being
+/* The other character the R1 border is raised on: where C0 meets R0 having
+   not met R1 all line, since "the condition C0=R1 not being
    met during the line ... the condition C0=R0 therefore replaces the
    condition C0=R1" (ch. 19.2.4). R1 standing beyond the line's end is the
-   common way to miss it, but not the only one: an R1 of 0 loses to the
-   opening on the character they share (ch. 18.3.1), and an R1 moved behind
-   C0 is never met again either, so what is read here is the latch rather
-   than the registers.
+   common way to miss it, but not the only one: an R1 moved behind C0 is
+   never met again either, so what is read here is the latch rather than
+   the registers.
 
    The substitution needs somewhere for the border to go. Only a delay gives
    it a character of its own; with none the chip sends the half character of
    ch. 17.6.2 early instead and this latch is left alone, and the BORDER ON
    function is no delay and gets no character either. Where the border is
    handed out is a separate question, which the skew answers. */
-static bool border_r1_begins_here(const crtc_t *crtc) {
-  const uint8_t *r = crtc->registers;
-  if (crtc->c0 == r[1]) {
-    return true;
-  }
+static bool r0_stands_in_for_r1(const crtc_t *crtc) {
   uint8_t skew = display_skew(crtc);
   bool delayed = skew == SKEW_ONE_CHARACTER || skew == SKEW_TWO_CHARACTERS;
-  return delayed && !crtc->display_r1 && crtc->c0 == r[0];
+  return delayed && !crtc->display_r1 && crtc->c0 == crtc->registers[0];
 }
 
 /* DISPLAY ENABLE is two latches the equalities throw rather than two
    comparisons standing (ch. 6.1.3, 17.1, 18.1). R1's opens where the line
    begins and shuts where C0 meets R1; when R1 is 0 both fall on the same
-   character and the opening wins (ch. 18.3.1). R6's shuts where C4 meets R6
+   character and the border wins: "If R1 is zeroed then no more characters
+   are displayed, regardless of the CRTC of a CPC" (ch. 17.1), which ch.
+   17.3's last diagram draws as whole rows of DISP-OFF and ch. 17.5.1 as
+   BORDER for types 0, 1 and 2. Ch. 18.3.1 names the same conflict and
+   says "it is the deactivation of the BORDER which is activated", which
+   read alone could give the opening the character; the drawings and the
+   plain sentence outweigh it. R6's shuts where C4 meets R6
    and nothing but a new frame opens it, and while it is shut R1 has no say
    (ch. 18.2.1, 18.2.2). The first line of a frame is exempt, which is what
    leaves an R6 of 0 cancellable there (ch. 18.3.2). */
@@ -761,11 +762,17 @@ static void throw_display_latches(crtc_t *crtc) {
      which character hands it to the pin (ch. 19.2.3, 19.2.5.3). */
   crtc->display_r1_earlier[1] = crtc->display_r1_earlier[0];
   crtc->display_r1_earlier[0] = crtc->display_r1;
-  if (border_r1_begins_here(crtc)) {
+  /* The stand-in comes before the opening and the equality after it: only
+     C0=R1 itself outranks the line's head, and where R0 is 0 the two share
+     every character. */
+  if (r0_stands_in_for_r1(crtc)) {
     crtc->display_r1 = true;
   }
   if (crtc->c0 == 0 && crtc->c0_reached_r0) {
     crtc->display_r1 = false;
+  }
+  if (crtc->c0 == r[1]) {
+    crtc->display_r1 = true;
   }
   if (first_line && crtc->c0 == 0) {
     crtc->display_r6 = false;
@@ -805,11 +812,10 @@ static void latch_status_border(crtc_t *crtc) {
    BORDER ON "0.5 µsec too early", so one byte of border stands before C0
    goes to 0 and the BORDER OFF follows on the next character. Where R1 was
    reached the display is off already and there is nothing to move (ch.
-   17.6.2). Never reached is wider than R1 standing above R0: an R1 of 0
-   loses its own character to the opening (ch. 18.3.1) and so never shuts
-   the display at all, and an R1 moved out of C0's way mid-line has not shut
-   it either. The Compendium settles neither case outright, and nothing we
-   can run grades them.
+   17.6.2). Never reached is wider than R1 standing above R0: an R1 moved
+   out of C0's way mid-line has not shut the display either. The
+   Compendium does not settle that case outright, and nothing we can run
+   grades it.
 
    The second is a frame's first line where R6 is 0. C4 reaching R6 asks for
    the border and the new frame takes it away again; the two land a byte
@@ -978,6 +984,20 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
       }
       if (crtc->address_register == 3) {
         crtc->r3_written_for_this_character = true;
+      }
+      if (crtc->address_register == 1 && crtc->registers[1] == crtc->c0) {
+        /* "The condition C0=R1 is considered immediately on a line" (ch.
+           17.3): a write that makes the equality true shuts the display
+           for the rest of the character's line, rather than waiting for C0
+           to meet the new value again. Ch. 17.5.1 has an R1 of 0 written
+           on C0=0 arrive "just in time" on types 0, 1 and 2, and its
+           drawing borders that character too; here it keeps the pins it
+           was given at its tick. VMA' is not captured by the write. Of a
+           type 2 the chapter says "An update of R1 on position C0=R1
+           arrives too late. VMA' update has already taken place using the
+           old value of R1" (ch. 17.4.3), a type 1 takes it in time (ch.
+           17.4.2), and of a type 0 it says nothing. */
+        crtc->display_r1 = true;
       }
       if (crtc->address_register == 7) {
         /* Writing R7 changes the comparison whatever the value written, so

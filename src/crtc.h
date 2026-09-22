@@ -193,8 +193,11 @@
  * character C0 names 1, where the old value ends the line and the new one
  * counts C0 on; the per-type divergences of the timing; the rest of what
  * ch. 13.2.1 gives a line's first three microseconds — the counter updates
- * those characters schedule for a later one. Every other comparison is made
- * where it stands. Nor is the read table of ch. 21.2.3: it names a register by
+ * those characters schedule for a later one; and the character a write of R1
+ * lands on, which keeps the display it was given where ch. 17.5.1 borders it
+ * too, R1's equality being taken where it is written as well as where it
+ * stands (ch. 17.3). Every other comparison is made where it stands. Nor is
+ * the read table of ch. 21.2.3: it names a register by
  * three bits rather than five and mirrors itself onto the status port, where
  * types 3 and 4 are answered here as a type 2 is. Two of the border's rules
  * move DISPLAY ENABLE inside a character — the byte of border at C0=R0 on a
@@ -384,8 +387,9 @@ typedef struct {
   bool vsync_began_on_its_half_line;
 
   /* DISPLAY ENABLE is two latches rather than two comparisons (ch. 6.1.3,
-     18.2.1). The R1 one opens at the head of every line; the R6 one, once
-     shut, is shut for the frame, and it outranks the other. */
+     18.2.1). The R1 one opens at the head of every line and shuts where C0
+     meets R1, on that same character when R1 is 0 (ch. 17.1); the R6 one,
+     once shut, is shut for the frame, and it outranks the other. */
   bool display_r1;
   /* What that latch was one character ago and two, because the SKEW-DISPTMG
      functions hold the display enable back by one or the other before it
