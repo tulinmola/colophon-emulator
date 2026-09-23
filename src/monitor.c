@@ -2,6 +2,8 @@
  * monitor.c — the beam, and the circuit that separates the two syncs.
  */
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "monitor.h"
 
@@ -46,6 +48,23 @@ void monitor_receive(monitor_t *monitor, const uint8_t *samples, uint8_t count, 
     monitor->beam_x = (uint16_t)(monitor->line_sync_centre + monitor->sync_held / 2);
   }
   monitor->sync = sync;
+
+  /* A run outside a sync moves the beam along one row: nothing here moves
+     it down, so the row is the same for every sample, and the samples that
+     land on the raster are the ones before its width. The whole-run step
+     stands for the walk while the sum stays inside the counter; a run that
+     would carry it past its last value is left to the walk, which brings
+     the beam round to the raster's left where this cannot. */
+  if (!sync && (uint32_t)monitor->beam_x + count <= UINT16_MAX) {
+    if (monitor->beam_y < monitor->height && monitor->beam_x < monitor->width) {
+      uint16_t room = (uint16_t)(monitor->width - monitor->beam_x);
+      uint8_t painted = count < room ? count : (uint8_t)room;
+      memcpy(&monitor->framebuffer[(size_t)monitor->beam_y * monitor->width + monitor->beam_x],
+             samples, painted);
+    }
+    monitor->beam_x = (uint16_t)(monitor->beam_x + count);
+    return;
+  }
 
   for (uint8_t index = 0; index < count; index++) {
     if (sync) {

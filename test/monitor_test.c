@@ -158,6 +158,32 @@ static void samples_past_the_edge_are_dropped(void) {
   TEST_EQUAL(at(0, 1), 0); /* it did not wrap onto the next line */
 }
 
+/* A line that never syncs carries the beam along until the counter that
+   holds it runs out of values and comes round to zero, where the raster is:
+   16384 runs of 4 samples take it to 65536. A CPC can reach this — a sync
+   width of zero leaves the Gate Array nothing to send, and the beam runs on
+   for frames — and what the counter does there is a property of its width
+   rather than of any tube, so it is pinned here to be moved knowingly. */
+static void a_beam_that_outruns_its_counter_comes_round_to_the_left(void) {
+  power_on();
+  for (int run = 0; run < WIDTH / RUN; run++) {
+    receive(0x11, RUN, false); /* the raster, painted once */
+  }
+  /* Two samples off the four, so that the run which exhausts the counter
+     straddles its last value rather than landing on it. */
+  receive(0x22, 2, false);
+  for (int run = 0; run < (65536 - WIDTH - 2) / RUN; run++) {
+    receive(0x66, RUN, false); /* past the raster's edge, painting nothing */
+  }
+  TEST_EQUAL(monitor.beam_x, 65534);
+  TEST_EQUAL(at(0, 0), 0x11);
+  receive(0x99, RUN, false);
+  TEST_EQUAL(monitor.beam_x, 2);
+  TEST_EQUAL(at(0, 0), 0x99); /* the two samples past the counter's last */
+  TEST_EQUAL(at(1, 0), 0x99);
+  TEST_EQUAL(at(2, 0), 0x11);
+}
+
 static void an_unplugged_monitor_ignores_the_cable(void) {
   monitor_init(&monitor, NULL, WIDTH, HEIGHT, FRAME_SYNC, SYNC_CENTRE);
   receive(0x55, RUN, false);
@@ -176,6 +202,7 @@ int main(void) {
   TEST_RUN(a_short_pulse_arms_the_next_frame);
   TEST_RUN(the_beam_clamps_at_the_bottom);
   TEST_RUN(samples_past_the_edge_are_dropped);
+  TEST_RUN(a_beam_that_outruns_its_counter_comes_round_to_the_left);
   TEST_RUN(an_unplugged_monitor_ignores_the_cable);
   return TEST_REPORT("monitor");
 }
