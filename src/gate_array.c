@@ -1,12 +1,17 @@
 /*
  * gate_array.c — the registers and the interrupt generator.
  */
+#include <stddef.h>
+
 #include "gate_array.h"
+
+static void fill_pens_of_byte(void);
 
 void gate_array_init(gate_array_t *gate_array) {
   *gate_array = (gate_array_t){0};
   gate_array->lower_rom_enabled = true;
   gate_array->upper_rom_enabled = true;
+  fill_pens_of_byte();
 }
 
 void gate_array_write(gate_array_t *gate_array, uint8_t data) {
@@ -221,6 +226,28 @@ static uint8_t decode_pens(uint8_t mode, uint8_t byte, uint8_t pens[8]) {
   }
 }
 
+/* The pens of every byte in every mode, each pixel already repeated to its
+   width. Every init fills it from the decoder above, which stays the one
+   account of how a byte is read and writes the same bytes every time; a
+   chip that has not been through init paints from an empty table. */
+static uint8_t pens_of_byte[4][256][GATE_ARRAY_SAMPLES_PER_CHARACTER / 2];
+
+static void fill_pens_of_byte(void) {
+  for (uint8_t mode = 0; mode < 4; mode++) {
+    for (uint16_t byte = 0; byte < 256; byte++) {
+      uint8_t pens[8];
+      uint8_t count = decode_pens(mode, (uint8_t)byte, pens);
+      uint8_t pixel_width = (uint8_t)(GATE_ARRAY_SAMPLES_PER_CHARACTER / 2 / count);
+      uint8_t written = 0;
+      for (uint8_t pixel = 0; pixel < count; pixel++) {
+        for (uint8_t repeat = 0; repeat < pixel_width; repeat++) {
+          pens_of_byte[mode][byte][written++] = pens[pixel];
+        }
+      }
+    }
+  }
+}
+
 /* Each of the character's two bytes is drawn as the display enable found
    it: the chip can put the border on one and not the other (ch. 17.6.2,
    18.3.2). A blanked beam takes both. */
@@ -228,22 +255,22 @@ void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool di
                       uint8_t byte0, uint8_t byte1,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
   bool blanked = gate_array->black_hsync || gate_array->black_vsync;
-  uint8_t written = 0;
   for (uint8_t half = 0; half < 2; half++) {
+    uint8_t *half_samples = samples + (size_t)half * (GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
     if (blanked || !gate_array->latched_display[half]) {
       uint8_t colour = blanked ? GATE_ARRAY_BLACK : gate_array->inks[16];
-      for (uint8_t index = 0; index < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; index++) {
-        samples[written++] = colour;
+      for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; sample++) {
+        half_samples[sample] = colour;
       }
       continue;
     }
-    uint8_t pens[8];
-    uint8_t count = decode_pens(gate_array->mode, gate_array->latched_bytes[half], pens);
-    uint8_t pixel_width = (uint8_t)(8 / count);
-    for (uint8_t pixel = 0; pixel < count; pixel++) {
-      for (uint8_t repeat = 0; repeat < pixel_width; repeat++) {
-        samples[written++] = gate_array->inks[pens[pixel]];
-      }
+    /* The mode is a public field and a row index here: RMR keeps two bits of
+       it, and anything wider takes the last row, where the decoder's own
+       default sent it. */
+    uint8_t mode = gate_array->mode < 4 ? gate_array->mode : 3;
+    const uint8_t *pens = pens_of_byte[mode][gate_array->latched_bytes[half]];
+    for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; sample++) {
+      half_samples[sample] = gate_array->inks[pens[sample]];
     }
   }
   gate_array->latched_bytes[0] = byte0;

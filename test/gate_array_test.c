@@ -363,6 +363,106 @@ static void mode_3_ignores_four_bits_a_byte(void) {
   }
 }
 
+/* Grimware's byte/pixel table in its own direction: for each mode, what the
+   byte carries from bit 7 down to bit 0 — which pixel of the byte, and which
+   bit of that pixel's pen ("The Gate Array" (Grim), byte/pixel structure).
+   The decoder states the inverse, pen by pen, from the same table; a slip in
+   either transcription shows here as a disagreement. NO_PIXEL names the four
+   bits mode 3 drops. */
+#define NO_PIXEL 0xFF
+static const struct {
+  uint8_t pixel;
+  uint8_t pen_bit;
+} carried_by_bit[4][8] = {
+    {{0, 0}, {1, 0}, {0, 2}, {1, 2}, {0, 1}, {1, 1}, {0, 3}, {1, 3}},
+    {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}},
+    {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 0}, {5, 0}, {6, 0}, {7, 0}},
+    {{0, 0}, {1, 0}, {NO_PIXEL, 0}, {NO_PIXEL, 0}, {0, 1}, {1, 1}, {NO_PIXEL, 0}, {NO_PIXEL, 0}},
+};
+
+/* The pens a byte paints in a mode, and how many pixels the mode names. */
+static uint8_t pens_from_the_structure(uint8_t mode, uint8_t byte, uint8_t pens[8]) {
+  for (uint8_t pixel = 0; pixel < 8; pixel++) {
+    pens[pixel] = 0;
+  }
+  uint8_t pixels = 0;
+  for (uint8_t bit = 0; bit < 8; bit++) {
+    uint8_t pixel = carried_by_bit[mode][bit].pixel;
+    if (pixel == NO_PIXEL) {
+      continue;
+    }
+    if (pixel >= pixels) {
+      pixels = (uint8_t)(pixel + 1);
+    }
+    if (byte & (1 << (7 - bit))) {
+      pens[pixel] |= (uint8_t)(1 << carried_by_bit[mode][bit].pen_bit);
+    }
+  }
+  return pixels;
+}
+
+/* A colour for every pen that is not the pen's own number, so that a sample
+   answers for the palette it was read through as well as for the pen. */
+static uint8_t ink_of_pen(uint8_t pen) { return (uint8_t)(0x1F - pen); }
+
+static void inks_differ_from_their_pens(void) {
+  for (uint8_t pen = 0; pen < 16; pen++) {
+    gate_array_write(&gate_array, pen);
+    gate_array_write(&gate_array, (uint8_t)(0x40 | ink_of_pen(pen)));
+  }
+}
+
+static void every_byte_paints_what_the_structure_says(void) {
+  for (uint8_t mode = 0; mode < 4; mode++) {
+    gate_array_init(&gate_array);
+    inks_differ_from_their_pens();
+    gate_array_write(&gate_array, (uint8_t)(0x8C | mode));
+    pulse_hsync();
+    for (uint16_t value = 0; value < 256; value++) {
+      /* The character's two halves carry different bytes, so a half painted
+         from the other one's byte disagrees. */
+      uint8_t bytes[2] = {(uint8_t)value, (uint8_t)(value ^ 0xFF)};
+      uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+      serialise(bytes[0], bytes[1], samples);
+      for (uint8_t half = 0; half < 2; half++) {
+        uint8_t pens[8];
+        uint8_t pixels = pens_from_the_structure(mode, bytes[half], pens);
+        uint8_t pixel_width = (uint8_t)(GATE_ARRAY_SAMPLES_PER_CHARACTER / 2 / pixels);
+        for (uint8_t pixel = 0; pixel < pixels; pixel++) {
+          for (uint8_t repeat = 0; repeat < pixel_width; repeat++) {
+            uint8_t sample = (uint8_t)(half * (GATE_ARRAY_SAMPLES_PER_CHARACTER / 2) +
+                                       pixel * pixel_width + repeat);
+            TEST_EQUAL(samples[sample], ink_of_pen(pens[pixel]));
+          }
+        }
+      }
+    }
+  }
+}
+
+/* RMR keeps two bits of the mode, so a wider value can only come from
+   outside the chip: a host writing the field, or a snapshot read into it.
+   The serialiser indexes four rows by it and must read no further, and every
+   value wider than the two bits answers as mode 3 did before there was a
+   table to index. */
+static void a_mode_wider_than_rmr_keeps_paints_as_mode_3(void) {
+  gate_array_init(&gate_array);
+  inks_differ_from_their_pens();
+  gate_array_write(&gate_array, 0x8F); /* RMR: mode 3 */
+  pulse_hsync();
+  uint8_t expected[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+  serialise(0x88, 0x30, expected);
+  const uint8_t wider[] = {4, 5, 6, 7, 0x80, 0xFF};
+  for (size_t index = 0; index < sizeof wider / sizeof wider[0]; index++) {
+    gate_array.mode = wider[index];
+    uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+    serialise(0x88, 0x30, samples);
+    for (int sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+      TEST_EQUAL(samples[sample], expected[sample]);
+    }
+  }
+}
+
 static void the_border_fills_a_character_that_is_not_displayed(void) {
   gate_array_init(&gate_array);
   gate_array_write(&gate_array, 0x10); /* PENR: the border */
@@ -518,6 +618,10 @@ static void the_beam_is_blanked_for_twenty_six_lines(void) {
     run_standard_line(false);
     if (gate_array.black_vsync) {
       blanked++;
+      uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+      draw_character(true, 0xFF, 0xFF, samples);
+      draw_character(true, 0xFF, 0xFF, samples);
+      TEST_EQUAL(samples[0], GATE_ARRAY_BLACK);
     }
   }
   TEST_EQUAL(blanked, 24); /* plus the line that began it and the one that
@@ -567,6 +671,8 @@ int main(void) {
   TEST_RUN(mode_1_paints_four_pixels_a_byte);
   TEST_RUN(mode_2_paints_a_pixel_a_bit);
   TEST_RUN(mode_3_ignores_four_bits_a_byte);
+  TEST_RUN(every_byte_paints_what_the_structure_says);
+  TEST_RUN(a_mode_wider_than_rmr_keeps_paints_as_mode_3);
   TEST_RUN(the_border_fills_a_character_that_is_not_displayed);
   TEST_RUN(the_border_can_take_one_byte_of_a_character);
   TEST_RUN(the_beam_is_blanked_through_the_syncs);
