@@ -345,6 +345,7 @@ test-all: override CRTC := 0
 test-all: override DEMO_FRAMES :=
 test-all: test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser
 	@$(MAKE) --no-print-directory test-shaker CRTC=1
+	@$(MAKE) --no-print-directory test-demos CRTC=1
 
 format:
 	$(CLANG_FORMAT) -i $(SOURCES) $(HEADERS)

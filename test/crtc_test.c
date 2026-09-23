@@ -535,6 +535,80 @@ static void types_0_and_1_want_different_r9s_for_a_row(void) {
    equivalence" (ch. 19.6.2, 19.6.4) — so a frame carrying it is a line
    longer than the frame beside it, and the lengths turn over wherever the
    parity does. */
+/* Ch. 19.5.3's diagrams for a pulse of the interlace video mode on a type
+   1, read off the page as drawn: sixteen of them, one for each way the
+   frame's parity, C4's, R9's and C9's can stand when the mode is asked for
+   and given up again. Each names ParityC9 and ParityFrame after the OUT
+   R8,3 and after the OUT R8,0 that follows it, and those are what this
+   holds the chip to. Where the chapter's prose gives the rules as three
+   lines of arithmetic, the diagrams give their answers case by case, and a
+   slip in reading either shows up as a disagreement with the other. One
+   rule of the three is not falsifiable here: in all sixteen the frame takes
+   a parity on leaving the mode that it already held, so what the leaving
+   does is invisible to them. */
+static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
+  static const struct {
+    bool frame_parity_odd; /* the parity the pulse finds */
+    bool c4_odd;
+    bool r9_odd;
+    bool c9_odd;
+    bool parity_c9_after_on;
+    bool frame_parity_after_on;
+    bool parity_c9_after_off;
+    bool frame_parity_after_off;
+  } cases[] = {
+      /* Initial parity EVEN (page 211) */
+      {false, false, false, false, false, false, false, false},
+      {false, false, true, false, false, false, false, false},
+      {false, false, false, true, false, false, false, false},
+      {false, false, true, true, false, false, false, false},
+      {false, true, false, false, true, false, false, false},
+      {false, true, true, false, false, false, false, false},
+      {false, true, false, true, true, false, false, false},
+      {false, true, true, true, false, false, false, false},
+      /* Initial parity ODD (page 212) */
+      {true, false, false, false, false, false, false, false},
+      {true, false, true, false, false, false, false, false},
+      {true, false, false, true, true, true, true, true},
+      {true, false, true, true, true, true, true, true},
+      {true, true, false, false, true, false, false, false},
+      {true, true, true, false, false, false, false, false},
+      {true, true, false, true, false, true, true, true},
+      {true, true, true, true, true, true, true, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 1);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 35);
+    write_register(9, cases[index].r9_odd ? 7 : 6);
+    /* The chip is walked to the standing the diagram names rather than set
+       to it: the counters and the frame's parity are the chip's own, and a
+       state written into them by hand is one it need never have reached. */
+    bool found = false;
+    for (long character = 0; character < 8L * 64 * 400 && !found; character++) {
+      crtc_tick(&crtc);
+      found = crtc.c0 == 20 && ((crtc.c4 & 1) != 0) == cases[index].c4_odd &&
+              ((crtc.c9 & 1) != 0) == cases[index].c9_odd &&
+              crtc.parity_frame == cases[index].frame_parity_odd;
+    }
+    TEST_CHECK(found);
+    if (!found) {
+      continue;
+    }
+    write_register(8, 3); /* OUT R8,3: the mode is asked for */
+    TEST_EQUAL(crtc.parity_c9_held, cases[index].parity_c9_after_on);
+    TEST_EQUAL(crtc.parity_frame, cases[index].frame_parity_after_on);
+    write_register(8, 0); /* and given up again, on the same line */
+    TEST_EQUAL(crtc.parity_c9_held, cases[index].parity_c9_after_off);
+    TEST_EQUAL(crtc.parity_frame, cases[index].frame_parity_after_off);
+  }
+}
+
 static void types_0_and_2_alone_can_freeze_their_frame_parity(void) {
   static const struct {
     uint8_t type;
@@ -3209,6 +3283,7 @@ int main(void) {
   TEST_RUN(each_type_keeps_its_own_vsync_length);
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
+  TEST_RUN(an_r8_pulse_leaves_the_parities_the_diagrams_draw);
   TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
   TEST_RUN(each_type_counts_the_adjustment_lines_its_own_way);
   TEST_RUN(a_type_1_holds_a_frame_open_where_r5_is_cancelled);

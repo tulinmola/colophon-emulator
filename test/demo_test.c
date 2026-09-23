@@ -420,9 +420,19 @@ int main(int argc, char **argv) {
   fprintf(written, "hash of the whole raster. Frames are taken at the monitor's retrace, every\n");
   fprintf(written, "%ld of them, and %ld are played in all.\n\n", frames_between_captures,
           frames_to_play);
-  fprintf(written, "This record grades nothing. It says what the machine drew when a human\n");
-  fprintf(written, "last compared it, part by part, with a capture of the same demo on real\n");
-  fprintf(written, "hardware. A line that moves is a change to look at: the tier writes the\n");
+  fprintf(written, "This record grades nothing. ");
+  if (crtc_type == 0) {
+    fprintf(written, "It says what the machine drew when a human\n");
+    fprintf(written, "last compared it, part by part, with a capture of the same demo on real\n");
+    fprintf(written, "hardware. ");
+  } else {
+    /* No capture of this demo on a machine of this type has been set
+       against it, and a record must not claim a comparison nobody made. */
+    fprintf(written, "No capture of this demo on a real machine of this\n");
+    fprintf(written, "type has been set beside it, so it says only what this machine drew on\n");
+    fprintf(written, "the day it was taken. ");
+  }
+  fprintf(written, "A line that moves is a change to look at: the tier writes the\n");
   fprintf(written, "frames that moved as pictures beside this file.\n\n");
   fprintf(written, "The disc played is %s, %zu bytes hashing to %016llx, which\n", DISC_IMAGE,
           disc_image_length, (unsigned long long)fnv1a(disc_image, disc_image_length));

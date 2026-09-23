@@ -77,9 +77,10 @@ make test-firmware      # boots the real firmware and types at it
 make test-shaker        # sets what Shaker's modules say against the record
 make test-shaker CRTC=1 # the same, on a machine a program names a type 1
 make test-demos         # plays a demo to the end and sets its frames against the record
+make test-demos CRTC=1  # the same, on a machine a program names a type 1
 make test-single-step   # the complete SingleStepTests corpus
 make test-exerciser     # the Z80 instruction set exerciser
-make test-all           # all seven, with Shaker against both records
+make test-all           # all seven, with Shaker and the demo against both records
 ```
 
 And one that asserts nothing, for the before and after of a change made for speed:
