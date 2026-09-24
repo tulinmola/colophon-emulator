@@ -738,6 +738,24 @@ static bool r0_stands_in_for_r1(const crtc_t *crtc) {
   return delayed && !crtc->display_r1 && crtc->c0 == crtc->registers[0];
 }
 
+/* Whether an R6 of 0 on a frame's first line is a conflict for this type:
+   "when C4=R6=0 and C9=0 on CRTC's 0 and 2, a conflict occurs (this conflict
+   does not exist when R6>0)" (ch. 18.3.2), which is both the alternation the
+   line comes out as and the deadline it can be taken back before. A type 1
+   meets the same standing and settles it the other way, with a border that
+   stands for the rest of the frame (ch. 18.3.3), and types 3 and 4 never
+   meet it: "no conflict exists since the management of R6=0 does not exist
+   during the line and is tested only once" (ch. 18.3.4). */
+static bool takes_the_r6_conflict(const crtc_t *crtc) { return crtc->type == 0 || crtc->type == 2; }
+
+/* And whether C4 is measured against R6 at every character of a line or only
+   where the line begins. The same sentence of ch. 18.3.4 gives types 3 and 4
+   the single test, which is what leaves an R6 written mid-line on those two
+   waiting for the next one. */
+static bool tests_r6_every_character(const crtc_t *crtc) {
+  return crtc->type != 3 && crtc->type != 4;
+}
+
 /* DISPLAY ENABLE is two latches the equalities throw rather than two
    comparisons standing (ch. 6.1.3, 17.1, 18.1). R1's opens where the line
    begins and shuts where C0 meets R1; when R1 is 0 both fall on the same
@@ -776,7 +794,13 @@ static void throw_display_latches(crtc_t *crtc) {
   }
   if (first_line && crtc->c0 == 0) {
     crtc->display_r6 = false;
-  } else if (crtc->c4 == r[6] && !first_line) {
+  } else if (crtc->c4 == r[6] && !first_line && (tests_r6_every_character(crtc) || crtc->c0 == 0)) {
+    crtc->display_r6 = true;
+  }
+  /* The one thing that makes the first line's cancellable border stand: "in
+     this situation however, if R6 is 0 when C0=R1, the BORDER becomes
+     definitive" (ch. 18.3.2). Nothing inside the frame opens it again. */
+  if (first_line && r[6] == 0 && crtc->c0 == r[1] && takes_the_r6_conflict(crtc)) {
     crtc->display_r6 = true;
   }
 }
@@ -832,7 +856,7 @@ static uint64_t pins_of(const crtc_t *crtc) {
     border_r1 = crtc->display_r1_earlier[skew - 1];
   }
   bool display = !border_r1 && !crtc->display_r6 && skew != SKEW_BORDER_ON;
-  bool r6_conflict = crtc->c4 == 0 && crtc->c9 == 0 && r[6] == 0;
+  bool r6_conflict = takes_the_r6_conflict(crtc) && crtc->c4 == 0 && crtc->c9 == 0 && r[6] == 0;
   /* Where a delay is programmed the border of a line R1 never reached is a
      character of its own at the deferred place, not the half character the
      chip would otherwise send early (ch. 17.6.2, 19.2.4). */
@@ -979,6 +1003,13 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     if (mask != 0) {
       bool was_video_mode = interlace_video_asked(crtc);
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
+      if (crtc->address_register == 6 && crtc->type == 1 && crtc->registers[6] == 0 &&
+          crtc->c4 == 0 && crtc->c9 == 0) {
+        /* "However, if C4=R6=0 (1st line-character of a new frame) during
+           this update, BORDER R6 becomes true first for all the rest of the
+           frame, until the new frame" (ch. 18.3.3). */
+        crtc->display_r6 = true;
+      }
       if (crtc->address_register == 8) {
         take_up_r8_parity(crtc, was_video_mode);
       }

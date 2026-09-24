@@ -2726,15 +2726,57 @@ static void an_r6_of_zero_alternates_the_first_lines_bytes(void) {
 
   /* Nor is it any row's first line: with R9 of 0 every row is one line long,
      and C4 leaves R6 behind after the first of them, so the conflict is the
-     frame's own and the rows after it are whole. */
+     frame's own and the rows after it are whole. R1 is put where C0 cannot
+     reach it, which is the chapter's own way of holding the conflict open:
+     an R1 met while R6 still stands at 0 makes the border definitive and
+     there would be no row left to look at (ch. 18.3.2). */
   program_standard();
   write_register(6, 0);
   write_register(9, 0);
+  write_register(1, 64); /* R0 + 1 */
   TEST_CHECK(run_to_row(1));
   for (int character = 0; character < 8; character++) {
     uint64_t pins = crtc_tick(&crtc);
     TEST_CHECK(pins & CRTC_DISPTMG);
     TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, crtc.c0 != 63);
+  }
+}
+
+/* The frame's first line is where an R6 of 0 can still be taken back, and
+   the character C0 meets R1 on is the deadline: "in this situation however,
+   if R6 is 0 when C0=R1, the BORDER becomes definitive", where an R1 put out
+   of C0's reach leaves it cancellable — "if we prevent C0=R1 on the line
+   C4=C9=0 (for example R1=R0+1), and R6 is no longer equal to 0, then the
+   BORDER is deactivated on the following line" (ch. 18.3.2). Ch. 18.3.3
+   settles the same standing on a type 1 the other way, and ch. 18.3.4 says
+   types 3 and 4 never meet it. */
+static void an_r6_of_zero_is_taken_back_only_before_r1(void) {
+  static const struct {
+    const char *what;
+    uint8_t r1;         /* 40 is met on the line; 64 is not */
+    bool taken_back;    /* whether R6 is written above 0 on the first line */
+    bool borders_after; /* what the frame's second row comes out as */
+  } cases[] = {
+      {"taken back after C0 met R1", 40, true, true},
+      {"taken back with R1 out of reach", 64, true, false},
+      {"never taken back", 40, false, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    program_standard();
+    write_register(9, 0); /* a row to a line, so the second row is the second line */
+    write_register(1, cases[index].r1);
+    write_register(6, 0);
+    TEST_CHECK(run_to_row(0));
+    /* Along the first line, past R1 wherever it stands. */
+    for (int character = 0; character < 50; character++) {
+      crtc_tick(&crtc);
+    }
+    if (cases[index].taken_back) {
+      write_register(6, 25);
+    }
+    TEST_CHECK(run_to_row(1));
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_EQUAL((pins & CRTC_DISPTMG) == 0, cases[index].borders_after);
   }
 }
 
@@ -3351,6 +3393,7 @@ int main(void) {
   TEST_RUN(the_video_mode_still_takes_the_adjustment_lines);
   TEST_RUN(a_line_r1_never_ends_borders_its_last_byte);
   TEST_RUN(an_r6_of_zero_alternates_the_first_lines_bytes);
+  TEST_RUN(an_r6_of_zero_is_taken_back_only_before_r1);
   TEST_RUN(the_skew_delays_the_border_at_both_ends);
   TEST_RUN(a_skew_carries_the_border_round_the_lines_end);
   TEST_RUN(a_skew_makes_the_early_border_a_whole_character);
