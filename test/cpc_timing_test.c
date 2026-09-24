@@ -349,22 +349,28 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
    C0 rather than off any register: a line that overflows is one whose C0
    climbs past the R0 that was to end it.
 
-   What this does not yet pin is the difference the same chapter is named
-   for — "a difference in CRTC 1's consideration of the update of R0 on a
-   specific position of C0 according to Z80A instruction used" — because an
-   OUT (C),r8 here overflows on its own third microsecond exactly as the OUTI
-   does on its fifth, and the chapter has the two parting company. Nothing
-   outside this repository grades that yet: Shaker's B (6) is the group that
-   would, and it disagrees with this machine for reasons not yet found. */
+   What is not here is the difference the same chapter is named for: "a
+   difference in CRTC 1's consideration of the update of R0 on a specific
+   position of C0 according to Z80A instruction used". An OUT (C),r8 on that
+   character overflows the line here exactly as the OUTI does, where the
+   chapter has the two parting company — the chapter measures only the OUTI,
+   and giving the chip the quarter of the character a write arrives on, so
+   that a later write could miss this comparison, was tried and put back: it
+   left every graded line where it stood and turned Shaker's A (7), a working
+   technique on one-microsecond lines, from three steady screens into noise.
+   What would settle it is a measurement of the OUT (C),r8 case, which this
+   repository does not have. */
 static void an_outi_that_moves_r0_on_the_wrap_overflows_the_line(void) {
   const uint8_t line = 19; /* a line of twenty characters */
   static const struct {
     const char *when;
-    int lead; /* NOPs in front of the OUTI */
+    uint8_t opcode; /* after ED: an OUTI, or an OUT (C),C */
+    uint8_t b;      /* an OUTI decrements B before the write, so both reach &BD00 */
+    int lead;       /* the NOPs in front of it */
     bool runs_past_its_end;
   } cases[] = {
-      {"on the character the line was to wrap on", 15, true},
-      {"on the character after it", 16, false},
+      {"an OUTI on the character the line was to wrap on", 0xA3, 0xBE, 15, true},
+      {"an OUTI on the character after it", 0xA3, 0xBE, 16, false},
   };
   for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
     memset(ram, 0, sizeof ram);
@@ -374,34 +380,39 @@ static void an_outi_that_moves_r0_on_the_wrap_overflows_the_line(void) {
     crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, line));
     crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0 stays selected */
     lower_rom[UNDER_TEST + cases[index].lead] = 0xED;
-    lower_rom[UNDER_TEST + cases[index].lead + 1] = 0xA3; /* OUTI */
-    ram[0x9000] = 63;                                     /* a line of sixty-four */
+    lower_rom[UNDER_TEST + cases[index].lead + 1] = cases[index].opcode;
+    ram[0x9000] = 63; /* a line of sixty-four */
     cpc.cpu.pc = UNDER_TEST;
-    cpc.cpu.b = 0xBE; /* decremented to &BD before the write goes out */
+    cpc.cpu.b = cases[index].b;
+    cpc.cpu.c = 63; /* what an OUT (C),C sends */
     cpc.cpu.h = 0x90;
     cpc.cpu.sp = 0x8000;
     int landed = -1;
-    int highest = -1;
+    int previous = -1;
     bool wrapped = false;
-    for (int tick = 0; tick < 4 * 80 && !wrapped; tick++) {
+    bool ran_past_its_end = false;
+    for (int tick = 0; tick < 4 * 80; tick++) {
       cpc_tick(&cpc);
       if (landed < 0 && cpc.crtc.registers[0] == 63) {
         landed = cpc.crtc.c0;
       }
-      wrapped = cpc.crtc.c0 < highest;
+      /* Only the line the write fell on is asked about: what the lines after
+         it do is the new R0's business and not this chapter's. */
       if (!wrapped) {
-        highest = cpc.crtc.c0;
+        wrapped = previous >= 0 && cpc.crtc.c0 < previous;
+        ran_past_its_end = ran_past_its_end || (!wrapped && cpc.crtc.c0 > line);
       }
+      previous = cpc.crtc.c0;
     }
     if (landed < 0) {
-      TEST_FAIL("the OUTI %s never reached the CRTC", cases[index].when);
+      TEST_FAIL("%s never reached the CRTC", cases[index].when);
       continue;
     }
     /* The write lands where the run of NOPs aimed it, which is what makes
        the line below a statement about the chip. */
-    TEST_EQUAL(landed, cases[index].runs_past_its_end ? line : 0);
+    TEST_EQUAL(landed, index % 2 == 0 ? line : 0);
     /* And the line either ran past the R0 that was to end it, or did not. */
-    TEST_EQUAL(highest > line, cases[index].runs_past_its_end);
+    TEST_EQUAL(ran_past_its_end, cases[index].runs_past_its_end);
   }
 }
 
