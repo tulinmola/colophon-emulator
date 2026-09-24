@@ -335,6 +335,76 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
   }
 }
 
+/* An R0 an OUTI moves on the character C0 was to wrap on is taken by the
+   comparison that decides the wrap, and the line runs on past its own end.
+   "The comparison of C0 with R0, to determine whether C0 should be
+   incremented or reset to 0, takes place after R0 is updated at the 5th
+   µsecond of the OUTI instruction" (ch. 13.7.1.1), and ch. 13.3's third note
+   draws the consequence: "on the position where C0 should have gone to 0, if
+   R0 is modified on the last µsecond of the OUTI instruction, then C0 is
+   compared with the new value of R0, which can lead to an overflow of C0".
+
+   The instruction is walked across the line's last characters by the run of
+   NOPs in front of it, one microsecond at a time, and the line is read off
+   C0 rather than off any register: a line that overflows is one whose C0
+   climbs past the R0 that was to end it.
+
+   What this does not yet pin is the difference the same chapter is named
+   for — "a difference in CRTC 1's consideration of the update of R0 on a
+   specific position of C0 according to Z80A instruction used" — because an
+   OUT (C),r8 here overflows on its own third microsecond exactly as the OUTI
+   does on its fifth, and the chapter has the two parting company. Nothing
+   outside this repository grades that yet: Shaker's B (6) is the group that
+   would, and it disagrees with this machine for reasons not yet found. */
+static void an_outi_that_moves_r0_on_the_wrap_overflows_the_line(void) {
+  const uint8_t line = 19; /* a line of twenty characters */
+  static const struct {
+    const char *when;
+    int lead; /* NOPs in front of the OUTI */
+    bool runs_past_its_end;
+  } cases[] = {
+      {"on the character the line was to wrap on", 15, true},
+      {"on the character after it", 16, false},
+  };
+  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
+    memset(ram, 0, sizeof ram);
+    memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of the instruction */
+    cpc_init(&cpc, ram, sizeof ram, lower_rom, 1);
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, line));
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0 stays selected */
+    lower_rom[UNDER_TEST + cases[index].lead] = 0xED;
+    lower_rom[UNDER_TEST + cases[index].lead + 1] = 0xA3; /* OUTI */
+    ram[0x9000] = 63;                                     /* a line of sixty-four */
+    cpc.cpu.pc = UNDER_TEST;
+    cpc.cpu.b = 0xBE; /* decremented to &BD before the write goes out */
+    cpc.cpu.h = 0x90;
+    cpc.cpu.sp = 0x8000;
+    int landed = -1;
+    int highest = -1;
+    bool wrapped = false;
+    for (int tick = 0; tick < 4 * 80 && !wrapped; tick++) {
+      cpc_tick(&cpc);
+      if (landed < 0 && cpc.crtc.registers[0] == 63) {
+        landed = cpc.crtc.c0;
+      }
+      wrapped = cpc.crtc.c0 < highest;
+      if (!wrapped) {
+        highest = cpc.crtc.c0;
+      }
+    }
+    if (landed < 0) {
+      TEST_FAIL("the OUTI %s never reached the CRTC", cases[index].when);
+      continue;
+    }
+    /* The write lands where the run of NOPs aimed it, which is what makes
+       the line below a statement about the chip. */
+    TEST_EQUAL(landed, cases[index].runs_past_its_end ? line : 0);
+    /* And the line either ran past the R0 that was to end it, or did not. */
+    TEST_EQUAL(highest > line, cases[index].runs_past_its_end);
+  }
+}
+
 /* How long an interrupt costs, which no duration in the tables above covers.
    "The Z80A RST #38 instruction lasts 4 µsec when called by code. When an
    interrupt occurs, the call in #38 lasts 5 µsec" (ch. 27.4), and the chapter
@@ -473,6 +543,7 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
   TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
+  TEST_RUN(an_outi_that_moves_r0_on_the_wrap_overflows_the_line);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("cpc timing");
