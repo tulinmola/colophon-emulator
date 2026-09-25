@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-7 of them printed self-graded lines, 35 in all: 25 agree with Longshot's
-silicon and 10 do not. That is 71% of what this reader can score, and no
-measure at all of the other 63 groups.
+8 of them printed self-graded lines, 36 in all: 26 agree with Longshot's
+silicon and 10 do not. That is 72% of what this reader can score, and no
+measure at all of the other 62 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -163,7 +163,8 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R5=0, CPU TO C4=0:#0001 (exp:#0001)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R5=0, CPU TO C4=0:#0001 (exp:#0001)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
-E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       recorded, ungraded
+E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       1 graded, 0 wrong
+      YOU'VE WON THIS STAGE (UNLESS A PROBLEM IS INDICATED ON THIS PAGE)
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   another CRTC type's
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded

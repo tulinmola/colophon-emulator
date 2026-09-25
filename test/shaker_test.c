@@ -1092,6 +1092,32 @@ static bool read_a_declared_verdict(const char *line, bool *failed) {
   return false;
 }
 
+/* And a verdict a group speaks in a sentence, having graded itself and put
+   the answer on the screen in words rather than in a value beside silicon's.
+   Module E's (2) settles on "YOU'VE WON THIS STAGE (UNLESS A PROBLEM IS
+   INDICATED ON THIS PAGE)" where this machine is right about the offset a
+   frame's padding carries, and on "IF YOU CAN READ THIS...YOUR EMULATOR HAS
+   A PROBLEM" where it is not. Which of the two a machine settles on is the
+   verdict; a machine that passes does show the second, while the page is
+   still being drawn, for about seven frames. What it never does is settle
+   with both standing, which is the whole of the reading: the offset carries
+   one of them out of the window and leaves the other. Measured both ways,
+   with the rule that group grades in and put back.
+
+   As with the other verdicts a group states in words, nothing here can check
+   them; Longshot's sentence is still better evidence than our own. */
+static bool read_a_spoken_verdict(const char *line, bool *failed) {
+  if (strstr(line, "YOUR EMULATOR HAS A PROBLEM") != NULL) {
+    *failed = true;
+    return true;
+  }
+  if (strstr(line, "YOU'VE WON THIS STAGE") != NULL) {
+    *failed = false;
+    return true;
+  }
+  return false;
+}
+
 /* Whether a bracket on the line hands the passing outcome to named CRTC
    types, and if it does, whether this machine is one of them. "(OK FOR CRT
    3+4 ONLY)" is an OK a type 0 was never going to have. The disc writes both
@@ -1154,7 +1180,7 @@ static bool read_a_marked_failure(const char *line, uint8_t type, bool *failed) 
 
 static bool read_verdict(const char *line, uint8_t type, bool *failed) {
   return read_a_measured_verdict(line, type, failed) || read_a_marked_failure(line, type, failed) ||
-         read_a_declared_verdict(line, failed);
+         read_a_declared_verdict(line, failed) || read_a_spoken_verdict(line, failed);
 }
 
 static bool appears_in_previous_screen(const char *line) {
@@ -1184,10 +1210,28 @@ static bool appears_in_previous_screen(const char *line) {
    carrying a glyph the table could not name is refused outright — the word
    WRONG can be lost to a bad read where the brackets survive, and a
    half-read failure must never be counted as agreement. */
+/* A page carrying both of the sentences above is one still being drawn, and
+   neither of them is its verdict. The line that stands still for a sample is
+   what this reader records, and the pair very nearly clears that bar: it
+   stands some seven frames and dies two before the next sample falls, which
+   is a margin and not a rule — a module settling three frames later would
+   hand a correct machine a failure. So the pair is refused where it stands
+   rather than left to the sampler's phase. */
+static bool the_page_speaks_both_verdicts(void) {
+  bool won = false;
+  bool problem = false;
+  for (int row = 0; row < ROWS; row++) {
+    won = won || strstr(screen[row], "YOU'VE WON THIS STAGE") != NULL;
+    problem = problem || strstr(screen[row], "YOUR EMULATOR HAS A PROBLEM") != NULL;
+  }
+  return won && problem;
+}
+
 static int collect_verdicts(int percentage_named) {
   /* What this screen carries, in the order Shaker wrote it. */
   verdict standing[ROWS];
   int standing_count = 0;
+  const bool still_drawing = the_page_speaks_both_verdicts();
   for (int row = 0; row < ROWS; row++) {
     char line[COLUMNS + 1];
     const char *from = screen[row];
@@ -1210,6 +1254,10 @@ static int collect_verdicts(int percentage_named) {
     trim_trailing_spaces(line);
     bool failed = false;
     if (!read_verdict(line, crtc_type, &failed) || strchr(line, '?') != NULL) {
+      continue;
+    }
+    bool spoken = false;
+    if (still_drawing && read_a_spoken_verdict(line, &spoken)) {
       continue;
     }
     if (!appears_in_previous_screen(line)) {
@@ -1631,6 +1679,45 @@ static void a_screen_read_in_part_cannot_repeat_a_verdict(void) {
   memset(previous_screen, 0, sizeof previous_screen);
 }
 
+/* The page module E's (2) draws while it is still drawing carries both of
+   its sentences, and neither is a verdict until one of them is left standing
+   alone. Sampled twice, as a page that stood still would be, it yields
+   nothing; the page it settles on yields the one it kept. */
+static void a_page_that_speaks_both_verdicts_yields_neither(void) {
+  static const char *const still_drawing[] = {
+      "CRTC 1  VMA UPDATE ON SPEC ADJ FROM C4=0 WHEN R4=0 PAGE 1",
+      "IF YOU CAN READ THIS...YOUR EMULATOR HAS A PROBLEM",
+      "YOU'VE WON THIS STAGE (UNLESS A PROBLEM IS INDICATED ON THIS PAGE)",
+  };
+  static const char *const settled[] = {
+      "CRTC 1  VMA UPDATE ON SPEC ADJ FROM C4=0 WHEN R4=0 PAGE 1",
+      "YOU'VE WON THIS STAGE (UNLESS A PROBLEM IS INDICATED ON THIS PAGE)",
+  };
+  static const char *const settled_wrong[] = {
+      "CRTC 1  VMA UPDATE ON SPEC ADJ FROM C4=0 WHEN R4=0 PAGE 1",
+      "IF YOU CAN READ THIS...YOUR EMULATOR HAS A PROBLEM",
+  };
+  verdict_count = 0;
+  verdicts_dropped = 0;
+  show_screen(still_drawing, 3);
+  TEST_EQUAL(collect_verdicts(100), 0);
+  TEST_EQUAL(collect_verdicts(100), 0);
+
+  verdict_count = 0;
+  show_screen(settled, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  TEST_CHECK(!verdicts[0].failed);
+
+  verdict_count = 0;
+  show_screen(settled_wrong, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  TEST_CHECK(verdicts[0].failed);
+
+  verdict_count = 0;
+  memset(screen, 0, sizeof screen);
+  memset(previous_screen, 0, sizeof previous_screen);
+}
+
 /* Lines Shaker printed, one of each rendering the reader knows, taken from
    the records or from the scoreboard as it stood on a day the machine was
    getting them wrong. */
@@ -1685,10 +1772,21 @@ static const verdict_case printed_lines[] = {
     {"UPDATE R0=7F, OUT ON HCC=3E :KO", false, false},
     {"UPDATE R0=7F, OUT ON HCC=39 :OK", false, false},
     {"OK: C0=..3F..40..41.. / KO: C0=..3F..00..01..", false, false},
-    /* A verdict a group states by the bare fact of printing it, which is a
-       convention this reader does not know and must not guess at. */
+    /* A verdict a group speaks in a sentence, which was left unread while
+       nothing here could tell what a sentence meant. Module E's (2) settled
+       this pair: put to it both ways, with the rule that group grades in and
+       put back, it settles on the first where the machine is right and on
+       the second where it is wrong. */
+    {"YOU'VE WON THIS STAGE (UNLESS A PROBLEM IS INDICATED ON THIS PAGE)", true, false},
+    {"IF YOU CAN READ THIS...YOUR EMULATOR HAS A PROBLEM", true, true},
+    /* And the two that keep their sentences unread. The first says which
+       part a chip is rather than whether it is right, in the same breath as
+       the pair above — which is why the reading is keyed on the fault it
+       names and not on the words that lead up to it. The second belongs to a
+       group whose neighbouring lines turn on one of them flashing, which no
+       reader that samples five frames apart can judge. */
+    {"BUT IF YOU CAN READ THIS, YOUR CRTC 1 IS 1-B !!", false, false},
     {"VERY BAD TRIP FOR YOUR EMULATOR!!!", false, false},
-    {"IF YOU CAN READ THIS...YOUR EMULATOR HAS A PROBLEM", false, false},
     /* A legend keyed by value rather than by type, which names no type and
        must not be read as one. */
     {"PREV R9=7 R4=1 >> UPD R4=3 WHEN C4=1 & C9=7 (LAST LINE):01 (00:C4ovf 01:C4=0)", false, false},
@@ -2204,6 +2302,7 @@ int main(int argc, char **argv) {
   TEST_RUN(the_verdict_reader_knows_its_renderings);
   TEST_RUN(the_reader_follows_the_type_the_machine_was_built_as);
   TEST_RUN(a_screen_read_in_part_cannot_repeat_a_verdict);
+  TEST_RUN(a_page_that_speaks_both_verdicts_yields_neither);
   TEST_RUN(the_scoreboard_matches_the_one_on_record);
   return TEST_REPORT("shaker");
 }
