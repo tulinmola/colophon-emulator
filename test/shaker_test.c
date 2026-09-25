@@ -801,9 +801,10 @@ static int captures_dropped;
    name. */
 static bool keep_rasters;
 
-/* Some groups grade themselves. Where they do, the value the machine
-   produced stands last before a bracket and the value real silicon
-   produced stands inside it. Longshot writes that six ways:
+/* Some groups grade themselves. Most of them keep both values on the one
+   line: the value the machine produced stands last before a bracket and the
+   value real silicon produced stands inside it. Longshot writes that six
+   ways:
 
        >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
        RESULT:#8700 WRONG (EXP:#4E40)
@@ -818,7 +819,9 @@ static bool keep_rasters;
 
    A value before the bracket is what tells a grading from a legend naming
    the value a test is about to check, which carries no measurement of its
-   own.
+   own. A line of that second shape is not always idle: where its bracket
+   names silicon's value, it is the title one group writes over the rows it
+   is about to measure, and the reader for that is further down.
 
    A rendering seen and not yet read: "(#40 0/16 or #44)" and "(C2/C2 or
    C5/C5 or C2/C5)" in module D's (I), where several answers are allowed and
@@ -876,10 +879,11 @@ static bool matches_ignoring_case(const char *at, const char *lowercase, size_t 
 /* The word, then the value: with a colon between them as modules C, D and
    E write it, spelt out as module C's (E) does, or with neither as modules
    B and D do — `(Exp #C4)`, `(Exp#00)`. The value has to be there: what
-   keeps a heading out is the rule above, that a line carrying no
-   measurement of its own is not a grading, which is what declines module
-   D's `TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)` — a title
-   over the rows that follow it.
+   keeps a title out is the rule above, that a line carrying no
+   measurement of its own is not a grading here, which is what leaves module
+   D's `TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)` to the
+   reader below that takes it for the title it is, and grades the rows that
+   follow it against the value it carries.
 
    Module B's (R) is a two-column table whose rows carry two tests each, and
    a row of it grades the test whose value stands nearest the bracket while
@@ -1054,6 +1058,34 @@ static bool read_a_measured_verdict(const char *line, uint8_t type, bool *failed
     return true;
   }
   return false;
+}
+
+/* An expectation a group puts on a title rather than on the line it grades.
+   Module D's (R) prints "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK
+   (EXP #5F)" and then one line for each standing it puts the chip in, each
+   ending in the value that standing produced. A verdict of the group's own
+   names silicon's value the same way, so what tells the two apart is the
+   measurement a verdict carries before the bracket and a title does not —
+   and the reading is asked only of lines the readers above left ungraded,
+   which is where that difference has already been made. A bracket naming
+   the word and no value is no title: the group would have nothing to grade
+   its rows against. No other group on either record is graded this way, and
+   a second one would arrive there as lines the record has never held. */
+static bool read_a_governing_expectation(const char *line, unsigned long *expected) {
+  const char *opening = strchr(line, '(');
+  const char *closing = opening == NULL ? NULL : strchr(opening, ')');
+  return closing != NULL && names_the_expected_value(opening, closing) &&
+         first_hex_value_between(opening, closing, expected);
+}
+
+/* And a line that title governs: a value at its end and no bracket of its
+   own to be paired with. The shape is not rare — module C's (O) prints one
+   every other row — and what keeps this reading off those is the word EXP in
+   the title above, and nothing else. So the run is held narrowly: it ends
+   at the first line that is not one of its own, whatever else that line is,
+   and at the screen's end, and it is read afresh for every screen. */
+static bool read_a_governed_measurement(const char *line, unsigned long *produced) {
+  return strchr(line, '(') == NULL && last_hex_value_before(line, line + strlen(line), produced);
 }
 
 /* Whether a line ends with the given word, the screens being padded with
@@ -1232,6 +1264,8 @@ static int collect_verdicts(int percentage_named) {
   verdict standing[ROWS];
   int standing_count = 0;
   const bool still_drawing = the_page_speaks_both_verdicts();
+  unsigned long governing = 0;
+  bool governs = false;
   for (int row = 0; row < ROWS; row++) {
     char line[COLUMNS + 1];
     const char *from = screen[row];
@@ -1253,7 +1287,25 @@ static int collect_verdicts(int percentage_named) {
     line[length] = '\0';
     trim_trailing_spaces(line);
     bool failed = false;
-    if (!read_verdict(line, crtc_type, &failed) || strchr(line, '?') != NULL) {
+    bool graded = read_verdict(line, crtc_type, &failed);
+    const bool torn = strchr(line, '?') != NULL;
+    unsigned long expected = 0;
+    if (!graded && !torn && read_a_governing_expectation(line, &expected)) {
+      governing = expected;
+      governs = true;
+      continue;
+    }
+    unsigned long produced = 0;
+    if (governs && !graded && !torn && read_a_governed_measurement(line, &produced)) {
+      failed = produced != governing;
+      graded = true;
+    } else {
+      /* A title the reader took never reaches here: a second one takes the
+         first one's place above, and the rows under it answer to the new
+         expectation. */
+      governs = false;
+    }
+    if (!graded || torn) {
       continue;
     }
     bool spoken = false;
@@ -1607,7 +1659,7 @@ static void module_e_is_recorded(void) {
 
 /* A group's line, so that a difference can be reported under the group it
    belongs to rather than by a line number alone: eleven verdicts under one
-   heading all look alike out of context. */
+   group all look alike out of context. */
 static bool is_a_group_line(const char *line) {
   return line[0] >= 'A' && line[0] <= 'E' && line[1] == ' ' && line[2] == '(';
 }
@@ -1718,6 +1770,181 @@ static void a_page_that_speaks_both_verdicts_yields_neither(void) {
   memset(previous_screen, 0, sizeof previous_screen);
 }
 
+/* A title's expectation reaches the measured lines beneath it and stops
+   where they stop. */
+static void a_title_carries_the_expectation_for_the_lines_below_it(void) {
+  static const char *const page[] = {
+      "CRTC 1  VSYNC TORTURE (LOCK MECHANISM)",
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5F",
+      "  R7=0/R4=1/C0=00 VSYNC=#5E",
+      "THE SCREEN MUST BE STABLE VERTICALLY",
+      "  R7=0/R4=1/C0=01 VSYNC=#5F",
+  };
+  /* Built: two values on the governed row, and a blank one below it. No
+     screen on the disc writes either — the rows of the one title it prints
+     run unbroken under it — so the blank stands for what a run must not
+     reach across, and the two values for which of them is the measurement. */
+  static const char *const stopped_by_a_blank[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+      "  R7=#5E/R4=1/C0=00 VSYNC=#5F",
+      "",
+      "  R7=0/R4=1/C0=3F VSYNC=#5E",
+  };
+  static const char *const after_a_verdict[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5F",
+      ">>>>>> DELAY TO VSYNC:#007F (EXP:#007F)",
+      "  R7=0/R4=1/C0=00 VSYNC=#5E",
+  };
+  static const char *const after_a_tear[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5F",
+      "  R7=0/R4=1/C0=?? VSYNC=#5F",
+      "  R7=0/R4=1/C0=00 VSYNC=#5E",
+  };
+  static const char *const title_alone[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+  };
+  static const char *const measurement_alone[] = {
+      "  R7=0/R4=1/C0=00 VSYNC=#5E",
+  };
+
+  verdict_count = 0;
+  verdicts_dropped = 0;
+  show_screen(page, 6);
+  TEST_EQUAL(collect_verdicts(100), 2);
+  TEST_CHECK(!verdicts[0].failed);
+  TEST_CHECK(verdicts[1].failed);
+
+  /* A blank row ends the run as any other line does, and what is read from
+     a governed line is the value at its end, not the first it carries. */
+  verdict_count = 0;
+  show_screen(stopped_by_a_blank, 4);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  TEST_CHECK(!verdicts[0].failed);
+
+  /* A verdict of the group's own ends the run, and so does a line lost to a
+     tear: the measurement below each is left unread. */
+  verdict_count = 0;
+  show_screen(after_a_verdict, 4);
+  TEST_EQUAL(collect_verdicts(100), 2);
+  verdict_count = 0;
+  show_screen(after_a_tear, 4);
+  TEST_EQUAL(collect_verdicts(100), 1);
+
+  /* And no title reaches past its own screen. */
+  verdict_count = 0;
+  show_screen(title_alone, 1);
+  TEST_EQUAL(collect_verdicts(100), 0);
+  show_screen(measurement_alone, 1);
+  TEST_EQUAL(collect_verdicts(100), 0);
+
+  verdict_count = 0;
+  memset(screen, 0, sizeof screen);
+  memset(previous_screen, 0, sizeof previous_screen);
+}
+
+/* And the lines a title does not govern, each of which a reader could take
+   for one of its own. A row carrying a bracket of its own is not one of
+   these — module C's (O) prints "(NEXT FRAME +1=#0A20, +2=#1120)" between
+   every pair of its measurements, naming values nobody has measured — a
+   title lost to a tear is no title, a verdict of the group's own is not a
+   title however its bracket reads, and a key in front of a title takes the
+   bracket the reading looks in, which is the first on the line and now the
+   key's own. Only the rows quoted from a module's screen are the disc's;
+   the pages they stand in are built. */
+static void a_title_is_told_from_the_lines_it_does_not_govern(void) {
+  static const char *const bracketed_row[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5F",
+      "     (NEXT FRAME +1=#0A20, +2=#1120)",
+      "  R7=0/R4=1/C0=00 VSYNC=#5E",
+  };
+  static const char *const torn_title[] = {
+      "TST COMP C4/R7 ACTIVE DUR?NG VSYNC FOR DEADLOCK (EXP #5F)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5E",
+  };
+  static const char *const a_verdict_of_its_own[] = {
+      ">>>>>> DELAY TO VSYNC:#0032 (EXP:#0032)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5E",
+  };
+  static const char *const a_key_in_front[] = {
+      "(O) ALL      : INTERLACE VSYNC NIGHTMARE (EXP:#5F)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5E",
+  };
+  static const char *const two_titles[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5F",
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5E)",
+      "  R7=0/R4=1/C0=00 VSYNC=#5E",
+  };
+  /* A row beneath a title may still speak for itself, and then its own word
+     is the verdict: module B's (6) writes this one, where the value is not
+     the one a title asks for and the group passes the test anyway. */
+  static const char *const a_row_that_grades_itself[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)",
+      "  OUTI ON R0.JIT 5TH uSec ON C0=1 - RES: #26 :GOOD",
+  };
+  /* No group prints a title that grades itself. The reader answers for one
+     all the same: taken for a title it would lose the verdict standing on
+     it and put every row below against a number nobody was measured on. */
+  static const char *const a_title_that_grades_itself[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)  WRONG",
+      "  R7=0/R4=1/C0=3F VSYNC=#5F",
+  };
+  /* And built for the reason the "(EXP: none)" line in the table of
+     renderings is: a bracket that names silicon's value and then does not
+     give it leaves the group nothing to grade its rows against. */
+  static const char *const a_title_naming_no_value[] = {
+      "TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP: none)",
+      "  R7=0/R4=1/C0=3F VSYNC=#5F",
+  };
+
+  verdict_count = 0;
+  verdicts_dropped = 0;
+  show_screen(bracketed_row, 4);
+  TEST_EQUAL(collect_verdicts(100), 1);
+
+  verdict_count = 0;
+  show_screen(torn_title, 2);
+  TEST_EQUAL(collect_verdicts(55), 0);
+
+  verdict_count = 0;
+  show_screen(a_verdict_of_its_own, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  TEST_CHECK(!verdicts[0].failed);
+
+  verdict_count = 0;
+  show_screen(a_key_in_front, 2);
+  TEST_EQUAL(collect_verdicts(100), 0);
+
+  /* A second title takes the first one's place, and its own rows with it. */
+  verdict_count = 0;
+  show_screen(two_titles, 4);
+  TEST_EQUAL(collect_verdicts(100), 2);
+  TEST_CHECK(!verdicts[0].failed);
+  TEST_CHECK(!verdicts[1].failed);
+
+  verdict_count = 0;
+  show_screen(a_row_that_grades_itself, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  TEST_CHECK(!verdicts[0].failed);
+
+  verdict_count = 0;
+  show_screen(a_title_that_grades_itself, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  TEST_CHECK(verdicts[0].failed);
+
+  verdict_count = 0;
+  show_screen(a_title_naming_no_value, 2);
+  TEST_EQUAL(collect_verdicts(100), 0);
+
+  verdict_count = 0;
+  memset(screen, 0, sizeof screen);
+  memset(previous_screen, 0, sizeof previous_screen);
+}
+
 /* Lines Shaker printed, one of each rendering the reader knows, taken from
    the records or from the scoreboard as it stood on a day the machine was
    getting them wrong. */
@@ -1741,8 +1968,11 @@ static const verdict_case printed_lines[] = {
     {"Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)", true, false},
     {"Break ED xx on Pending Int #00 (Exp#00)", true, false},
     /* A title over the rows that follow it, naming what they are checked
-       against and measuring nothing itself. */
+       against and measuring nothing itself, and one of those rows: a value
+       at the end and nothing to pair it with, which is a verdict only while
+       the title above it stands. */
     {"TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)", false, false},
+    {"  R7=0/R4=1/C0=3F VSYNC=#5F", false, false},
     /* And named for each type, where this machine reads the clause that
        speaks for a type 0 — by its number, or by gathering the rest. */
     {"R3h=0.UPD R3h=8 ON 8th LINE. DELAY VSYNC OFF=#0032 (CRTC 0.3.4:032/CRTC 1.2:23A)", true,
@@ -1805,7 +2035,7 @@ static const verdict_case printed_lines[] = {
    line reaches. They are what the guards are for: a rendering nobody prints
    is not a rendering, but a rule nobody exercises is not a rule either. */
 static const verdict_case built_lines[] = {
-    /* The word inside a line is not the word at its end. A heading that
+    /* The word inside a line is not the word at its end. A title that
        names what a group is about to test carries no verdict, and nothing
        in it can be paired with a value. */
     {"TEST FOR A WRONG R5 ON THE LAST LINE", false, false},
@@ -2178,6 +2408,15 @@ static bool run_every_module(void) {
   return every_module_ran;
 }
 
+static void run_the_readers_own_tests(void) {
+  TEST_RUN(the_verdict_reader_knows_its_renderings);
+  TEST_RUN(the_reader_follows_the_type_the_machine_was_built_as);
+  TEST_RUN(a_screen_read_in_part_cannot_repeat_a_verdict);
+  TEST_RUN(a_page_that_speaks_both_verdicts_yields_neither);
+  TEST_RUN(a_title_carries_the_expectation_for_the_lines_below_it);
+  TEST_RUN(a_title_is_told_from_the_lines_it_does_not_govern);
+}
+
 /* The order of these is the Makefile recipe's, and the two move together.
    Every one of them has a default. */
 int main(int argc, char **argv) {
@@ -2215,6 +2454,13 @@ int main(int argc, char **argv) {
   if (!run_every_module()) {
     return TEST_REPORT("shaker");
   }
+
+  /* The readers borrow the screen and the verdict tally and put both back,
+     and nothing after them reads either, so a run of one group answers for
+     them as a whole sweep does. They stand before the early return below
+     because `make test-shaker MODULE=D GROUP=R` is the run anyone working
+     on a reader makes, and that run took the early return. */
+  run_the_readers_own_tests();
 
   /* A run of one module or one group has walked part of the menu, and a
      part is not something the record can be set against. It writes its
@@ -2264,7 +2510,13 @@ int main(int argc, char **argv) {
   fprintf(file, "silicon produced. A module can also state a failure and mean it for\n");
   fprintf(file, "another type: where a line hands the passing outcome to CRTC types this\n");
   fprintf(file, "machine is not one of, the failure it marks is the answer asked for, and\n");
-  fprintf(file, "the line stands unmarked.\n\n");
+  fprintf(file, "the line stands unmarked. A few lines here are graded against a title\n");
+  fprintf(file, "rather than against anything standing on them: their group puts silicon's\n");
+  fprintf(file, "value on a title and the machine's on the screen rows beneath it, so what\n");
+  fprintf(file, "they were measured against stands on the screen they came from rather\n");
+  fprintf(file, "than on the line copied out of it. Only module D's (R) is graded that\n");
+  fprintf(file, "way, under the title \"TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK\n");
+  fprintf(file, "(EXP #5F)\".\n\n");
   fprintf(file, "Not every difference here is this machine's doing. What a module prints\n");
   fprintf(file, "depends on the phase it booted on, and at least one group has been measured\n");
   fprintf(file, "printing a graded line on one phase and none on another with the emulator\n");
@@ -2299,10 +2551,6 @@ int main(int argc, char **argv) {
          "%d groups run\n",
          agreeing, total_verdicts, percentage, total_groups_graded, total_groups_run);
 
-  TEST_RUN(the_verdict_reader_knows_its_renderings);
-  TEST_RUN(the_reader_follows_the_type_the_machine_was_built_as);
-  TEST_RUN(a_screen_read_in_part_cannot_repeat_a_verdict);
-  TEST_RUN(a_page_that_speaks_both_verdicts_yields_neither);
   TEST_RUN(the_scoreboard_matches_the_one_on_record);
   return TEST_REPORT("shaker");
 }
