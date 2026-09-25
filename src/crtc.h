@@ -78,27 +78,30 @@
  * additional line where it gives the other three one, ch. 13.2's window being
  * a type 0's. Every other behaviour below is type 0's whatever the type is
  * set to, and a number naming none of the seven is neither refused nor
- * corrected. The sixth is the border R6 asks for. Where R6 is 0 a frame's
- * first line is a conflict on types 0 and 2 and comes out an alternation of
- * bordered and displayed bytes, cancellable until C0 meets R1 and definitive
- * after it (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the
- * condition C4=R6 being required" and gives the border up with the register,
- * except where the write was made while C4 stood at 0, which keeps it for the
- * frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict and test R6
- * where a line begins rather than through it (ch. 18.2.4, 18.3.4). No line
- * the disc grades moves on any of the three — what grades them is those
- * chapters and tests of our own, and Shaker says its piece there in pictures.
- * The seventh is where a type 1 reads its offset: R12/R13 reach VMA itself,
- * and reach it at the head of every line the frame's first character row
- * spends with C4 at 0, where the other four load both pointers once and only
- * where C4, C9 and C0 stand together at 0 (ch. 17.4.2, 20.3.2). C4 at 0 is
- * that chip's plainest case and not its rule: ch. 11.2.4 and 11.6 keep the
- * same update alive through a C4 of 1 in additional management and past a
- * missed border, and neither is here. One of those is worth naming because the disc grades it: a
- * type 1 takes R4 written with the value C4 already holds as the frame's end wherever on the line
- * it lands — "if we were on the last line (C9=R9), then C9 goes to 0, C4=0" (ch. 12.3) — where a
- * type 0 reads that comparison only while C0 is under 2, and it is a type 0's window this chip
- * keeps.
+ * corrected. One of those is worth naming because the disc grades it: a
+ * type 1 takes R4 written with the value C4 already holds as the frame's end
+ * wherever on the line it lands — "if we were on the last line (C9=R9), then
+ * C9 goes to 0, C4=0" (ch. 12.3) — where a type 0 reads that comparison only
+ * while C0 is under 2, and it is a type 0's window this chip keeps. The sixth is the border R6 asks
+ * for. Where R6 is 0 a frame's first line is a conflict on types 0 and 2 and comes out an
+ * alternation of bordered and displayed bytes, cancellable until C0 meets R1 and definitive after
+ * it (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the condition C4=R6 being
+ * required" and gives the border up with the register, except where the write was made while C4
+ * stood at 0, which keeps it for the frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict
+ * and test R6 where a line begins rather than through it (ch. 18.2.4, 18.3.4). No line the disc
+ * grades moves on any of the three — what grades them is those chapters and tests of our own, and
+ * Shaker says its piece there in pictures. The seventh is where a type 1 reads its offset: R12/R13
+ * reach VMA itself, and reach it at the head of every line the frame's first character row spends
+ * with C4 at 0, where the other four load both pointers once and only where C4, C9 and C0 stand
+ * together at 0 (ch. 17.4.2, 20.3.2). C4 at 0 is that chip's plainest case and not its rule.
+ * Ch. 11.2.4 keeps the same update through the C4 of 1 a run of additional lines gives it, where
+ * the run opened with C4 at 0 — "if C4=0 before the additional management" — and that is here,
+ * along with the exception it ends on: an R4 moved at C0=R0 above 0 takes the carry away.
+ * Ch. 11.6 keeps the update past C4 altogether where the border on a row's last line is missed,
+ * and that is not here. The disc grades none of the seventh in words and says it in a picture:
+ * its E (2), "CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME", settles on "YOU'VE
+ * WON THIS STAGE" with the carry and on "IF YOU CAN READ THIS...YOUR EMULATOR HAS A PROBLEM"
+ * without it, and nothing else on the disc moves either way.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
@@ -327,6 +330,21 @@ typedef struct {
      afresh wherever that comparison holds, so that no frame is held by the
      R5 of the frame before it, and false on the other four types. */
   bool r5_opened_the_run;
+  /* And whether that run began where a type 1's offset carries into it: "if
+     C4=0 before the additional management, then VMA is updated with R12/R13
+     and not VMA', and this as long as C4=1" (ch. 11.2.4), the C4 read being
+     the one before the run's own increment. Ch. 11.2.4 takes it away again
+     where the run was made by an R4 moved at C0=R0 above 0, which
+     r4_moved_at_a_lines_end carries to the open. The decision is taken there
+     and not retaken, so a hold that brings C4 round to 0 inside a standing
+     run under ch. 11.3.2 keeps the answer the open gave; nothing grades
+     that. */
+  bool adjustment_opened_at_c4_of_zero;
+  /* The last R4 write of this frame, and whether it was the one the
+     exception names: above 0 — the seven bits R4 keeps, so a written &80 is
+     not — and made where C0 stood on R0. Written afresh by every R4 write,
+     so a later one anywhere takes an earlier one's answer away. */
+  bool r4_moved_at_a_lines_end;
 
   /* Whether the chip stood on a frame's first character last time it was
      asked. ParityFrame turns as that character is entered (ch. 19.5.2), and

@@ -2894,6 +2894,233 @@ static void a_type_1_takes_its_offset_all_through_the_first_row(void) {
   }
 }
 
+/* The offset reaches a type 1's pointer and not its latch, which shows
+   where C0 can never meet R1 and the latch is therefore never filled: "the
+   condition C0 = R1 no longer occurs and the VMA' pointer is no longer
+   updated. VMA' is frozen on the last known pointer ... We have therefore,
+   when R1>R0, a first line character which contains the pointer defined in
+   R12/R13 and on the following, the last pointer updated in VMA'" (ch.
+   17.4.2). The other four fill both at a frame's head, so every row of
+   theirs opens on R12/R13 and "all the lines displayed become identical"
+   (ch. 17.4.1, which is headed for types 0, 3 and 4; a type 2 is answered as
+   they are on the strength of ch. 20.3.3, where "when counters C4, C9 and C0
+   change to 0, pointers (VMA' & VMS) are initialized with R12/R13", the
+   second name being the chapter's own slip for VMA). */
+static void a_type_1_leaves_its_latch_frozen_where_c0_cannot_reach_r1(void) {
+  static const struct {
+    uint8_t type;
+    bool draws_rows_from_the_frozen_latch;
+  } cases[] = {{0, false}, {1, true}, {2, false}, {3, false}, {4, false}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    /* A frame with R1 where C0 can reach it, so the latch holds a capture. */
+    TEST_CHECK(run_to_row(1));
+    write_register(1, 64); /* R0 + 1, past C0's reach from here on */
+    TEST_CHECK(run_to_row(0));
+    /* What the latch holds going into the frame: a capture from before R1
+       was moved on the one chip that no longer fills it at a frame's head,
+       and R12/R13 on the four that do. */
+    uint16_t frozen = crtc.vma_;
+    TEST_EQUAL(frozen != 0x1000, cases[index].draws_rows_from_the_frozen_latch);
+    TEST_CHECK(run_to_row(1));
+    TEST_EQUAL(crtc.vma, cases[index].draws_rows_from_the_frozen_latch ? frozen : 0x1000);
+  }
+}
+
+/* And the offset carries into the C4 of 1 that a run of additional lines
+   gives a type 1, where the run opened with C4 at 0: "if C4=0 before the
+   additional management, then VMA is updated with R12/R13 and not VMA', and
+   this as long as C4=1 ... it is then possible to modify the offset on each
+   line C9 of C4=1 as one would do when C4=0" (ch. 11.2.4). A run that opened
+   above 0 carries nothing, which is the same C4 of 1 reached the other way.
+   The exception that chapter ends on is taken by the test below this one. */
+static void a_type_1_carries_its_offset_into_the_added_lines(void) {
+  static const struct {
+    uint8_t r4; /* 0 opens the run at C4 of 0; 127 opens it where C4 wraps */
+    uint8_t r9;
+    uint8_t c4;   /* the run's own C4, as it climbs */
+    bool carries; /* which the chapter gives the first of them alone */
+  } cases[] = {
+      {0, 7, 1, true},
+      {0, 7, 2, false},
+      /* And a run that reached the same C4 of 1 without having opened at 0:
+         C4 wraps through its seven bits, so the chapter's condition is the
+         one thing left deciding it. */
+      {127, 7, 1, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 12, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      uint8_t value = values[reg];
+      if (reg == 4) {
+        value = cases[index].r4;
+      }
+      if (reg == 9) {
+        value = cases[index].r9;
+      }
+      write_register(reg, value);
+    }
+    bool reached = false;
+    for (long character = 0; character < 64L * 64 * 130 && !reached; character++) {
+      crtc_tick(&crtc);
+      reached = crtc.vertical_adjustment_in_progress && crtc.c4 == cases[index].c4 &&
+                crtc.c0 == 0 && crtc.c9 > 0;
+    }
+    TEST_CHECK(reached);
+    if (!reached) {
+      continue;
+    }
+    uint16_t offset = (uint16_t)(0x2040 + index);
+    write_register(12, (uint8_t)(offset >> 8));
+    write_register(13, (uint8_t)offset);
+    do { /* on to the run's next line, whatever R9 leaves C9 reading */
+      crtc_tick(&crtc);
+    } while (crtc.c0 != 0);
+    if (cases[index].carries) {
+      TEST_EQUAL(crtc.vma, offset);
+    } else {
+      TEST_CHECK(crtc.vma != offset);
+    }
+  }
+}
+
+/* The R4 that makes a run decides whether the offset carries into it, and
+   only that one: "however, if R4 was modified to C0==R0 with R4>0, then VMA
+   is not updated with R12/R13 when C4=1" (ch. 11.2.4). An R4 moved once the
+   run is open moves nothing, which is what makes the answer a state taken at
+   the open rather than the register read line by line.
+
+   Both halves of what the chapter names of that write are here: the value
+   above 0, which an R4 of 0 or of &80 — seven bits, so also 0 — does not
+   meet, and the position C0=R0, which a write made along the line does not.
+   That row reaches its run the ordinary way, at the end of the frame's last
+   line and with C4 still at 0, so the carry stands because the write was not
+   where the exception wants it and not because the run was made otherwise. */
+static void an_r4_moved_at_a_lines_end_takes_the_carry_away(void) {
+  static const struct {
+    uint8_t at_c9; /* the line of the frame's last row the write lands on */
+    int at_c0;     /* and where along it; -1 for no write at all */
+    uint8_t to;
+    bool then_taken_back; /* a later write, away from a line's end */
+    bool moved_inside_the_run;
+    bool carries;
+  } cases[] = {
+      {7, -1, 5, false, false, true},    /* nothing moved */
+      {7, 63, 5, false, false, false},   /* the chapter's own exception */
+      {7, 63, 0, false, false, true},    /* moved there, but not above 0 */
+      {7, 63, 0x80, false, false, true}, /* nor is &80, which R4 keeps seven bits of */
+      {7, 30, 5, false, false, true},    /* moved above 0, but not at the line's end */
+      {3, 63, 5, true, false, true},     /* and taken back by a later write */
+      {7, -1, 5, false, true, true},     /* moved once the run had opened */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 20, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    if (cases[index].at_c0 >= 0) {
+      /* Where the write is to land, on the frame's own last row. */
+      bool there = false;
+      for (long character = 0; character < 8L * 64 * 40 && !there; character++) {
+        crtc_tick(&crtc);
+        there = !crtc.vertical_adjustment_in_progress && crtc.c4 == 0 &&
+                crtc.c9 == cases[index].at_c9 && crtc.c0 == cases[index].at_c0;
+      }
+      TEST_CHECK(there);
+      if (!there) {
+        continue;
+      }
+      write_register(4, cases[index].to);
+      if (cases[index].then_taken_back) {
+        bool later = false;
+        for (long character = 0; character < 8L * 64 && !later; character++) {
+          crtc_tick(&crtc);
+          later = crtc.c9 == (uint8_t)(cases[index].at_c9 + 1) && crtc.c0 == 10;
+        }
+        TEST_CHECK(later);
+        write_register(4, 0);
+      }
+    }
+    bool reached = false;
+    for (long character = 0; character < 8L * 64 * 40 && !reached; character++) {
+      crtc_tick(&crtc);
+      reached = crtc.vertical_adjustment_in_progress && crtc.c4 == 1 && crtc.c0 == 0 && crtc.c9 > 0;
+    }
+    TEST_CHECK(reached);
+    if (!reached) {
+      continue;
+    }
+    if (cases[index].moved_inside_the_run) {
+      /* At a line's end, which is where the exception would have caught the
+         write had the run not already opened. */
+      while (crtc.c0 != crtc.registers[0]) {
+        crtc_tick(&crtc);
+      }
+      write_register(4, cases[index].to);
+      do {
+        crtc_tick(&crtc);
+      } while (crtc.c0 != 0);
+    }
+    write_register(12, 0x20);
+    write_register(13, 0x40);
+    do {
+      crtc_tick(&crtc);
+    } while (crtc.c0 != 0);
+    if (cases[index].carries) {
+      TEST_EQUAL(crtc.vma, 0x2040);
+    } else {
+      TEST_CHECK(crtc.vma != 0x2040);
+    }
+  }
+}
+
+/* The exception wants C0 standing on R0, and not merely at or past it. An R0
+   pulled under C0 and left there for a character tells the two apart: the
+   write that follows lands where C0 is past R0 without being on it, so a
+   chip reading the comparison the other way would refuse a carry this one
+   grants. */
+static void the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 20, 25, 30, 0, 7, 0, 0, 0x10, 0};
+  crtc_init(&crtc, 1);
+  for (int reg = 0; reg < 14; reg++) {
+    write_register(reg, values[reg]);
+  }
+  bool there = false;
+  for (long character = 0; character < 8L * 64 * 40 && !there; character++) {
+    crtc_tick(&crtc);
+    there = !crtc.vertical_adjustment_in_progress && crtc.c4 == 0 && crtc.c9 == 7 && crtc.c0 == 30;
+  }
+  TEST_CHECK(there);
+  if (!there) {
+    return;
+  }
+  write_register(0, 10); /* R0 pulled under C0, which stands at 30 */
+  crtc_tick(&crtc);      /* and a character drawn with it there */
+  write_register(4, 5);  /* above 0, past R0, and not on it */
+  write_register(0, 63); /* the line put back */
+  bool reached = false;
+  for (long character = 0; character < 8L * 64 * 40 && !reached; character++) {
+    crtc_tick(&crtc);
+    reached = crtc.vertical_adjustment_in_progress && crtc.c4 == 1 && crtc.c0 == 0 && crtc.c9 > 0;
+  }
+  TEST_CHECK(reached);
+  if (!reached) {
+    return;
+  }
+  write_register(12, 0x20);
+  write_register(13, 0x40);
+  do {
+    crtc_tick(&crtc);
+  } while (crtc.c0 != 0);
+  TEST_EQUAL(crtc.vma, 0x2040);
+}
+
 /* R8's bits 5 and 4 are the SKEW-DISPTMG delays, which ch. 19.1's table
    gives this type and withholds from types 1 and 2: one character or two
    on the R1 border's two edges. Ch. 19.2.3 states each delay as its own
@@ -3511,6 +3738,10 @@ int main(void) {
   TEST_RUN(a_type_1_gives_up_its_r6_border_with_the_register);
   TEST_RUN(an_r6_of_zero_is_taken_back_only_before_r1);
   TEST_RUN(a_type_1_takes_its_offset_all_through_the_first_row);
+  TEST_RUN(a_type_1_leaves_its_latch_frozen_where_c0_cannot_reach_r1);
+  TEST_RUN(a_type_1_carries_its_offset_into_the_added_lines);
+  TEST_RUN(an_r4_moved_at_a_lines_end_takes_the_carry_away);
+  TEST_RUN(the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0);
   TEST_RUN(the_skew_delays_the_border_at_both_ends);
   TEST_RUN(a_skew_carries_the_border_round_the_lines_end);
   TEST_RUN(a_skew_makes_the_early_border_a_whole_character);

@@ -207,6 +207,8 @@ static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
    it, not the adjustment that carried it. */
 static void begin_frame(crtc_t *crtc) {
   crtc->vertical_adjustment_in_progress = false;
+  crtc->adjustment_opened_at_c4_of_zero = false;
+  crtc->r4_moved_at_a_lines_end = false;
   crtc->adjustment_on_its_last_line = false;
   crtc->c9 = 0;
   crtc->c5 = 0;
@@ -238,6 +240,13 @@ static void open_the_adjustment(crtc_t *crtc) {
   }
   crtc->vertical_adjustment_in_progress = true;
   crtc->r5_opened_the_run = takes_the_r5_state(crtc);
+  /* "However, if R4 was modified to C0==R0 with R4>0, then VMA is not
+     updated with R12/R13 when C4=1" (ch. 11.2.4), read from the last R4 the
+     frame was given: a later write anywhere takes an earlier one's answer
+     away, which is wider than the chapter's own sentence and what nothing
+     here tells apart, since an R4 above 0 left standing from an earlier line
+     moves the row the run opens on instead. */
+  crtc->adjustment_opened_at_c4_of_zero = crtc->c4 == 0 && !crtc->r4_moved_at_a_lines_end;
 }
 
 /* How many lines a VSYNC lasts. "This number of lines can be programmed on
@@ -613,6 +622,31 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
   }
 }
 
+/* A run of additional lines opened while C4 stood at 0 carries a type 1's
+   offset into the C4 of 1 the run itself gives it: "if C4=0 before the
+   additional management, then VMA is updated with R12/R13 and not VMA', and
+   this as long as C4=1 (new value of C4 in additional management) ... it is
+   then possible to modify the offset on each line C9 of C4=1 as one would do
+   when C4=0" (ch. 11.2.4). Ch. 17.4.2 says the same of the same lines: "if
+   C4 is 0 and additional row management begins (because R4=0 and R5>0), then
+   C4 will be 1 for the first additional rows ... it is possible to modify the
+   offset (R12/R13) on each line of this C4, but not of the following ones".
+   The paragraph's own exception is taken at the open above. What is not here
+   is the RFD the sentence after it points at (ch. 11.6), where the same
+   taking outlives C4 altogether.
+
+   Between the two quoted halves stands "in other words, the management of R1
+   for the update of the video pointer no longer takes place", which ch. 11's
+   other chapters use for the capture of VMA' at C0=R1 rather than for this
+   load. It is read here as the reason the carry ends rather than as a rule
+   of its own: ch. 11.6 has that update status put out by the C9=R9 test made
+   at C0=R1, which is the line C4 leaves 1 behind on. The capture still
+   happens, and a chip that withheld it would pass everything here. */
+static bool offset_carries_into_the_adjustment(const crtc_t *crtc) {
+  return crtc->type == 1 && crtc->vertical_adjustment_in_progress &&
+         crtc->adjustment_opened_at_c4_of_zero && crtc->c4 == 1;
+}
+
 /* VMA reloads from the VMA' latch where a scanline begins, and on the
    frame's first character both take R12/R13 — type 0 reloads when C4, C9
    and C0 stand at zero (ch. 20.3.1), where a type 1 reloads VMA alone and
@@ -642,10 +676,11 @@ static void move_video_pointer(crtc_t *crtc) {
        line down the frame, and this one draws its first line from R12/R13
        and the rest from a VMA' "frozen on the last known pointer" (ch.
        17.4.2, 11.6). C4 standing at 0 is this chip's plainest case and not
-       its rule: ch. 11.6 has the update status outliving C4 where a border
-       on a row's last line is missed, and ch. 11.2.4 keeps it through a C4
-       of 1 in additional management. Neither is here. */
-    if (crtc->type == 1 && crtc->c4 == 0) {
+       its rule: ch. 11.2.4 keeps the same taking through the C4 of 1 that a
+       run of additional lines gives it, which the predicate above carries,
+       and ch. 11.6 keeps it past any C4 at all where a border on a row's
+       last line is missed, which is not here. */
+    if (crtc->type == 1 && (crtc->c4 == 0 || offset_carries_into_the_adjustment(crtc))) {
       crtc->vma = offset;
     }
   }
@@ -1052,6 +1087,9 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     if (mask != 0) {
       bool was_video_mode = interlace_video_asked(crtc);
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
+      if (crtc->address_register == 4) {
+        crtc->r4_moved_at_a_lines_end = crtc->registers[4] > 0 && crtc->c0 == crtc->registers[0];
+      }
       if (crtc->address_register == 6 && crtc->type == 1 && crtc->registers[6] == 0 &&
           crtc->c4 == 0 && crtc->c9 == 0) {
         /* "However, if C4=R6=0 (1st line-character of a new frame) during
