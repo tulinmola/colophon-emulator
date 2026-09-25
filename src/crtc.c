@@ -615,16 +615,39 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
 
 /* VMA reloads from the VMA' latch where a scanline begins, and on the
    frame's first character both take R12/R13 — type 0 reloads when C4, C9
-   and C0 stand at zero (ch. 20.3.1). VMA' then captures VMA where C0
-   reaches R1 on the row's last scanline, so the next row starts R1
-   characters further on (ch. 20.3.3). */
+   and C0 stand at zero (ch. 20.3.1), where a type 1 reloads VMA alone and
+   goes on doing it all through the row C4 spends at 0 (ch. 20.3.2, below). VMA' then captures VMA
+   where C0 reaches R1 on the row's last scanline, so the next row starts R1 characters further on
+   (ch. 20.3.3). */
 static void move_video_pointer(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
+  uint16_t offset = (uint16_t)(((r[12] << 8) | r[13]) & 0x3FFF);
   if (crtc->c0 == 0) {
-    if (crtc->c4 == 0 && crtc->c9 == 0) {
-      crtc->vma_ = (uint16_t)(((r[12] << 8) | r[13]) & 0x3FFF);
+    if (crtc->type != 1 && crtc->c4 == 0 && crtc->c9 == 0) {
+      crtc->vma_ = offset;
     }
     crtc->vma = crtc->vma_;
+    /* A type 1 takes the offset into the pointer itself — "the VMA pointer
+       (and not VMA' as on CRTC 0) is updated using the content of R12/R13"
+       (ch. 17.4.2) — and takes it on every line of the frame's first
+       character row rather than on that row's first line alone: "CRTC 1 then
+       loads VMA with R12/R13 as long as C4=0 and each time C0 returns to 0,
+       regardless of the value of C9" (ch. 20.3.2). The chapter names what it
+       costs a program written for another chip: the vegetation in Domark's
+       "007 The Living Daylights" goes because the address of the score is
+       set while C4 is still 0 and lands on the scenery.
+
+       VMA' is left where it was, which is what tells the two chips apart
+       where C0 can never reach R1: a type 0 reloads both and repeats one
+       line down the frame, and this one draws its first line from R12/R13
+       and the rest from a VMA' "frozen on the last known pointer" (ch.
+       17.4.2, 11.6). C4 standing at 0 is this chip's plainest case and not
+       its rule: ch. 11.6 has the update status outliving C4 where a border
+       on a row's last line is missed, and ch. 11.2.4 keeps it through a C4
+       of 1 in additional management. Neither is here. */
+    if (crtc->type == 1 && crtc->c4 == 0) {
+      crtc->vma = offset;
+    }
   }
   if (crtc->c0 == r[1] && row_is_on_its_last_scanline(crtc)) {
     crtc->vma_ = crtc->vma;
@@ -743,17 +766,36 @@ static bool r0_stands_in_for_r1(const crtc_t *crtc) {
    does not exist when R6>0)" (ch. 18.3.2), which is both the alternation the
    line comes out as and the deadline it can be taken back before. A type 1
    meets the same standing and settles it the other way, with a border that
-   stands for the rest of the frame (ch. 18.3.3), and types 3 and 4 never
-   meet it: "no conflict exists since the management of R6=0 does not exist
-   during the line and is tested only once" (ch. 18.3.4). */
+   stands for the rest of the frame (ch. 18.3.3) on top of the one an R6 of 0
+   gives it outright, and types 3 and 4 never meet it: "no conflict exists since the management of
+   R6=0 does not exist during the line and is tested only once" (ch. 18.3.4). */
 static bool takes_the_r6_conflict(const crtc_t *crtc) { return crtc->type == 0 || crtc->type == 2; }
 
 /* And whether C4 is measured against R6 at every character of a line or only
-   where the line begins. The same sentence of ch. 18.3.4 gives types 3 and 4
-   the single test, which is what leaves an R6 written mid-line on those two
-   waiting for the next one. */
+   where the line begins: "the R6 test is done at the beginning of the line
+   only. The update of R6 during the line is therefore not considered ... the
+   BORDER is activated only when C0 goes to 0 when C4=R6" (ch. 18.2.4), which
+   leaves an R6 written mid-line on those two waiting for the next line. That
+   same test falls on a frame's own head, where the three others hold the
+   equality back: "setting R6 to 0 when C4 and C9 are 0, but C0>0 will have
+   no effect before the new frame (or the BORDER will be activated)" (ch.
+   18.3.4). */
 static bool tests_r6_every_character(const crtc_t *crtc) {
   return crtc->type != 3 && crtc->type != 4;
+}
+
+static bool takes_r6_on_a_frames_first_line(const crtc_t *crtc) {
+  return crtc->type == 3 || crtc->type == 4;
+}
+
+/* A type 1 borders on an R6 of 0 wherever C4 stands: "the value 0 is
+   specifically considered and triggers a BORDER without the condition C4=R6
+   being required" (ch. 18.2.3). It lasts as long as the register does —
+   "when R6 is updated with 0, the BORDER is activated as long as the
+   register value is 0" (ch. 18.3.3) — so it is read and not latched, and
+   what the same chapter does latch is the write made while C4 is 0. */
+static bool r6_of_zero_borders_outright(const crtc_t *crtc) {
+  return crtc->type == 1 && crtc->registers[6] == 0;
 }
 
 /* DISPLAY ENABLE is two latches the equalities throw rather than two
@@ -794,7 +836,13 @@ static void throw_display_latches(crtc_t *crtc) {
   }
   if (first_line && crtc->c0 == 0) {
     crtc->display_r6 = false;
-  } else if (crtc->c4 == r[6] && !first_line && (tests_r6_every_character(crtc) || crtc->c0 == 0)) {
+  }
+  /* An R6 of 0 on a type 1 throws no latch: that chip's border is read from
+     the register and given up with it, and the only thing that outlives the
+     register is the write ch. 18.3.3 keeps for the frame. */
+  if (crtc->c4 == r[6] && !r6_of_zero_borders_outright(crtc) &&
+      (tests_r6_every_character(crtc) || crtc->c0 == 0) &&
+      (!first_line || takes_r6_on_a_frames_first_line(crtc))) {
     crtc->display_r6 = true;
   }
   /* The one thing that makes the first line's cancellable border stand: "in
@@ -855,7 +903,8 @@ static uint64_t pins_of(const crtc_t *crtc) {
   if (skew == SKEW_ONE_CHARACTER || skew == SKEW_TWO_CHARACTERS) {
     border_r1 = crtc->display_r1_earlier[skew - 1];
   }
-  bool display = !border_r1 && !crtc->display_r6 && skew != SKEW_BORDER_ON;
+  bool display = !border_r1 && !crtc->display_r6 && !r6_of_zero_borders_outright(crtc) &&
+                 skew != SKEW_BORDER_ON;
   bool r6_conflict = takes_the_r6_conflict(crtc) && crtc->c4 == 0 && crtc->c9 == 0 && r[6] == 0;
   /* Where a delay is programmed the border of a line R1 never reached is a
      character of its own at the deferred place, not the half character the

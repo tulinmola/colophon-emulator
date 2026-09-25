@@ -8,7 +8,7 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and five things are not its alone. The first
+ * Type 0 is the type implemented, and seven things are not its alone. The first
  * is what a machine can read of the chip: the registers each type hands back
  * on the read port, and the status register type 1 alone has, are answered for
  * types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program names the chip by
@@ -77,12 +77,28 @@
  * here: a line too narrow to reach the disarm gives types 1 and 2 no
  * additional line where it gives the other three one, ch. 13.2's window being
  * a type 0's. Every other behaviour below is type 0's whatever the type is
- * set to, and a number naming none of the five is neither refused nor
- * corrected. One of those is worth naming because the disc grades it: a type
- * 1 takes R4 written with the value C4 already holds as the frame's end
- * wherever on the line it lands — "if we were on the last line (C9=R9), then
- * C9 goes to 0, C4=0" (ch. 12.3) — where a type 0 reads that comparison only
- * while C0 is under 2, and it is a type 0's window this chip keeps.
+ * set to, and a number naming none of the seven is neither refused nor
+ * corrected. The sixth is the border R6 asks for. Where R6 is 0 a frame's
+ * first line is a conflict on types 0 and 2 and comes out an alternation of
+ * bordered and displayed bytes, cancellable until C0 meets R1 and definitive
+ * after it (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the
+ * condition C4=R6 being required" and gives the border up with the register,
+ * except where the write was made while C4 stood at 0, which keeps it for the
+ * frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict and test R6
+ * where a line begins rather than through it (ch. 18.2.4, 18.3.4). No line
+ * the disc grades moves on any of the three — what grades them is those
+ * chapters and tests of our own, and Shaker says its piece there in pictures.
+ * The seventh is where a type 1 reads its offset: R12/R13 reach VMA itself,
+ * and reach it at the head of every line the frame's first character row
+ * spends with C4 at 0, where the other four load both pointers once and only
+ * where C4, C9 and C0 stand together at 0 (ch. 17.4.2, 20.3.2). C4 at 0 is
+ * that chip's plainest case and not its rule: ch. 11.2.4 and 11.6 keep the
+ * same update alive through a C4 of 1 in additional management and past a
+ * missed border, and neither is here. One of those is worth naming because the disc grades it: a
+ * type 1 takes R4 written with the value C4 already holds as the frame's end wherever on the line
+ * it lands — "if we were on the last line (C9=R9), then C9 goes to 0, C4=0" (ch. 12.3) — where a
+ * type 0 reads that comparison only while C0 is under 2, and it is a type 0's window this chip
+ * keeps.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload

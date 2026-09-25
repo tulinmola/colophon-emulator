@@ -2742,6 +2742,67 @@ static void an_r6_of_zero_alternates_the_first_lines_bytes(void) {
   }
 }
 
+/* What a frame's first line comes out as when R6 stands at 0, which is a
+   different answer on each of the three chapters. Types 0 and 2 alternate
+   bordered and displayed bytes (ch. 18.3.2). A type 1 borders outright,
+   because for that chip "the value 0 is specifically considered and triggers
+   a BORDER without the condition C4=R6 being required" (ch. 18.2.3) and the
+   border "is activated as long as the register value is 0" (ch. 18.3.3).
+   Types 3 and 4 have no conflict to hold their equality back and take it at
+   the frame's own head: "the BORDER is activated only when C0 goes to 0 when
+   C4=R6" (ch. 18.2.4, 18.3.4). */
+static void an_r6_of_zero_meets_each_type_differently(void) {
+  static const struct {
+    uint8_t type;
+    bool displays_the_first_byte;  /* the alternation's displayed half */
+    bool displays_the_second_byte; /* which only the two that alternate lose */
+  } cases[] = {
+      {0, true, false}, {1, false, false}, {2, true, false}, {3, false, false}, {4, false, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 0, 30, 0, 7, 0, 0, 0x30, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    TEST_CHECK(run_to_row(0));
+    for (int character = 0; character < 8; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, cases[index].displays_the_first_byte);
+      TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cases[index].displays_the_second_byte);
+    }
+  }
+}
+
+/* And a type 1's border goes when the register does, where the other four
+   keep what the equality threw: "the BORDER is activated as long as the
+   register value is 0" (ch. 18.3.3), read at every character rather than
+   latched. The write that makes it outlive its register is the one made
+   while C4 is 0, which the same chapter keeps for the rest of the frame. */
+static void a_type_1_gives_up_its_r6_border_with_the_register(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 0, 30, 0, 7, 0, 0, 0x30, 0};
+  for (int written_while_c4_was_zero = 0; written_while_c4_was_zero <= 1;
+       written_while_c4_was_zero++) {
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    if (written_while_c4_was_zero) {
+      /* The update ch. 18.3.3 keeps: an R6 written with 0 while C4 stands at
+         0 "becomes true first for all the rest of the frame". */
+      TEST_CHECK(run_to_row(0));
+      crtc_tick(&crtc);
+      write_register(6, 0);
+    }
+    TEST_CHECK(run_to_row(2));
+    crtc_tick(&crtc);
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* an R6 of 0 borders */
+    write_register(6, 25);
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_EQUAL((pins & CRTC_DISPTMG) != 0, !written_while_c4_was_zero);
+  }
+}
+
 /* The frame's first line is where an R6 of 0 can still be taken back, and
    the character C0 meets R1 on is the deadline: "in this situation however,
    if R6 is 0 when C0=R1, the BORDER becomes definitive", where an R1 put out
@@ -2752,14 +2813,16 @@ static void an_r6_of_zero_alternates_the_first_lines_bytes(void) {
    types 3 and 4 never meet it. */
 static void an_r6_of_zero_is_taken_back_only_before_r1(void) {
   static const struct {
-    const char *what;
     uint8_t r1;         /* 40 is met on the line; 64 is not */
     bool taken_back;    /* whether R6 is written above 0 on the first line */
     bool borders_after; /* what the frame's second row comes out as */
   } cases[] = {
-      {"taken back after C0 met R1", 40, true, true},
-      {"taken back with R1 out of reach", 64, true, false},
-      {"never taken back", 40, false, true},
+      {40, true, true},  /* taken back after C0 met R1 */
+      {64, true, false}, /* taken back with R1 out of reach */
+      /* And never taken back, which the chapter leaves to "the condition
+         C4=R6=0=BORDER is cancellable on the first line" rather than saying
+         outright. */
+      {40, false, true},
   };
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     program_standard();
@@ -2777,6 +2840,57 @@ static void an_r6_of_zero_is_taken_back_only_before_r1(void) {
     TEST_CHECK(run_to_row(1));
     uint64_t pins = crtc_tick(&crtc);
     TEST_EQUAL((pins & CRTC_DISPTMG) == 0, cases[index].borders_after);
+  }
+}
+
+/* R12/R13 reach the video pointer on every line of a frame's first
+   character row on a type 1, and on that row's first line alone everywhere
+   else: "CRTC 1 then loads VMA with R12/R13 as long as C4=0 and each time C0
+   returns to 0, regardless of the value of C9" (ch. 20.3.2), where a type 0
+   is given "when the counters C4, C9 and C0 change to 0" (ch. 20.3.1). The
+   offset is moved on the row's second line and the third line is read: a
+   type 1 draws it from the new address and the others from the old.
+
+   Ch. 20.3.1's own last line says of a type 0 only "if C4=0 and C0=0", which
+   would make it a type 1 in this; its opening sentence names C9 with the
+   other two, and that is what stands here. Nothing outside this file chooses
+   between them: dropping the C9 from the shared rule leaves both Shaker
+   records and both demo records passing, and only these rows notice. */
+static void a_type_1_takes_its_offset_all_through_the_first_row(void) {
+  static const struct {
+    uint8_t type;
+    bool on_every_line;
+  } cases[] = {{0, false}, {1, true}, {2, false}, {3, false}, {4, false}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    TEST_CHECK(run_to_row(0));
+    while (crtc.c9 != 1) { /* the row's second line, C4 still 0 */
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 0);
+    write_register(12, 0x20);
+    write_register(13, 0x40);
+    while (crtc.c9 != 2) { /* and its third, where the offset is read or not */
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.vma, cases[index].on_every_line ? 0x2040 : 0x1000);
+    /* And no type takes it once C4 has left 0 behind: the chapter gives a
+       type 1 the row C4 spends at 0, not the frame. */
+    TEST_CHECK(run_to_row(1));
+    while (crtc.c9 != 1) {
+      crtc_tick(&crtc);
+    }
+    uint16_t opened_the_line = crtc.vma;
+    write_register(12, 0x30);
+    write_register(13, 0x00);
+    while (crtc.c9 != 2) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.vma, opened_the_line);
   }
 }
 
@@ -3393,7 +3507,10 @@ int main(void) {
   TEST_RUN(the_video_mode_still_takes_the_adjustment_lines);
   TEST_RUN(a_line_r1_never_ends_borders_its_last_byte);
   TEST_RUN(an_r6_of_zero_alternates_the_first_lines_bytes);
+  TEST_RUN(an_r6_of_zero_meets_each_type_differently);
+  TEST_RUN(a_type_1_gives_up_its_r6_border_with_the_register);
   TEST_RUN(an_r6_of_zero_is_taken_back_only_before_r1);
+  TEST_RUN(a_type_1_takes_its_offset_all_through_the_first_row);
   TEST_RUN(the_skew_delays_the_border_at_both_ends);
   TEST_RUN(a_skew_carries_the_border_round_the_lines_end);
   TEST_RUN(a_skew_makes_the_early_border_a_whole_character);
