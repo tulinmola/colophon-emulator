@@ -197,7 +197,7 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
   *cpc = (cpc_t){0};
   z80_init(&cpc->cpu);
   crtc_init(&cpc->crtc, crtc_type);
-  crtc_keep_a_fallback(&cpc->crtc, &cpc->crtc_fallback);
+  crtc_give_line_end_room(&cpc->crtc, &cpc->crtc_line_end_room);
   gate_array_init(&cpc->gate_array);
   ppi_init(&cpc->ppi);
   psg_init(&cpc->psg);
@@ -257,7 +257,7 @@ uint64_t cpc_tick(cpc_t *cpc) {
   /* Pointed here rather than once at power-on: a host may copy a whole
      machine and copy it back — the test suites do — and a pointer into the
      copy it came from would outlive the copying. */
-  crtc_keep_a_fallback(&cpc->crtc, &cpc->crtc_fallback);
+  crtc_give_line_end_room(&cpc->crtc, &cpc->crtc_line_end_room);
   gate_array_advance_phase(&cpc->gate_array);
   /* The motor line is held, not sampled: the board turns the reel for as
      long as the bit is set, whether or not the processor is looking at the

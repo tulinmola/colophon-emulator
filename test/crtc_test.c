@@ -665,10 +665,10 @@ static void a_write_on_the_character_clock_takes_a_type_1_line_end_back(void) {
          whatever C0 stood on, not a return to the head of a line. */
       {1, 1, 20, true, {2, 3, 4}},
   };
-  static crtc_t fallback;
+  static crtc_t line_end_room;
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, cases[index].type);
-    crtc_keep_a_fallback(&crtc, &fallback);
+    crtc_give_line_end_room(&crtc, &line_end_room);
     write_register(0, cases[index].width);
     write_register(4, 38);
     write_register(9, 7);
@@ -718,9 +718,9 @@ static void a_write_on_the_character_clock_takes_a_type_1_line_end_back(void) {
    frames from its twenty-fifth. So the freeze stays, and what it is standing
    in for is declared in crtc.h. */
 static void a_line_end_taken_back_is_the_one_just_taken(void) {
-  static crtc_t fallback;
+  static crtc_t line_end_room;
   crtc_init(&crtc, 1);
-  crtc_keep_a_fallback(&crtc, &fallback);
+  crtc_give_line_end_room(&crtc, &line_end_room);
   write_register(0, 49);
   write_register(4, 38);
   write_register(9, 7);
@@ -741,7 +741,7 @@ static void a_line_end_taken_back_is_the_one_just_taken(void) {
   TEST_EQUAL(crtc.c0, 4u);
 
   crtc_init(&crtc, 1);
-  crtc_keep_a_fallback(&crtc, &fallback);
+  crtc_give_line_end_room(&crtc, &line_end_room);
   write_register(0, 0);
   write_register(4, 38);
   write_register(9, 7);
@@ -787,13 +787,13 @@ static void a_line_end_taken_back_is_the_one_just_taken(void) {
    rescue's to put back (ch. 19.5.3, 19.8.2). */
 static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t r8) {
   static crtc_t never_ended;
-  static crtc_t fallback[2];
+  static crtc_t line_end_room[2];
   static crtc_t ended;
   const uint8_t registers[] = {1, 40, 48, 0x26, 5, 2, 3, 4, r8, 3};
   crtc_t *chips[2] = {&never_ended, &ended};
   for (int which = 0; which < 2; which++) {
     crtc_init(chips[which], 1);
-    crtc_keep_a_fallback(chips[which], &fallback[which]);
+    crtc_give_line_end_room(chips[which], &line_end_room[which]);
     crtc = *chips[which];
     for (int number = 1; number < (int)(sizeof registers); number++) {
       write_register(number, registers[number]);
@@ -856,12 +856,12 @@ static void a_line_taken_back_is_a_line_that_never_ended(void) {
    that was that wide all along raises it. */
 static void the_costs_a_taken_back_line_cannot_pay(void) {
   static crtc_t never_ended;
-  static crtc_t fallback[2];
+  static crtc_t line_end_room[2];
   static crtc_t ended;
   crtc_t *chips[2] = {&never_ended, &ended};
   for (int which = 0; which < 2; which++) {
     crtc_init(chips[which], 1);
-    crtc_keep_a_fallback(chips[which], &fallback[which]);
+    crtc_give_line_end_room(chips[which], &line_end_room[which]);
     crtc = *chips[which];
     write_register(4, 38);
     write_register(9, 7);
@@ -890,7 +890,7 @@ static void the_costs_a_taken_back_line_cannot_pay(void) {
      bordered from R1 onward (ch. 17.3, 18.2.1). */
   for (int which = 0; which < 2; which++) {
     crtc_init(chips[which], 1);
-    crtc_keep_a_fallback(chips[which], &fallback[which]);
+    crtc_give_line_end_room(chips[which], &line_end_room[which]);
     crtc = *chips[which];
     write_register(1, 30);
     write_register(4, 38);
@@ -932,9 +932,9 @@ static void the_costs_a_taken_back_line_cannot_pay(void) {
    R3 was written on this character does not — the tick that ended the line
    has already spent it, and a line's end is not an R3 write (ch. 15.3.1). */
 static void a_take_back_carries_the_writes_it_cannot_undo(void) {
-  static crtc_t fallback;
+  static crtc_t line_end_room;
   crtc_init(&crtc, 1);
-  crtc_keep_a_fallback(&crtc, &fallback);
+  crtc_give_line_end_room(&crtc, &line_end_room);
   write_register(0, 49);
   write_register(4, 38);
   write_register(9, 7); /* which leaves R9 the register selected */
@@ -1078,10 +1078,10 @@ static void an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0(voi
    another: whatever the old one holds is not this one's, and a chip handed
    none has nowhere to go back to at all. Either way the line's end that was
    standing is no longer standing. */
-static void a_line_end_does_not_outlive_the_buffer_holding_it(void) {
-  static crtc_t fallback;
+static void a_line_end_does_not_outlive_the_room_holding_it(void) {
+  static crtc_t line_end_room;
   crtc_init(&crtc, 1);
-  crtc_keep_a_fallback(&crtc, &fallback);
+  crtc_give_line_end_room(&crtc, &line_end_room);
   write_register(0, 49);
   write_register(4, 38);
   write_register(9, 7);
@@ -1093,9 +1093,9 @@ static void a_line_end_does_not_outlive_the_buffer_holding_it(void) {
     climbed = climbed || crtc.c0 != 0;
   }
   TEST_CHECK(ended);
-  TEST_CHECK(crtc.fallback_holds_a_line_end);
-  crtc_keep_a_fallback(&crtc, 0);
-  TEST_CHECK(!crtc.fallback_holds_a_line_end);
+  TEST_CHECK(crtc.a_line_end_is_kept);
+  crtc_give_line_end_room(&crtc, 0);
+  TEST_CHECK(!crtc.a_line_end_is_kept);
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
   crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
   TEST_EQUAL(crtc.c0, 0u);
@@ -4493,7 +4493,7 @@ int main(void) {
   TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
   TEST_RUN(a_take_back_carries_the_writes_it_cannot_undo);
   TEST_RUN(an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0);
-  TEST_RUN(a_line_end_does_not_outlive_the_buffer_holding_it);
+  TEST_RUN(a_line_end_does_not_outlive_the_room_holding_it);
   TEST_RUN(a_mode_taken_up_inside_a_row_is_counted_from_the_address);
   TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);
   TEST_RUN(types_3_and_4_count_the_interlace_as_their_chapter_gives_it);

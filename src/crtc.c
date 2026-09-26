@@ -555,7 +555,7 @@ static void enter_scanline(crtc_t *crtc) {
    C0: R0 takes all 256 values C0 does, and 255 is one a program can write,
    so a sentinel there would read as the end of a 256-character line. */
 static void enter_character(crtc_t *crtc) {
-  crtc->fallback_holds_a_line_end = false;
+  crtc->a_line_end_is_kept = false;
   if (!crtc->has_drawn_a_character) {
     crtc->has_drawn_a_character = true;
     return;
@@ -587,13 +587,13 @@ static void enter_character(crtc_t *crtc) {
      character clock is still in time to move R0 under the comparison, so
      what the chip stood on is kept where it can be taken back (ch. 13.3,
      note 3, and ch. 13.7.1's phase shift). */
-  if (crtc->fallback != 0 && crtc->type == 1) {
-    *crtc->fallback = *crtc;
+  if (crtc->line_end_room != 0 && crtc->type == 1) {
+    *crtc->line_end_room = *crtc;
     /* One latch in the copy belongs to the character rather than to the
        line: this tick is about to spend the R3 write it records, and a
        line's end is not an R3 write, so the copy carries none back. */
-    crtc->fallback->r3_written_for_this_character = false;
-    crtc->fallback_holds_a_line_end = true;
+    crtc->line_end_room->r3_written_for_this_character = false;
+    crtc->a_line_end_is_kept = true;
   }
   crtc->c0 = 0;
   crtc->c0_reached_r0 = true;
@@ -1113,15 +1113,15 @@ static void settle_parity(crtc_t *crtc) {
   }
 }
 
-void crtc_keep_a_fallback(crtc_t *crtc, crtc_t *fallback) {
-  /* A line's end kept in one buffer is not kept in another, and a chip given
-     none has nowhere to go back to: the end stands only while the buffer
-     holding it does. A host re-pointing the chip at the buffer it already
-     has changes nothing, which is what lets a machine do it every tick. */
-  if (crtc->fallback != fallback) {
-    crtc->fallback_holds_a_line_end = false;
+void crtc_give_line_end_room(crtc_t *crtc, crtc_t *room) {
+  /* A line's end kept in one room is not kept in another, and a chip given
+     none has nowhere to go back to: the end stands only while the room
+     holding it does. A host re-pointing the chip at the room it already has
+     changes nothing, which is what lets a machine do it every tick. */
+  if (crtc->line_end_room != room) {
+    crtc->a_line_end_is_kept = false;
   }
-  crtc->fallback = fallback;
+  crtc->line_end_room = room;
 }
 
 uint64_t crtc_tick(crtc_t *crtc) {
@@ -1283,7 +1283,7 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     if (mask != 0) {
       bool was_video_mode = interlace_video_asked(crtc);
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
-      if (crtc->address_register == 0 && crtc->fallback_holds_a_line_end &&
+      if (crtc->address_register == 0 && crtc->a_line_end_is_kept &&
           (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
         /* "The comparison of C0 with R0 ... takes place after R0 is updated
            at the 5th µsecond of the OUTI instruction" (ch. 13.7.1.1), and
@@ -1294,17 +1294,17 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            did not end: the counter goes on from the character it stood on,
            and ch. 13.6.2's chronogram gives this type one microsecond of
            instruction more than the rest for it. */
-        uint8_t the_character_it_ended_on = crtc->fallback->c0;
+        uint8_t the_character_it_ended_on = crtc->line_end_room->c0;
         if (crtc->registers[0] != the_character_it_ended_on) {
           /* What is taken back is the line's ending, not the write that
              cancelled it: the copy was taken before the host touched the
              chip, so the register file and the register a write is aimed at
              cross over as they stand rather than as they stood. */
           for (unsigned which = 0; which < sizeof crtc->registers; which++) {
-            crtc->fallback->registers[which] = crtc->registers[which];
+            crtc->line_end_room->registers[which] = crtc->registers[which];
           }
-          crtc->fallback->address_register = crtc->address_register;
-          *crtc = *crtc->fallback;
+          crtc->line_end_room->address_register = crtc->address_register;
+          *crtc = *crtc->line_end_room;
           crtc->c0 = (uint8_t)(the_character_it_ended_on + 1);
           if (crtc->c0 == 1) {
             /* The one line whose management was never given back is the one

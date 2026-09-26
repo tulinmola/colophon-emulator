@@ -532,10 +532,11 @@ typedef struct crtc_t {
      power-on state, which is what leaves the first tick drawing a line's
      first character rather than its second. */
   bool has_drawn_a_character;
-  /* Where the line's end is kept while a write could still cancel it, and
-     whether what is kept there is such a boundary (ch. 13.3, note 3). */
-  struct crtc_t *fallback;
-  bool fallback_holds_a_line_end;
+  /* A type 1 decides a line's end a quarter of a character after the rest,
+     so a write landing on the character clock can still cancel the wrap just
+     taken (ch. 13.3, note 3). */
+  struct crtc_t *line_end_room;
+  bool a_line_end_is_kept;
   /* One C4/R7 equality raises one VSYNC: the comparison must change, by C4
      moving or R7 being written, before it raises another (ch. 16.3). */
   bool vsync_blocked;
@@ -620,7 +621,7 @@ uint64_t crtc_tick(crtc_t *crtc);
  * and this is where. A chip given none never takes a wrap back, which is the
  * other four types' behaviour and what a host that cannot time its accesses
  * gets. */
-void crtc_keep_a_fallback(crtc_t *crtc, crtc_t *fallback);
+void crtc_give_line_end_room(crtc_t *crtc, crtc_t *room);
 
 /* One bus transaction: CS, RS, RW and the data lanes in; the data lanes out
  * when the chip drives them. Where it does not — a read this type never
