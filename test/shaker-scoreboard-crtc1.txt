@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-8 of them printed self-graded lines, 39 in all: 29 agree with Longshot's
-silicon and 10 do not. That is 74% of what this reader can score, and no
-measure at all of the other 62 groups.
+7 of them printed self-graded lines, 33 in all: 29 agree with Longshot's
+silicon and 4 do not. That is 88% of what this reader can score, and no
+measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -106,13 +106,7 @@ B (TAB)     R5 BENCH (INTERACTIVE)                                              
 B (0)       VERTICAL SCROLL SUB-PIXEL 1/8,1/16,1/32,1/64,1/128                               recorded, ungraded, cut off at the cap
 C (1)       CRTC 1   : RFD & PARITY STORY                                                    recorded, ungraded
 C (2)       CRTC 1   : R8 IVM ON ODD C9                                                      recorded, ungraded
-C (3)       CRTC 1   : PARITY SWITCH STATUS                                                  6 graded, 6 wrong
-    ! TEST C: 5F,5F: WRONG!
-    ! TEST E: 5F,5F: WRONG!
-    ! TEST G: 5F,5F: WRONG!
-    ! TEST I: 5F,5F: WRONG!
-    ! TEST K: 5F,5F: WRONG!
-    ! TEST L: 5F,5F: WRONG!
+C (3)       CRTC 1   : PARITY SWITCH STATUS                                                  recorded, ungraded
 C (4)       CRTC 1   : IVM ON/OFF                                                            recorded, ungraded
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   another CRTC type's
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's

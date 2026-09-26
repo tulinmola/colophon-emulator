@@ -523,29 +523,28 @@ static void types_0_and_1_want_different_r9s_for_a_row(void) {
   }
 }
 
-/* Types 0 and 2 settle the coming frame's parity on the row R6 names, so
-   where C4 can never reach R6 "this state is no longer updated and
-   ParityFrame remains frozen" (ch. 19.5.2, 19.5.4) — the frames stop
-   alternating and the two fields stop differing. The other three anticipate
-   nothing: "ParityFrame switch between each frame when C4 = C9 = C0 = 0"
-   and does so "whatever the value of R8" (ch. 19.5.3, 19.5.5), so no R6 can
-   freeze them. The extra line follows whichever parity its type keeps — the
-   anticipated one on a type 0 and a type 2 (ch. 19.6.1, 19.6.3), the
-   frame's own on the other three, where it "does not depend on the C4=R6
-   equivalence" (ch. 19.6.2, 19.6.4) — so a frame carrying it is a line
-   longer than the frame beside it, and the lengths turn over wherever the
-   parity does. */
 /* Ch. 19.5.3's diagrams for a pulse of the interlace video mode on a type
    1, read off the page as drawn: sixteen of them, one for each way the
    frame's parity, C4's, R9's and C9's can stand when the mode is asked for
-   and given up again. Each names ParityC9 and ParityFrame after the OUT
-   R8,3 and after the OUT R8,0 that follows it, and those are what this
-   holds the chip to. Where the chapter's prose gives the rules as three
-   lines of arithmetic, the diagrams give their answers case by case, and a
-   slip in reading either shows up as a disagreement with the other. One
-   rule of the three is not falsifiable here: in all sixteen the frame takes
-   a parity on leaving the mode that it already held, so what the leaving
-   does is invisible to them. */
+   and given up again. Each is labelled on the page with the Shaker tests
+   that exercise it, and those are the names carried beside the rows below.
+   Each names ParityC9 and ParityFrame after the OUT R8,3 and after the OUT
+   R8,0 that follows it, and draws C9's low bit beside them, character by
+   character, following ParityC9 through both writes — so one pair of
+   expectations answers for the counter and for the parity alike, and those
+   are what this holds the chip to. Every pulse the page draws stays inside
+   one line, the row named M/O among them, so the Shaker test of that name
+   is drawn here and graded elsewhere: the disc's own M pulses across a
+   line, which is the neighbouring test below. Where the chapter's prose
+   gives the rules as three lines of arithmetic, the diagrams give their
+   answers case by case, and a slip in reading either shows up as a
+   disagreement with the other. They are the only outside evidence for three
+   of the rules — the correction C4 makes where R9 is even, the reset of
+   ParityC9 where the frame was even, and the parity the frame takes back
+   when the mode is left — and no line either scoreboard scores can reach
+   them. The last of the three is not falsifiable here at all: in all
+   sixteen the frame takes a parity on leaving that it already held, so what
+   the leaving does is invisible to them. */
 static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
   static const struct {
     bool frame_parity_odd; /* the parity the pulse finds */
@@ -558,23 +557,23 @@ static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
     bool frame_parity_after_off;
   } cases[] = {
       /* Initial parity EVEN (page 211) */
-      {false, false, false, false, false, false, false, false},
-      {false, false, true, false, false, false, false, false},
-      {false, false, false, true, false, false, false, false},
-      {false, false, true, true, false, false, false, false},
-      {false, true, false, false, true, false, false, false},
-      {false, true, true, false, false, false, false, false},
-      {false, true, false, true, true, false, false, false},
-      {false, true, true, true, false, false, false, false},
+      {false, false, false, false, false, false, false, false}, /* S/W */
+      {false, false, true, false, false, false, false, false},  /* T/X */
+      {false, false, false, true, false, false, false, false},  /* Q/U/Y1 */
+      {false, false, true, true, false, false, false, false},   /* R/V/Z1 */
+      {false, true, false, false, true, false, false, false},   /* D/H */
+      {false, true, true, false, false, false, false, false},   /* E/I */
+      {false, true, false, true, true, false, false, false},    /* B/F */
+      {false, true, true, true, false, false, false, false},    /* C/G */
       /* Initial parity ODD (page 212) */
-      {true, false, false, false, false, false, false, false},
-      {true, false, true, false, false, false, false, false},
-      {true, false, false, true, true, true, true, true},
-      {true, false, true, true, true, true, true, true},
-      {true, true, false, false, true, false, false, false},
-      {true, true, true, false, false, false, false, false},
-      {true, true, false, true, false, true, true, true},
-      {true, true, true, true, true, true, true, true},
+      {true, false, false, false, false, false, false, false}, /* ZA/ZC */
+      {true, false, true, false, false, false, false, false},  /* ZB/ZD */
+      {true, false, false, true, true, true, true, true},      /* P/Y2 */
+      {true, false, true, true, true, true, true, true},       /* Z */
+      {true, true, false, false, true, false, false, false},   /* L/N */
+      {true, true, true, false, false, false, false, false},   /* M/O */
+      {true, true, false, true, false, true, true, true},      /* A/J2 */
+      {true, true, true, true, true, true, true, true},        /* K2 */
   };
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, 1);
@@ -603,12 +602,195 @@ static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
     write_register(8, 3); /* OUT R8,3: the mode is asked for */
     TEST_EQUAL(crtc.parity_c9_held, cases[index].parity_c9_after_on);
     TEST_EQUAL(crtc.parity_frame, cases[index].frame_parity_after_on);
+    TEST_EQUAL((crtc.c9 & 1) != 0, cases[index].parity_c9_after_on);
+    /* Four characters on, which is where the page draws the second write
+       and near enough what an OUT of its own costs. The line does not end
+       under them, so the mode is never taken up and C9 is the address. */
+    for (int character = 0; character < 4; character++) {
+      crtc_tick(&crtc);
+    }
     write_register(8, 0); /* and given up again, on the same line */
     TEST_EQUAL(crtc.parity_c9_held, cases[index].parity_c9_after_off);
     TEST_EQUAL(crtc.parity_frame, cases[index].frame_parity_after_off);
+    TEST_EQUAL((crtc.c9 & 1) != 0, cases[index].parity_c9_after_off);
   }
 }
 
+/* And a pulse the doubling starts inside, which is the other half of the
+   same rule. Ch. 19.8.2 gives a type 1 one counter and it is the address —
+   in the mode it steps by two, and when R8 returns to 0 "the counting logic
+   normally resumes" from the line the address had reached. This chip keeps
+   a count and a parity apart, so the two are handed back to each other at
+   the edge: without that the address repeats a line, and the row runs one
+   longer than the chip's. Shaker's C (3) puts its thirteenth test here, and
+   the write's own settling of C9 is refused on this edge because the bit it
+   would settle is the one the doubling already fills. */
+static void a_mode_taken_up_inside_a_row_is_counted_from_the_address(void) {
+  static const struct {
+    uint8_t type;
+    bool frame_parity_odd;
+    uint8_t c9;           /* the line the mode is asked for on */
+    uint8_t addresses[8]; /* and what RA carries from there to the row's end */
+    unsigned drawn;
+  } cases[] = {
+      /* Asked for at C9=0 the counting takes the address to 2 ("C9 =
+         C9+1+(R9.0)", R9 odd), and given up on that line it goes on from
+         2 rather than from half of it: 3, 4, 5, 6, 7, and the row ends
+         where C9 meets R9. Asked for at 2 the same walk starts at 4. */
+      {1, false, 0, {2, 3, 4, 5, 6, 7}, 6},
+      {1, false, 2, {4, 5, 6, 7}, 4},
+      /* An odd frame carries ParityC9 in the bit the doubling leaves, so
+         the addresses it walks are the odd ones: from 1 the counting gives
+         3, and the row runs to R9 itself rather than to the line below it.
+         The write settles that bit of the counter before the doubling
+         starts, which is what makes an odd line answerable at all. */
+      {1, true, 1, {3, 4, 5, 6, 7}, 5},
+      {1, true, 3, {5, 6, 7}, 3},
+      /* A type 0 is handed nothing back, and should not be: there "counter
+         C9 continues to increment normally" while the mode stands and the
+         address is that count doubled (ch. 19.8.1), so giving the mode up
+         leaves the address at the count and not at the address it had —
+         from 2 the row goes 6, then 4, 5, 6, 7. */
+      {0, false, 2, {6, 4, 5, 6, 7}, 5},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    bool standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 crtc.parity_frame == cases[index].frame_parity_odd;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    bool reached = false;
+    for (long tick = 0; tick < 2L * FRAME_TICKS && !reached; tick++) {
+      crtc_tick(&crtc);
+      reached = crtc.c4 == 2 && crtc.c9 == cases[index].c9 && crtc.c0 == 20;
+    }
+    TEST_CHECK(reached);
+    if (!reached) {
+      continue;
+    }
+    write_register(8, 3);
+    uint8_t addresses[8] = {0};
+    unsigned counted = 0;
+    uint8_t row = crtc.c4;
+    bool given_up = false;
+    /* The mode is given up a line later, where the doubling stands: the
+       counter must not move under that write, and the address must go on
+       from where it had reached rather than from half of it. */
+    for (long tick = 0; tick < 12L * SCANLINE && crtc.c4 == row; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (counted < 8 && crtc.c0 == 1) {
+        addresses[counted++] = crtc_ra(pins);
+      }
+      if (!given_up && counted == 1 && crtc.c0 == 20) {
+        uint8_t before_the_write = crtc.c9;
+        /* Given up, asked for again and given up once more, all on the one
+           line and all while the doubling stands: none of the three may
+           move this counter, whichever way the mode is going. */
+        write_register(8, 0);
+        TEST_EQUAL(crtc.c9, before_the_write);
+        write_register(8, 3);
+        TEST_EQUAL(crtc.c9, before_the_write);
+        write_register(8, 0);
+        TEST_EQUAL(crtc.c9, before_the_write);
+        given_up = true;
+      }
+    }
+    TEST_EQUAL(counted, cases[index].drawn);
+    for (unsigned line = 0; line < cases[index].drawn && line < counted; line++) {
+      TEST_EQUAL(addresses[line], cases[index].addresses[line]);
+    }
+  }
+}
+
+/* What the parity written into C9's low bit costs the frame it lands in.
+   That counter is the one a row's end is measured against, so a pulse that
+   puts it back to the line before gives the frame that line again:
+   "deactivate the IVM mode can also modify C9, and modify the end condition
+   of character C4" (ch. 19.5.3). It is the frame's own parity that decides,
+   because that is what the write hands ParityC9 when it finds an even one.
+   Shaker's C (3) grades this thirteen times over, and the diagrams that
+   draw it name that group's tests one by one. */
+static void a_pulse_on_an_odd_line_lengthens_an_even_frame(void) {
+  static const struct {
+    bool frame_parity_odd;
+    uint8_t c9;
+    bool gains_a_line;
+  } cases[] = {
+      /* The line is named in full, and not by its parity alone, so that a
+         chip writing the whole counter where it should write one bit of it
+         is told from one that has the rule: from C9=5 the first would begin
+         the row again and the second give back a single line. */
+      {false, 5, true}, {false, 4, false}, {true, 5, false},
+      {true, 4, false}, {false, 1, true},  {false, 0, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    long scanlines[2] = {0, 0};
+    for (int pulsed = 0; pulsed < 2; pulsed++) {
+      crtc_init(&crtc, 1);
+      write_register(0, 63);
+      write_register(4, 38);
+      write_register(7, 30);
+      write_register(9, 7);
+      bool standing = false;
+      for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+        crtc_tick(&crtc);
+        standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                   crtc.parity_frame == cases[index].frame_parity_odd;
+      }
+      TEST_CHECK(standing);
+      if (!standing) {
+        break;
+      }
+      /* A row the frame's end is nowhere near, so that what is counted is
+         the line and not some other rule of the last row's. */
+      bool reached = false;
+      for (long tick = 0; tick < 2L * FRAME_TICKS && !reached; tick++) {
+        crtc_tick(&crtc);
+        reached = crtc.c4 == 2 && crtc.c9 == cases[index].c9 && crtc.c0 == 20;
+      }
+      TEST_CHECK(reached);
+      if (!reached) {
+        break;
+      }
+      if (pulsed) {
+        write_register(8, 3);
+        write_register(8, 0);
+      }
+      do {
+        crtc_tick(&crtc);
+        if (crtc.c0 == 0) {
+          scanlines[pulsed]++;
+        }
+      } while (crtc.c0 != 0 || crtc.c4 != 0 || crtc.c9 != 0);
+    }
+    if (scanlines[0] > 0) {
+      TEST_EQUAL(scanlines[1] - scanlines[0], cases[index].gains_a_line ? 1 : 0);
+    }
+  }
+}
+
+/* Types 0 and 2 settle the coming frame's parity on the row R6 names, so
+   where C4 can never reach R6 "this state is no longer updated and
+   ParityFrame remains frozen" (ch. 19.5.2, 19.5.4) — the frames stop
+   alternating and the two fields stop differing. The other three anticipate
+   nothing: "ParityFrame switch between each frame when C4 = C9 = C0 = 0"
+   and does so "whatever the value of R8" (ch. 19.5.3, 19.5.5), so no R6 can
+   freeze them. The extra line follows whichever parity its type keeps — the
+   anticipated one on a type 0 and a type 2 (ch. 19.6.1, 19.6.3), the
+   frame's own on the other three, where it "does not depend on the C4=R6
+   equivalence" (ch. 19.6.2, 19.6.4) — so a frame carrying it is a line
+   longer than the frame beside it, and the lengths turn over wherever the
+   parity does. */
 static void types_0_and_2_alone_can_freeze_their_frame_parity(void) {
   static const struct {
     uint8_t type;
@@ -743,77 +925,6 @@ static void an_interlace_pulse_fixes_a_type_1_on_an_even_field(void) {
       crtc_tick(&crtc);
       TEST_EQUAL(crtc.parity_frame, from_odd && on_an_odd_scanline);
     }
-  }
-}
-
-/* Ch. 19.5.3 does not only state the rules an R8 write follows on a type 1,
-   it draws them: printed pages 211 and 212 work fifteen scenarios, one for
-   each way the frame's parity, C9, C4 and R9 can stand when the mode is
-   pulsed on and off, and each is labelled with the Shaker test that
-   exercises it. The table below is those pages, and the values are theirs.
-   It is the only outside evidence for three of the rules — the correction
-   C4 makes where R9 is even, the reset of ParityC9 where the frame was
-   even, and the parity the frame takes back when the mode is left — none of
-   which any line the scoreboard scores can reach. */
-static void an_r8_write_answers_the_scenarios_the_chapter_draws(void) {
-  static const struct {
-    const char *drawn_as; /* the Shaker tests the page names it by */
-    bool frame_odd;       /* how the chip stands when the pulse comes */
-    bool c4_odd;
-    bool r9_odd;
-    bool c9_odd;
-    bool held_on_entering; /* and the four values the page annotates */
-    bool frame_on_entering;
-    bool held_on_leaving;
-    bool frame_on_leaving;
-  } scenarios[] = {
-      {"S/W", false, false, false, false, false, false, false, false},
-      {"T/X", false, false, true, false, false, false, false, false},
-      {"Q/U/Y1", false, false, false, true, false, false, false, false},
-      {"R/V/Z1", false, false, true, true, false, false, false, false},
-      {"D/H", false, true, false, false, true, false, false, false},
-      {"E/I", false, true, true, false, false, false, false, false},
-      {"B/F", false, true, false, true, true, false, false, false},
-      {"C/G", false, true, true, true, false, false, false, false},
-      {"ZA/ZC", true, false, false, false, false, false, false, false},
-      {"ZB/ZD", true, false, true, false, false, false, false, false},
-      {"P/Y2", true, false, false, true, true, true, true, true},
-      {"Z", true, false, true, true, true, true, true, true},
-      {"L/N", true, true, false, false, true, false, false, false},
-      {"A/J2", true, true, false, true, false, true, true, true},
-      {"K2", true, true, true, true, true, true, true, true},
-  };
-  for (unsigned index = 0; index < sizeof scenarios / sizeof *scenarios; index++) {
-    crtc_init(&crtc, 1);
-    write_register(0, 63);
-    write_register(1, 40);
-    write_register(2, 46);
-    write_register(3, 0x8E);
-    write_register(4, 38);
-    write_register(9, scenarios[index].r9_odd ? 7 : 6);
-    write_register(6, 25);
-    write_register(7, 35);
-    write_register(8, 0);
-    /* Stand where the page stands: a row and a scanline of the parities it
-       names, away from either end of the line. */
-    bool stood = false;
-    for (long character = 0; character < 8L * 64 * 320; character++) {
-      crtc_tick(&crtc);
-      if (((crtc.c4 & 1) != 0) == scenarios[index].c4_odd &&
-          ((crtc.c9 & 1) != 0) == scenarios[index].c9_odd && crtc.c0 == 20) {
-        stood = true;
-        break;
-      }
-    }
-    TEST_CHECK(stood);
-    crtc.parity_frame = scenarios[index].frame_odd;
-    write_register(8, 3);
-    TEST_EQUAL(crtc.parity_c9_held, scenarios[index].held_on_entering);
-    TEST_EQUAL(crtc.parity_frame, scenarios[index].frame_on_entering);
-    crtc_tick(&crtc);
-    write_register(8, 0);
-    TEST_EQUAL(crtc.parity_c9_held, scenarios[index].held_on_leaving);
-    TEST_EQUAL(crtc.parity_frame, scenarios[index].frame_on_leaving);
   }
 }
 
@@ -3667,13 +3778,14 @@ int main(void) {
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
   TEST_RUN(an_r8_pulse_leaves_the_parities_the_diagrams_draw);
+  TEST_RUN(a_mode_taken_up_inside_a_row_is_counted_from_the_address);
+  TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);
   TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
   TEST_RUN(each_type_counts_the_adjustment_lines_its_own_way);
   TEST_RUN(a_type_1_holds_a_frame_open_where_r5_is_cancelled);
   TEST_RUN(a_type_1_opens_each_run_with_the_r5_it_has);
   TEST_RUN(a_type_1_takes_no_state_where_c4_is_past_r4);
   TEST_RUN(an_interlace_pulse_fixes_a_type_1_on_an_even_field);
-  TEST_RUN(an_r8_write_answers_the_scenarios_the_chapter_draws);
   TEST_RUN(only_type_1_drives_the_status_port);
   TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
   TEST_RUN(a_write_can_make_a_last_line_as_well_as_unmake_one);

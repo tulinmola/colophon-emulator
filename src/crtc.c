@@ -120,12 +120,12 @@ static bool parity_c9(const crtc_t *crtc) {
   if (crtc->type == 1) {
     return crtc->parity_c9_held;
   }
-  /* A type 1 reads that the other way round: it is "when R9 is even" that
-     "the parity of the lines depends on that of C4 and on the current
-     parity at the start of the frame" (ch. 19.5.3), which ch. 19.8.2 puts
-     as "if R9 is even (odd number of lines of a character), then the parity
-     of C4 is also considered". */
-  bool odd_lined_rows = (crtc->registers[9] & 1) != (crtc->type == 1 ? 1u : 0u);
+  /* The other four take it from the row: where a row is an odd number of
+     lines the two frames must share them, so an odd C4 runs on the parity
+     opposite the frame's. A type 1 never reaches here — it reads the same
+     rule off an even R9 rather than an odd one, and r9_with_parity is where
+     that lives. */
+  bool odd_lined_rows = (crtc->registers[9] & 1) != 0;
   if (odd_lined_rows && (crtc->c4 & 1) != 0) {
     return !crtc->parity_frame;
   }
@@ -145,6 +145,25 @@ static uint8_t c9_vma(const crtc_t *crtc) {
     return crtc->c9;
   }
   return (uint8_t)((((unsigned)crtc->c9 << 1) | (parity_c9(crtc) ? 1u : 0u)) & C9_BITS);
+}
+
+/* The line the count goes on from, where the doubling is about to start or
+   stop under it. Ch. 19.8.2 gives a type 1 one counter and it is the
+   address: in the mode it steps by two with ParityC9 in the bit it leaves,
+   and "as soon as R8 returns to 0, the counting logic normally resumes" —
+   from the line the address had reached. This chip keeps that as a count
+   and a parity, ch. 19.8.1's arrangement, so the two have to be handed back
+   to each other wherever a mode is taken up or given up in the middle of a
+   row: doubled where the doubling stops, halved where it starts, which is
+   also where the bit ch. 19.5.3 has the write settle arrives when the write
+   was too early to see it. At a row's head both are zero and neither moves,
+   which is every frame that asks for the mode and keeps it. */
+static uint8_t c9_the_count_goes_on_from(const crtc_t *crtc) {
+  bool asked = interlace_video_asked(crtc);
+  if (crtc->type != 1 || crtc->interlace_video_mode == asked) {
+    return crtc->c9;
+  }
+  return asked ? (uint8_t)(crtc->c9 >> 1) : c9_vma(crtc);
 }
 
 /* R9 read to the nearest line of ParityC9's own parity — up on a type 0,
@@ -300,7 +319,12 @@ static void enter_scanline(crtc_t *crtc) {
     }
     /* The one register the freeze does not shut out: "updates to registers
        R4, R5 and R9 are no longer considered as long as R0=0. On the other
-       hand, R8 continues to be considered each time C0=0" (ch. 13.2.1). */
+       hand, R8 continues to be considered each time C0=0" (ch. 13.2.1). A
+       frozen chip's address stands where it stood, so the count and the
+       parity are handed back to each other here as they are at a running
+       line's end, or the doubling would move an address the freeze is
+       holding still. */
+    crtc->c9 = c9_the_count_goes_on_from(crtc);
     crtc->interlace_video_mode = interlace_video_asked(crtc);
     return;
   }
@@ -381,7 +405,7 @@ static void enter_scanline(crtc_t *crtc) {
         crtc->c9 = 0;
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       } else {
-        crtc->c9 = (uint8_t)((crtc->c9 + 1) & C9_BITS);
+        crtc->c9 = (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
       }
     }
   } else if (crtc->vertical_adjustment_armed) {
@@ -441,7 +465,7 @@ static void enter_scanline(crtc_t *crtc) {
     crtc->c9 = 0;
     enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
   } else {
-    crtc->c9 = (uint8_t)((crtc->c9 + 1) & C9_BITS);
+    crtc->c9 = (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
   }
 
   /* And the doubling R8 asks for is taken up here rather than where it was
@@ -1040,7 +1064,8 @@ static void take_up_r8_parity(crtc_t *crtc, bool was_video_mode) {
      low bit is the parity itself and not the counter's — "C9 = ParityC9"
      (ch. 19.8.2) — so leaving reads back what entering installed, which is
      what makes a pulse of the mode settle the parity at all. */
-  bool c9_bit_0 = was_video_mode ? crtc->parity_c9_held : (crtc->c9 & 1) != 0;
+  bool c9_bit_0 =
+      (was_video_mode || crtc->interlace_video_mode) ? crtc->parity_c9_held : (crtc->c9 & 1) != 0;
   crtc->parity_c9_held = c9_bit_0 != c4_carries_it;
   if (interlace_video_asked(crtc)) {
     /* And the fourth, entering: the frame's parity survives only where it
@@ -1053,6 +1078,33 @@ static void take_up_r8_parity(crtc_t *crtc, bool was_video_mode) {
   } else {
     /* Leaving, the frame takes what the row held: "ParityFrame=ParityC9". */
     crtc->parity_frame = crtc->parity_c9_held;
+  }
+  /* And the counter moves with the parity: "the parity and/or bit 0 of
+     C9 are updated" by the write itself (ch. 19.5.3), which the same
+     page says is not free — "deactivate the IVM mode can also modify C9,
+     and modify the end condition of character C4". That a type 1's
+     counter moves inside a line at all is ch. 19.5.5's, said of the two
+     types that do not: "unlike CRTC's 1 and 2, and as CRTC 0, C9 does
+     not change during the line". Ch. 19.5.3's sixteen diagrams draw the
+     bit through both writes of a pulse, and a pulse landing on an odd C9
+     while the frame's parity is even puts the counter back to the line
+     before, which is a line the frame gains. The 3rd microsecond's value
+     and the 4th's are one write here, so what the diagrams draw between
+     them is not ours to show; what stands after each write is.
+
+     Only while the doubling is not standing, and that is a reading
+     rather than a quotation. The C9 the chapter's rules move is ch.
+     19.8.2's, the one counter a type 1 keeps, which is the address
+     itself; this chip keeps a count and a parity instead, so while the
+     mode is latched the bit named here is the one c9_vma already fills
+     and this counter's own bit 0 is worth two lines of address. Writing
+     it there would spend the parity twice and move the address two
+     lines, either way. A pulse that stays inside a line never latches
+     the mode, which is where all sixteen diagrams draw it; the counters
+     are handed back to each other at the edges instead, where a pulse
+     does latch. */
+  if (!crtc->interlace_video_mode) {
+    crtc->c9 = (uint8_t)((crtc->c9 & ~1u) | (crtc->parity_c9_held ? 1u : 0u));
   }
 }
 

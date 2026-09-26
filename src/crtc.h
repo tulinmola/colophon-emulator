@@ -46,62 +46,83 @@
  * performed on the 3rd and 4th µseconds of the OUT(C),C instruction", and
  * toggling the mode "on and off on an even C9 line, regardless of the value of
  * R9" sets the parity even, which is the only means a program has of choosing
- * a field on this type (ch. 19.5.3). The disc grades the divergence: Shaker's
- * C (S) and C (O) both came right and fell silent. The rules themselves are
- * graded by the fifteen scenarios ch. 19.5.3 draws on its own following pages,
- * each named for the Shaker test that exercises it, and all fifteen are a test
+ * a field on this type (ch. 19.5.3). The write settles C9's low bit with it,
+ * that bit being ParityC9 and not the count's own while the mode stands ("C9
+ * = ParityC9", ch. 19.8.2), and the chapter names the cost: "deactivate the
+ * IVM mode can also modify C9, and modify the end condition of character C4".
+ * So a pulse landing on an odd C9 while the frame's parity is even puts the
+ * counter back to the line before, and the frame runs a line longer than its
+ * neighbour. The disc grades the divergence: Shaker's C (S) and C (O) both
+ * came right and fell silent, and C (3) grades nothing at all now, where
+ * six of its thirteen lines were wrong. The write is skipped while the
+ * doubling stands, because the C9 those rules move is ch. 19.8.2's — the
+ * one counter a type 1 keeps, which is the address — and this chip keeps a
+ * count and a parity instead, ch. 19.8.1's arrangement for a type 0. The
+ * two are handed back to each other wherever a mode is taken up or given up
+ * inside a row, which is what the thirteenth of those tests measures: its
+ * pulse spans a line, so the doubling starts between its two writes. The
+ * rules themselves are graded by the sixteen scenarios ch. 19.5.3 draws on
+ * its own following pages, each named for the Shaker test that exercises it
+ * and each drawing C9 beside the two parities, and all sixteen are a test
  * here — all but one of the rules dies when it is taken away. The one that
- * does not is the parity the frame takes back when the mode is left, which a
- * pulse cannot show because ParityC9's turn and C4's correction cancel: the
- * disc moves on it, in a group that says so in a picture. The fifth is where a
- * frame's additional lines are counted. "On CRTCs 0, 3 and 4, there is no
- * specific C5 counter and C9 is used for comparison with R5. On CRTCs 1 and 2,
- * there is a specific counter C5 used in conjunction with C9" (ch. 11.1), so
- * on those two the row goes on being counted and C4 on advancing through the
- * lines — "regardless of the value of R4 each time C9=R9, as long as C5 has
- * not reached R5" — where the other three hold the row where it stands. No
- * line the disc grades moves on the counter itself: what stands behind that
- * is ch. 11.2.2 and 11.2.3's own tables and a test of our own. A type 1 alone
- * latches a state with the counter, "if R5>0 when C4 should return to 0 at the
- * end of the frame", which an R5 taken back to 0 does not clear — "the state
- * is not deactivated, C4 does not return to 0 and C5 loops" — so a program can
- * hold a frame open and close it on a line of its own choosing, and that is
- * here. The hold is not endless: "C4, however, continues to be compared to R4
- * to process the change from C4 to 0", and on the row that comparison comes
- * round on C4 goes back to 0 while "the additional management, however,
- * remains activated" — the state is simply taken again on the comparison that
- * activates it, finds the R5 the program cancelled, and is not taken, so the
- * run ends where C5 next comes round to it (ch. 11.3.2). Ch. 11.3.1 is headed
- * "CRTC's 0, 2" and gives its two the plain overflow of the counter, so
- * neither of them takes the state. One thing that counter carries is not
- * here: a line too narrow to reach the disarm gives types 1 and 2 no
- * additional line where it gives the other three one, ch. 13.2's window being
- * a type 0's. Every other behaviour below is type 0's whatever the type is
- * set to, and a number naming none of the seven is neither refused nor
- * corrected. One of those is worth naming because the disc grades it: a
- * type 1 takes R4 written with the value C4 already holds as the frame's end
- * wherever on the line it lands — "if we were on the last line (C9=R9), then
- * C9 goes to 0, C4=0" (ch. 12.3) — where a type 0 reads that comparison only
- * while C0 is under 2, and it is a type 0's window this chip keeps. The sixth is the border R6 asks
- * for. Where R6 is 0 a frame's first line is a conflict on types 0 and 2 and comes out an
- * alternation of bordered and displayed bytes, cancellable until C0 meets R1 and definitive after
- * it (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the condition C4=R6 being
- * required" and gives the border up with the register, except where the write was made while C4
- * stood at 0, which keeps it for the frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict
- * and test R6 where a line begins rather than through it (ch. 18.2.4, 18.3.4). No line the disc
- * grades moves on any of the three — what grades them is those chapters and tests of our own, and
- * Shaker says its piece there in pictures. The seventh is where a type 1 reads its offset: R12/R13
- * reach VMA itself, and reach it at the head of every line the frame's first character row spends
- * with C4 at 0, where the other four load both pointers once and only where C4, C9 and C0 stand
- * together at 0 (ch. 17.4.2, 20.3.2). C4 at 0 is that chip's plainest case and not its rule.
- * Ch. 11.2.4 keeps the same update through the C4 of 1 a run of additional lines gives it, where
- * the run opened with C4 at 0 — "if C4=0 before the additional management" — and that is here,
- * along with the exception it ends on: an R4 moved at C0=R0 above 0 takes the carry away.
- * Ch. 11.6 keeps the update past C4 altogether where the border on a row's last line is missed,
- * and that is not here. The disc grades none of the seventh in words and says it in a picture:
- * its E (2), "CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME", settles on "YOU'VE
- * WON THIS STAGE" with the carry and on "IF YOU CAN READ THIS...YOUR EMULATOR HAS A PROBLEM"
- * without it, and nothing else on the disc moves either way.
+ * does not is the parity the frame takes back when the mode is left, which
+ * a pulse cannot show because ParityC9's turn and C4's correction cancel:
+ * the disc moves on it, in a group that says so in a picture. The fifth is
+ * where a frame's additional lines are counted. "On CRTCs 0, 3 and 4, there
+ * is no specific C5 counter and C9 is used for comparison with R5. On CRTCs
+ * 1 and 2, there is a specific counter C5 used in conjunction with C9" (ch.
+ * 11.1), so on those two the row goes on being counted and C4 on advancing
+ * through the lines — "regardless of the value of R4 each time C9=R9, as
+ * long as C5 has not reached R5" — where the other three hold the row where
+ * it stands. No line the disc grades moves on the counter itself: what
+ * stands behind that is ch. 11.2.2 and 11.2.3's own tables and a test of
+ * our own. A type 1 alone latches a state with the counter, "if R5>0 when
+ * C4 should return to 0 at the end of the frame", which an R5 taken back to
+ * 0 does not clear — "the state is not deactivated, C4 does not return to 0
+ * and C5 loops" — so a program can hold a frame open and close it on a line
+ * of its own choosing, and that is here. The hold is not endless: "C4,
+ * however, continues to be compared to R4 to process the change from C4 to
+ * 0", and on the row that comparison comes round on C4 goes back to 0 while
+ * "the additional management, however, remains activated" — the state is
+ * simply taken again on the comparison that activates it, finds the R5 the
+ * program cancelled, and is not taken, so the run ends where C5 next comes
+ * round to it (ch. 11.3.2). Ch. 11.3.1 is headed "CRTC's 0, 2" and gives
+ * its two the plain overflow of the counter, so neither of them takes the
+ * state. One thing that counter carries is not here: a line too narrow to
+ * reach the disarm gives types 1 and 2 no additional line where it gives
+ * the other three one, ch. 13.2's window being a type 0's. Every other
+ * behaviour below is type 0's whatever the type is set to, and a number
+ * naming none of the seven is neither refused nor corrected. One of those
+ * is worth naming because the disc grades it: a type 1 takes R4 written
+ * with the value C4 already holds as the frame's end wherever on the line
+ * it lands — "if we were on the last line (C9=R9), then C9 goes to 0, C4=0"
+ * (ch. 12.3) — where a type 0 reads that comparison only while C0 is under
+ * 2, and it is a type 0's window this chip keeps. The sixth is the border
+ * R6 asks for. Where R6 is 0 a frame's first line is a conflict on types 0
+ * and 2 and comes out an alternation of bordered and displayed bytes,
+ * cancellable until C0 meets R1 and definitive after it (ch. 18.3.2); a
+ * type 1 borders outright on an R6 of 0 "without the condition C4=R6 being
+ * required" and gives the border up with the register, except where the
+ * write was made while C4 stood at 0, which keeps it for the frame (ch.
+ * 18.2.3, 18.3.3); and types 3 and 4 have no conflict and test R6 where a
+ * line begins rather than through it (ch. 18.2.4, 18.3.4). No line the disc
+ * grades moves on any of the three — what grades them is those chapters and
+ * tests of our own, and Shaker says its piece there in pictures. The
+ * seventh is where a type 1 reads its offset: R12/R13 reach VMA itself, and
+ * reach it at the head of every line the frame's first character row spends
+ * with C4 at 0, where the other four load both pointers once and only where
+ * C4, C9 and C0 stand together at 0 (ch. 17.4.2, 20.3.2). C4 at 0 is that
+ * chip's plainest case and not its rule. Ch. 11.2.4 keeps the same update
+ * through the C4 of 1 a run of additional lines gives it, where the run
+ * opened with C4 at 0 — "if C4=0 before the additional management" — and
+ * that is here, along with the exception it ends on: an R4 moved at C0=R0
+ * above 0 takes the carry away. Ch. 11.6 keeps the update past C4
+ * altogether where the border on a row's last line is missed, and that is
+ * not here. The disc grades none of the seventh in words and says it in a
+ * picture: its E (2), "CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT
+ * FRAME", settles on "YOU'VE WON THIS STAGE" with the carry and on "IF YOU
+ * CAN READ THIS...YOUR EMULATOR HAS A PROBLEM" without it, and nothing else
+ * on the disc moves either way.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
@@ -293,7 +314,12 @@ typedef struct {
      its limit; the widths are what bring it back (ch. 10.3.1.1, 12.1). */
   uint8_t c0; /* horizontal character counter, 8 bits; after a tick it names
                  the character that tick drew */
-  uint8_t c9; /* scanline within the character row, 5 bits; drives RA */
+  /* The scanline within the character row. On a type 1 its low bit is not
+     the count's alone: an R8 write settles it with ParityC9 (ch. 19.5.3),
+     and where the interlace video mode stands the address is this doubled
+     with that parity filling the bit, which c9_vma answers and this does
+     not (ch. 19.8.1). */
+  uint8_t c9;
   uint8_t c4; /* character row counter, 7 bits */
   /* C5, the Vertical Total Adjust Counter, 5 bits: the counter types 1 and
      2 keep the frame's additional lines on, "used in conjunction with C9 to
@@ -371,11 +397,21 @@ typedef struct {
      already stands on, and nothing we can run grades that. */
   bool parity_frame;
   bool parity_r6;
-  /* ParityC9 as a type 1 keeps it: a state of its own rather than a sum of
-     the others, because an R8 write sets it outright on that type and the
-     sum cannot be told what to hold (ch. 19.5.3). The other four are
-     answered by parity_c9() from R9, C4 and ParityFrame, which is what
-     their own chapters describe. */
+  /* ParityC9 as a type 1 keeps it: a state of its own rather than a sum
+     of the others, because an R8 write sets it outright on that type and
+     the sum cannot be told what to hold (ch. 19.5.3). It reaches C9 as
+     well: the write settles that counter's low bit, except while the
+     doubling stands, where the bit it would settle is the one c9_vma
+     fills. Types 0 and 2 are answered by parity_c9() from R9, C4 and
+     ParityFrame, which is what their own chapters describe. Types 3 and
+     4 are answered that way too and should not be: "when R8 changes to 1
+     or 3, Parityc9=C9.0" on those as well (ch. 19.5.5), and nothing here
+     does it. The write itself leaves their C9 where it is — "as CRTC 0,
+     C9 does not change during the line" — but ch. 19.8.4 gives them a
+     type 1's counting once the mode stands, one counter that is the
+     address, so the edges want the same handing back a type 1 gets here
+     and do not have it. Two things missing, then, and no line either
+     record grades reaches either. */
   bool parity_c9_held;
   /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a
      microsecond before the line it decides could begin. */
