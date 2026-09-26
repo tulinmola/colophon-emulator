@@ -127,6 +127,8 @@ typedef struct {
   uint64_t pins; /* the bus between ticks */
 
   crtc_t crtc;
+  /* Where the CRTC keeps a line's end while a write could still cancel it. */
+  crtc_t crtc_fallback;
   uint64_t crtc_pins; /* the CRTC's outputs as of its last character clock */
   gate_array_t gate_array;
   monitor_t monitor;

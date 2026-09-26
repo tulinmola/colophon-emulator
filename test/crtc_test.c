@@ -616,6 +616,382 @@ static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
   }
 }
 
+/* Ch. 13.6 draws what an R0 written across a line's end does, a chronogram
+   to a type (ch. 13.6.1, 13.6.2, 13.6.3), and this chip's is the one with a
+   fifth row: the placement where the OUT has wrapped the line at the old
+   width and the OUTI has not. "The comparison of C0 with R0 ... takes place
+   after R0 is updated at the 5th µsecond of the OUTI instruction"
+   (ch. 13.7.1.1), so a write arriving on the character clock itself is still
+   in time to move R0 under the comparison that has just been made, and the
+   line that had ended did not end. Ch. 13.3's third note works the example:
+   "if R0 was 49 and the 5th µsecond of the OUTI is at the position following
+   C0=49, and R0 is modified to 20, then C0 will not be equal to 0 but to 50
+   in some cases". The hedge is the chapter's own, twice over — the rule
+   itself "takes place after the assignment of R0 with the new value in some
+   cases" — and what the cases are it does not say, so this chip takes the
+   rule whenever the write lands on the clock and the hedge is a debt the
+   disc has not yet called in.
+
+   The chapter's two blocks are both here: a line of #3F given a new width,
+   and the "Previous R0=0" line, one character long and ending on every
+   character it draws, given a width to run to. The board says which edge an
+   access landed on and the chip says what it means, so this drives the pin
+   itself rather than an instruction. */
+static void a_write_on_the_character_clock_takes_a_type_1_line_end_back(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t width;     /* the line's own width */
+    uint8_t written;   /* and what the write hands it */
+    bool on_the_clock; /* whether the write lands on the character clock */
+    uint8_t goes_on_to[3];
+  } cases[] = {
+      /* Ch. 13.3's worked example, and the same write a quarter late. */
+      {1, 49, 20, true, {50, 51, 52}},
+      {1, 49, 20, false, {0, 1, 2}},
+      /* The other four never take a line's end back, whichever edge it is. */
+      {0, 49, 20, true, {0, 1, 2}},
+      {2, 49, 20, true, {0, 1, 2}},
+      {3, 49, 20, true, {0, 1, 2}},
+      {4, 49, 20, true, {0, 1, 2}},
+      /* A width rewritten with the width it already had ends its line all
+         the same: the comparison it is put to is the one that just held. */
+      {1, 49, 49, true, {0, 1, 2}},
+      /* The chapter's "Previous R0=0" line, given a width to run to. */
+      {1, 0, 16, true, {1, 2, 3}},
+      /* And the same write a quarter late, which no type takes. */
+      {1, 0, 16, false, {0, 1, 2}},
+      /* A width of 1, where the take-back lands on the character C0 names
+         2 rather than on its first: the chapter's overflow is an overflow of
+         whatever C0 stood on, not a return to the head of a line. */
+      {1, 1, 20, true, {2, 3, 4}},
+  };
+  static crtc_t fallback;
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    crtc_keep_a_fallback(&crtc, &fallback);
+    write_register(0, cases[index].width);
+    write_register(4, 38);
+    write_register(9, 7);
+    /* To the character the line ends on, which the chip has just taken. */
+    bool ended = false;
+    bool climbed = false;
+    for (long tick = 0; tick < 4L * SCANLINE && !ended; tick++) {
+      crtc_tick(&crtc);
+      /* A line of one character ends on every character it draws, so its
+         end is the next one either way; a wider one is walked to its own. */
+      ended = cases[index].width == 0 ? tick > 2 : (climbed && crtc.c0 == 0);
+      climbed = climbed || crtc.c0 != 0;
+    }
+    TEST_CHECK(ended);
+    if (!ended) {
+      continue;
+    }
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+    uint64_t pins = CRTC_CS | CRTC_RS | crtc_set_data(0, cases[index].written);
+    if (cases[index].on_the_clock) {
+      pins |= CRTC_ON_THE_CHARACTER_CLOCK;
+    }
+    crtc_access(&crtc, pins);
+    /* C0 is read as the chapter prints it, character by character, because a
+       line that runs on and a line that begins again both leave C0 climbing. */
+    TEST_EQUAL(crtc.c0, cases[index].goes_on_to[0]);
+    for (unsigned line = 1; line < 3; line++) {
+      crtc_tick(&crtc);
+      TEST_EQUAL(crtc.c0, cases[index].goes_on_to[line]);
+    }
+  }
+}
+
+/* And the two things that walk cannot see. A line's end goes stale: the chip
+   takes back the end it has just taken and no other, so a write landing four
+   characters later finds nothing to undo. And the line of one character the
+   rescue lets go is counted again: while R0 was 0 "C9 can no longer count"
+   (ch. 13.2.1), and the character the line starts again on is the one that
+   gives the management back.
+
+   That freeze is type 0's in the documentation and every type's here. Ch.
+   13.3 and ch. 13.5 deny it of the rest in as many words — "if R0 is 0, then
+   C9 and R4 continue to be managed normally" — and ch. 13.4 opens the same
+   way. Granting it to type 0 alone was tried and measured: B (6)'s
+   "OUTI ON C0=0,R0=0" did not move, Shaker's own "ANALYZER / FORCED STAB
+   CRTC 0 R0=0" stopped settling, and Batman Forever on a type 1 moved 866
+   frames from its twenty-fifth. So the freeze stays, and what it is standing
+   in for is declared in crtc.h. */
+static void a_line_end_taken_back_is_the_one_just_taken(void) {
+  static crtc_t fallback;
+  crtc_init(&crtc, 1);
+  crtc_keep_a_fallback(&crtc, &fallback);
+  write_register(0, 49);
+  write_register(4, 38);
+  write_register(9, 7);
+  bool ended = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended; tick++) {
+    crtc_tick(&crtc);
+    ended = climbed && crtc.c0 == 0;
+    climbed = climbed || crtc.c0 != 0;
+  }
+  TEST_CHECK(ended);
+  for (int character = 0; character < 4; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c0, 4u);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 4u);
+
+  crtc_init(&crtc, 1);
+  crtc_keep_a_fallback(&crtc, &fallback);
+  write_register(0, 0);
+  write_register(4, 38);
+  write_register(9, 7);
+  for (int character = 0; character < 8; character++) {
+    crtc_tick(&crtc);
+  }
+  /* One line's end counted before the freeze shut, and none of the seven
+     after it: the management stands at power-on and is withdrawn by the
+     first end that finds C0 unable to reach 1. */
+  uint8_t held_while_frozen = crtc.c9;
+  TEST_EQUAL(held_while_frozen, 1u);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 3));
+  TEST_EQUAL(crtc.c0, 1u);
+  TEST_EQUAL(crtc.c9, held_while_frozen);
+  /* The first line of its own again is where the management tells: given
+     back on the character C0 names 1, the row moves on at that line's end;
+     withheld, it waits for the line after it. */
+  for (int character = 0; character < 3; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c0, 0u);
+  TEST_EQUAL(crtc.c9, (uint8_t)(held_while_frozen + 1));
+}
+
+/* What "the line that had ended did not end" is worth as a whole. A chip
+   whose R0 was wide enough that the line never ended is the oracle: walk one
+   of those beside a chip whose narrow line does end, hand the narrow one the
+   wide width on the character clock, and from that character the two are the
+   same machine. Every counter the ending moved has to come back for that to
+   hold — the address, the row, the scanline within it, the HSYNC's own count
+   — and the sync is laid across the boundary on purpose, beginning before it
+   and ending after, because a sync is the one thing whose count the ending
+   advances and whose comparison it does not. The pins are what the
+   comparison is made on: they carry the address, the raster address, both
+   syncs and the display, and a frame of them is more than enough ground for
+   any of it to part company.
+
+   The walk is made twice, because R8 at rest leaves the largest body of this
+   type's own state out of the comparison: in the interlace video mode the
+   parities, the line a frame is owed and the raster address the count is
+   read up to are all live, and all of them are the ending's to move and the
+   rescue's to put back (ch. 19.5.3, 19.8.2). */
+static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t r8) {
+  static crtc_t never_ended;
+  static crtc_t fallback[2];
+  static crtc_t ended;
+  const uint8_t registers[] = {1, 40, 48, 0x26, 5, 2, 3, 4, r8, 3};
+  crtc_t *chips[2] = {&never_ended, &ended};
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], 1);
+    crtc_keep_a_fallback(chips[which], &fallback[which]);
+    crtc = *chips[which];
+    for (int number = 1; number < (int)(sizeof registers); number++) {
+      write_register(number, registers[number]);
+    }
+    /* The only thing that differs: a width the line reaches and one it does
+       not. R0 is written last so that the address register stands at 0 on
+       both, which is where the write that follows needs it. */
+    write_register(0, which == 0 ? 200 : 49);
+    *chips[which] = crtc;
+  }
+  /* To the character the narrow line ends on, both chips stepped together.
+     Neither has ended a line before it, so nothing has parted yet. */
+  bool ended_here = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended_here; tick++) {
+    uint64_t wide = crtc_tick(&never_ended);
+    uint64_t narrow = crtc_tick(&ended);
+    ended_here = climbed && ended.c0 == 0;
+    climbed = climbed || ended.c0 != 0;
+    /* All but the character the ending was decided on, which is the one cost
+       the rescue cannot undo: those pins went to the board before the write
+       arrived, and they are the ending's. */
+    if (!ended_here) {
+      TEST_EQUAL(narrow, wide);
+    }
+  }
+  TEST_CHECK(ended_here);
+  TEST_CHECK(ended.hsync); /* the sync is standing across the boundary */
+  crtc_access(&ended, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 200));
+  TEST_EQUAL(ended.c0, never_ended.c0);
+  TEST_EQUAL(ended.c9, never_ended.c9);
+  TEST_EQUAL(ended.c4, never_ended.c4);
+  TEST_EQUAL(ended.vma, never_ended.vma);
+  TEST_EQUAL(ended.c3l, never_ended.c3l);
+  TEST_EQUAL(ended.parity_frame, never_ended.parity_frame);
+  TEST_EQUAL(ended.parity_c9_held, never_ended.parity_c9_held);
+  /* Then a whole frame of pins, which is where a counter restored to the
+     wrong line or a sync restored to the wrong width tells. */
+  for (long tick = 0; tick < 4L * SCANLINE * 40; tick++) {
+    uint64_t wide = crtc_tick(&never_ended);
+    uint64_t narrow = crtc_tick(&ended);
+    TEST_EQUAL(narrow, wide);
+  }
+}
+
+static void a_line_taken_back_is_a_line_that_never_ended(void) {
+  walk_a_taken_back_line_beside_one_that_never_ended(0);
+  walk_a_taken_back_line_beside_one_that_never_ended(3);
+}
+
+/* And the two costs the rescue cannot pay, which crtc.h declares and no line
+   of the disc grades. Both are one absence: the character C0 goes on to
+   makes none of its own comparisons, those having been made for the line's
+   ending and undone with it.
+
+   The first is the VSYNC's own authorization, raised at C0=2 (ch. 13.2.2).
+   A line of two characters handed a wider width lands C0 on 2 without any
+   tick standing there, so the authorization is never raised, where a chip
+   that was that wide all along raises it. */
+static void the_costs_a_taken_back_line_cannot_pay(void) {
+  static crtc_t never_ended;
+  static crtc_t fallback[2];
+  static crtc_t ended;
+  crtc_t *chips[2] = {&never_ended, &ended};
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], 1);
+    crtc_keep_a_fallback(chips[which], &fallback[which]);
+    crtc = *chips[which];
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(0, which == 0 ? 40 : 1);
+    *chips[which] = crtc;
+  }
+  /* Three characters: the narrow line's second ends it, and the wide one
+     stands on C0=2, which is where the authorization is raised. */
+  for (int character = 0; character < 3; character++) {
+    crtc_tick(&never_ended);
+    crtc_tick(&ended);
+  }
+  TEST_EQUAL(ended.c0, 0u);
+  TEST_EQUAL(never_ended.c0, 2u);
+  TEST_CHECK(never_ended.vsync_armed);
+  crtc_access(&ended, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 40));
+  TEST_EQUAL(ended.c0, 2u);
+  TEST_CHECK(!ended.vsync_armed); /* the cost, stated rather than hidden */
+
+  /* The second is the border R1 asks for, and it is the plainest of them.
+     A line ending on the character before R1 is handed a wider width: the
+     character the counter goes on to is the one a wider line would have met
+     R1 on, and that comparison went with the ending. So the rest of the line
+     stands displayed, where the chip that was that wide all along has
+     bordered from R1 onward (ch. 17.3, 18.2.1). */
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], 1);
+    crtc_keep_a_fallback(chips[which], &fallback[which]);
+    crtc = *chips[which];
+    write_register(1, 30);
+    write_register(4, 38);
+    write_register(6, 25); /* or C4 meets R6 at once and borders the frame */
+    write_register(9, 7);
+    write_register(0, which == 0 ? 40 : 29);
+    *chips[which] = crtc;
+  }
+  bool ended_here = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended_here; tick++) {
+    crtc_tick(&never_ended);
+    crtc_tick(&ended);
+    ended_here = climbed && ended.c0 == 0;
+    climbed = climbed || ended.c0 != 0;
+  }
+  TEST_CHECK(ended_here);
+  TEST_EQUAL(never_ended.c0, 30u); /* the character R1 names */
+  crtc_access(&ended, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 40));
+  /* Every character from there to the line's new end: one chip draws, the
+     other borders, and they come together again at the head of the next. */
+  for (int character = 0; character < 10; character++) {
+    uint64_t wide = crtc_tick(&never_ended);
+    uint64_t narrow = crtc_tick(&ended);
+    TEST_CHECK((wide & CRTC_DISPTMG) == 0);
+    TEST_CHECK((narrow & CRTC_DISPTMG) != 0);
+  }
+  uint64_t wide_again = crtc_tick(&never_ended);
+  uint64_t narrow_again = crtc_tick(&ended);
+  TEST_EQUAL(ended.c0, 0u);
+  TEST_EQUAL(narrow_again & CRTC_DISPTMG, wide_again & CRTC_DISPTMG);
+}
+
+/* What crosses the boundary unchanged, and what does not. The copy is taken
+   before the host touches the chip, so restoring it wholesale would undo the
+   very write that asked for the restoring: the register file and the
+   register a write is aimed at cross over as they stand. The latch that says
+   R3 was written on this character does not — the tick that ended the line
+   has already spent it, and a line's end is not an R3 write (ch. 15.3.1). */
+static void a_take_back_carries_the_writes_it_cannot_undo(void) {
+  static crtc_t fallback;
+  crtc_init(&crtc, 1);
+  crtc_keep_a_fallback(&crtc, &fallback);
+  write_register(0, 49);
+  write_register(4, 38);
+  write_register(9, 7); /* which leaves R9 the register selected */
+  bool reached = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !reached; tick++) {
+    crtc_tick(&crtc);
+    reached = crtc.c0 == 49;
+  }
+  TEST_CHECK(reached);
+  /* An R3 written on the character the line ends on, which that character's
+     own tick reads and spends. */
+  write_register(3, 0x26);
+  TEST_CHECK(crtc.r3_written_for_this_character);
+  crtc_tick(&crtc); /* the line ends here, and the copy is taken */
+  TEST_EQUAL(crtc.c0, 0u);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 50u);
+  /* Spent, and not handed back by the restoring. */
+  TEST_CHECK(!crtc.r3_written_for_this_character);
+  /* R0 is still the register aimed at, where the copy predates the select
+     and would have named R9: the next data write must land in R0. */
+  TEST_EQUAL(crtc.address_register, 0u);
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 60));
+  TEST_EQUAL(crtc.registers[0], 60u);
+  TEST_EQUAL(crtc.registers[9], 7u);
+  /* And the R3 the write carried over is the one that stands. */
+  TEST_EQUAL(crtc.registers[3], 0x26u);
+}
+
+/* A place to go back to that the host has taken away, or swapped for
+   another: whatever the old one holds is not this one's, and a chip handed
+   none has nowhere to go back to at all. Either way the line's end that was
+   standing is no longer standing. */
+static void a_line_end_does_not_outlive_the_buffer_holding_it(void) {
+  static crtc_t fallback;
+  crtc_init(&crtc, 1);
+  crtc_keep_a_fallback(&crtc, &fallback);
+  write_register(0, 49);
+  write_register(4, 38);
+  write_register(9, 7);
+  bool ended = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended; tick++) {
+    crtc_tick(&crtc);
+    ended = climbed && crtc.c0 == 0;
+    climbed = climbed || crtc.c0 != 0;
+  }
+  TEST_CHECK(ended);
+  TEST_CHECK(crtc.fallback_holds_a_line_end);
+  crtc_keep_a_fallback(&crtc, 0);
+  TEST_CHECK(!crtc.fallback_holds_a_line_end);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 0u);
+}
+
 /* And a pulse the doubling starts inside, which is the other half of the
    same rule. Ch. 19.8.2 gives a type 1 one counter and it is the address —
    in the mode it steps by two, and when R8 returns to 0 "the counting logic
@@ -4002,6 +4378,12 @@ int main(void) {
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
   TEST_RUN(an_r8_pulse_leaves_the_parities_the_diagrams_draw);
+  TEST_RUN(a_write_on_the_character_clock_takes_a_type_1_line_end_back);
+  TEST_RUN(a_line_end_taken_back_is_the_one_just_taken);
+  TEST_RUN(a_line_taken_back_is_a_line_that_never_ended);
+  TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
+  TEST_RUN(a_take_back_carries_the_writes_it_cannot_undo);
+  TEST_RUN(a_line_end_does_not_outlive_the_buffer_holding_it);
   TEST_RUN(a_mode_taken_up_inside_a_row_is_counted_from_the_address);
   TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);
   TEST_RUN(types_3_and_4_count_the_interlace_as_their_chapter_gives_it);

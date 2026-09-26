@@ -555,6 +555,7 @@ static void enter_scanline(crtc_t *crtc) {
    C0: R0 takes all 256 values C0 does, and 255 is one a program can write,
    so a sentinel there would read as the end of a 256-character line. */
 static void enter_character(crtc_t *crtc) {
+  crtc->fallback_holds_a_line_end = false;
   if (!crtc->has_drawn_a_character) {
     crtc->has_drawn_a_character = true;
     return;
@@ -581,6 +582,18 @@ static void enter_character(crtc_t *crtc) {
       crtc->c0_reached_r0 = false;
     }
     return;
+  }
+  /* A type 1 has not quite finished deciding: a write landing on this same
+     character clock is still in time to move R0 under the comparison, so
+     what the chip stood on is kept where it can be taken back (ch. 13.3,
+     note 3, and ch. 13.7.1's phase shift). */
+  if (crtc->fallback != 0 && crtc->type == 1) {
+    *crtc->fallback = *crtc;
+    /* One latch in the copy belongs to the character rather than to the
+       line: this tick is about to spend the R3 write it records, and a
+       line's end is not an R3 write, so the copy carries none back. */
+    crtc->fallback->r3_written_for_this_character = false;
+    crtc->fallback_holds_a_line_end = true;
   }
   crtc->c0 = 0;
   crtc->c0_reached_r0 = true;
@@ -1070,6 +1083,17 @@ static void settle_parity(crtc_t *crtc) {
   }
 }
 
+void crtc_keep_a_fallback(crtc_t *crtc, crtc_t *fallback) {
+  /* A line's end kept in one buffer is not kept in another, and a chip given
+     none has nowhere to go back to: the end stands only while the buffer
+     holding it does. A host re-pointing the chip at the buffer it already
+     has changes nothing, which is what lets a machine do it every tick. */
+  if (crtc->fallback != fallback) {
+    crtc->fallback_holds_a_line_end = false;
+  }
+  crtc->fallback = fallback;
+}
+
 uint64_t crtc_tick(crtc_t *crtc) {
   enter_character(crtc);
   settle_parity(crtc);
@@ -1229,6 +1253,38 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     if (mask != 0) {
       bool was_video_mode = interlace_video_asked(crtc);
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
+      if (crtc->address_register == 0 && crtc->fallback_holds_a_line_end &&
+          (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
+        /* "The comparison of C0 with R0 ... takes place after R0 is updated
+           at the 5th µsecond of the OUTI instruction" (ch. 13.7.1.1), and
+           ch. 13.3's third note draws it: "on the position where C0 should
+           have gone to 0, if R0 is modified on the last µsecond of the OUTI
+           instruction, then C0 is compared with the new value of R0, which
+           can lead to an overflow of C0". So the line that had just ended
+           did not end: the counter goes on from the character it stood on,
+           and ch. 13.6.2's chronogram gives this type one microsecond of
+           instruction more than the rest for it. */
+        uint8_t the_character_it_ended_on = crtc->fallback->c0;
+        if (crtc->registers[0] != the_character_it_ended_on) {
+          /* What is taken back is the line's ending, not the write that
+             cancelled it: the copy was taken before the host touched the
+             chip, so the register file and the register a write is aimed at
+             cross over as they stand rather than as they stood. */
+          for (unsigned which = 0; which < sizeof crtc->registers; which++) {
+            crtc->fallback->registers[which] = crtc->registers[which];
+          }
+          crtc->fallback->address_register = crtc->address_register;
+          *crtc = *crtc->fallback;
+          crtc->c0 = (uint8_t)(the_character_it_ended_on + 1);
+          if (crtc->c0 == 1) {
+            /* The one line whose management was never given back is the one
+               C0 could not carry to 1, and the counter now stands there
+               (ch. 13.2.4). On every wider line it was given back where the
+               chip gives it, and this says again what already stands. */
+            crtc->c9_processing_managed = true;
+          }
+        }
+      }
       if (crtc->address_register == 4) {
         crtc->r4_moved_at_a_lines_end = crtc->registers[4] > 0 && crtc->c0 == crtc->registers[0];
       }

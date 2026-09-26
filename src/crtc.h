@@ -8,7 +8,7 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and seven things are not its alone. The first
+ * Type 0 is the type implemented, and eight things are not its alone. The first
  * is what a machine can read of the chip: the registers each type hands back
  * on the read port, and the status register type 1 alone has, are answered for
  * types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program names the chip by
@@ -95,7 +95,7 @@
  * reach the disarm gives types 1 and 2 no additional line where it gives
  * the other three one, ch. 13.2's window being a type 0's. Every other
  * behaviour below is type 0's whatever the type is set to, and a number
- * naming none of the seven is neither refused nor corrected. One of those
+ * naming none of the five is neither refused nor corrected. One of those
  * is worth naming because the disc grades it: a type 1 takes R4 written
  * with the value C4 already holds as the frame's end wherever on the line
  * it lands — "if we were on the last line (C9=R9), then C9 goes to 0, C4=0"
@@ -126,6 +126,43 @@
  * FRAME", settles on "YOU'VE WON THIS STAGE" with the carry and on "IF YOU
  * CAN READ THIS...YOUR EMULATOR HAS A PROBLEM" without it, and nothing else
  * on the disc moves either way.
+ *
+ * The eighth is when a write reaches the comparison that ends a line. The
+ * chip decides a line's end on the character clock, and on a type 1 a write
+ * finishing on that same clock is still in time: "the comparison of C0 with
+ * R0 ... takes place after R0 is updated at the 5th µsecond of the
+ * instruction of the OUTI instruction" (ch. 13.7.1.1, whose doubled words
+ * are its own), so the line that had just ended did not end and the counter
+ * goes on from the character it stood on. Ch. 13.6 draws a chronogram to a
+ * type (ch. 13.6.1, 13.6.2, 13.6.3), and this type's holds a placement the
+ * others draw wrapping both instructions — the one where the OUT has
+ * wrapped the line at the old width and the OUTI has not — which is why its
+ * table runs to five rows where theirs run to four. Ch. 13.7.1 names the
+ * reason "an internal processing phase shift between this CRTC and CRTCs 0
+ * and 2". The board says which edge an access landed on, through a pin no
+ * chip has, and one that cannot leaves it low. Two things the chip cannot
+ * take back. The character it has already drawn is one: its pins were
+ * handed over before the write arrived, so a machine spends one character
+ * of a line that turned out not to have ended — a sync begun on it is
+ * begun, a byte fetched from the next line's start is fetched. The
+ * comparisons that character would have made are the other. Undoing what
+ * the ending did is not making them, and all but one are gone. The one made
+ * is ch. 13.2.4's C9 processing management, which "would in principle be
+ * activated on C0=1 if C0 succeeded in reaching this value" and which C0
+ * now stands on, a line of one character being the only line that has not
+ * already been given it back. The VSYNC's own authorization is not treated
+ * the same way, and that is an asymmetry rather than a finding: it is
+ * raised at C0=2 by a step of exactly the same kind (ch. 13.2.2), a
+ * character that never asks for it costs the following line its VSYNC, and
+ * on a line of two characters — a width a program building a screen out of
+ * invisible lines reaches for — that loses a pulse the chip raises. Nothing
+ * we have read or measured says which of the two the silicon does. The
+ * border R1 asks for is the second cost, and the plainest of them. Where a
+ * line ends on the character before R1, the character the counter goes on
+ * to is the one a wider line would have met R1 on — and that comparison is
+ * among the lost, so the rest of the line stands displayed where a chip
+ * that had been that wide all along borders it. Shaker's B (6) grades the
+ * rule and neither cost; its "4TH uSec ON C0=0" came right with it.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
@@ -234,7 +271,18 @@
  * changes R3l on that character, seen here by the comparison that ends the
  * sync as well, where the chip's is not; the R0 of ch. 13.7.2 enlarged on the
  * character C0 names 1, where the old value ends the line and the new one
- * counts C0 on; the per-type divergences of the timing; the rest of what
+ * counts C0 on; the microsecond an ASIC adds to an OUT(C),R8, "on the 3rd
+ * NOP for a CRTC equipped with a GATE ARRAY, and on the 4th NOP for an ASIC
+ * that emulates a CRTC" (ch. 4.4.4), this chip being given a GATE ARRAY's
+ * entry whatever it is built as; the freeze ch. 13.2.1 puts on a line too
+ * narrow to reach C0=1, kept here for every type where the chapters give it
+ * to type 0 alone — "R0 accepts all values without causing any problem for
+ * other counters" (ch. 13.3, 13.4; ch. 13.5 says "problems"), and for three
+ * of them in as many words, "if R0 is 0, then C9 and R4 continue to be
+ * managed normally" (ch. 13.3, 13.5) — the plain absence of it being
+ * measured and refused, a type 1 demo losing 866 frames to it and a disc
+ * group that stabilizes an R0=0 line stabilizing no longer, so what those
+ * four want in its place is not simply nothing; the rest of what
  * ch. 13.2.1 gives a line's first three microseconds — the counter updates
  * those characters schedule for a later one; and the character a write of R1
  * lands on, which keeps the display it was given where ch. 17.5.1 borders it
@@ -273,8 +321,9 @@
  * bits 0..13  MA0..MA13 (memory address, a character/word address)
  * bits 16..23 D0..D7    (data bus, the same lanes z80.h uses)
  * bits 24..28 RA0..RA4  (raster address)
- * bits 29..   control pins, names as the datasheets print them, and one
- *             this chip has no pin for (see DISPLAY ENABLE below) */
+ * bits 29..   control pins, names as the datasheets print them, and two the
+ *             chip has no pin for: the second byte of DISPLAY ENABLE, and
+ *             the character clock an access landed on (both below) */
 /* DISPLAY ENABLE. The chip has one such pin, and this reports it twice: two
  * of type 0's rules move it half a character — one of them only while no
  * skew stands ready to defer that border to a whole character of its own —
@@ -291,6 +340,14 @@
 #define CRTC_CS (1ULL << 32) /* input: chip select */
 #define CRTC_RS (1ULL << 33) /* input: register select (0 address, 1 data) */
 #define CRTC_RW (1ULL << 34) /* input: direction; the datasheet's R/W, 1 = read */
+/* No pin of the chip's, and no name in any datasheet: an access the board
+ * finished on the edge the character clock falls on rather than inside the
+ * microsecond that follows it. The chip's own timing turns on the
+ * difference — ch. 13.7.1 names "an internal processing phase shift between
+ * this CRTC and CRTCs 0 and 2" — and a board that cannot say which edge an
+ * access landed on simply leaves this low, which is every access reaching a
+ * type 1 a quarter late. */
+#define CRTC_ON_THE_CHARACTER_CLOCK (1ULL << 36)
 
 static inline uint16_t crtc_ma(uint64_t pins) { return (uint16_t)(pins & 0x3FFF); }
 static inline uint8_t crtc_ra(uint64_t pins) { return (uint8_t)((pins >> 24) & 0x1F); }
@@ -299,7 +356,7 @@ static inline uint64_t crtc_set_data(uint64_t pins, uint8_t data) {
   return (pins & ~0xFF0000ULL) | ((uint64_t)data << 16);
 }
 
-typedef struct {
+typedef struct crtc_t {
   /* Which of the five types this is, numbered as ch. 4.2's table numbers
      them: 0 is Hitachi's HD6845S and UMC's UM6845, 1 UMC's UM6845R, 2
      Motorola's MC6845, and 3 and 4 the Amstrad ASICs that emulate one. That
@@ -443,6 +500,10 @@ typedef struct {
      power-on state, which is what leaves the first tick drawing a line's
      first character rather than its second. */
   bool has_drawn_a_character;
+  /* Where the line's end is kept while a write could still cancel it, and
+     whether what is kept there is such a boundary (ch. 13.3, note 3). */
+  struct crtc_t *fallback;
+  bool fallback_holds_a_line_end;
   /* One C4/R7 equality raises one VSYNC: the comparison must change, by C4
      moving or R7 being written, before it raises another (ch. 16.3). */
   bool vsync_blocked;
@@ -519,6 +580,15 @@ void crtc_init(crtc_t *crtc, uint8_t type);
 
 /* Advance one character clock. Returns the output pins. */
 uint64_t crtc_tick(crtc_t *crtc);
+
+/* Somewhere for the chip to keep the character boundary it may have to take
+ * back. A type 1 decides a line's end a quarter of a character later than
+ * the rest, so a write arriving on the character clock can still cancel the
+ * wrap that has just been taken; the chip keeps what it stood on before it,
+ * and this is where. A chip given none never takes a wrap back, which is the
+ * other four types' behaviour and what a host that cannot time its accesses
+ * gets. */
+void crtc_keep_a_fallback(crtc_t *crtc, crtc_t *fallback);
 
 /* One bus transaction: CS, RS, RW and the data lanes in; the data lanes out
  * when the chip drives them. Where it does not — a read this type never

@@ -147,8 +147,12 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
   }
   crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
   /* Restoring R3 is not a write made on a character, and leaving the chip
-     believing it was would let a HSYNC through on the first tick back. */
+     believing it was would let a HSYNC through on the first tick back. Nor
+     is any of this a line's end: a chip loaded with one still armed would
+     take the whole of itself back on the next R0 written to a character
+     clock, registers and all. */
   cpc->crtc.r3_written_for_this_character = false;
+  cpc->crtc.fallback_holds_a_line_end = false;
 
   /* The control word first, because setting it clears the output latches.
      The format stores inputs for A and B, outputs for C. */

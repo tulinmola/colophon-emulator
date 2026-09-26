@@ -968,6 +968,57 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   TEST_CHECK(port_b_bit_7());
 }
 
+/* A whole machine copied into another object and run from there, which the
+   suites do to set a state aside and come back to it. Nothing inside a
+   machine may point at the machine it was copied from: such a pointer
+   outlives the copying, and two machines sharing one place to keep a line's
+   end would take each other's ends back. The CRTC's is the one field of that
+   shape, and the check with teeth is that it names the copy's own buffer
+   from the copy's first tick — from any quarter of a microsecond a first
+   tick can fall on, since a host may write a register before the character
+   clock next comes round. The frame that follows only says the copy runs and
+   the original stands still, which a stale pointer would not by itself
+   disturb. */
+static void a_copied_machine_runs_as_the_one_it_was_copied_from(void) {
+  static cpc_t copy;
+  power_on(0x20000);
+  cpc.crtc.type = 1;
+  /* A screen of the firmware's shape, because a chip left at its power-on
+     zeroes has a line of one character and counts nothing at all. */
+  write_crtc(0, 63);
+  write_crtc(1, 40);
+  write_crtc(2, 46);
+  write_crtc(3, 0x8E);
+  write_crtc(4, 38);
+  write_crtc(6, 25);
+  write_crtc(7, 30);
+  write_crtc(9, 7);
+  for (int tick = 0; tick < 4 * 64 * 8; tick++) {
+    cpc_tick(&cpc);
+  }
+  copy = cpc;
+  cpc_t left_behind = cpc;
+  /* The copy's own place to keep a line's end is its own from its first
+     tick, and from every quarter of a microsecond a first tick can fall on:
+     a machine that reached into the one it was copied from would take a
+     line's end back out of a chip nobody is running. */
+  for (int quarter = 0; quarter < 4; quarter++) {
+    cpc_tick(&copy);
+    TEST_CHECK(copy.crtc.fallback == &copy.crtc_fallback);
+  }
+  for (int tick = 0; tick < 4 * 64 * 40; tick++) {
+    cpc_tick(&copy);
+  }
+  /* The copy has run a frame's worth of characters. */
+  TEST_CHECK(copy.crtc.c4 != left_behind.crtc.c4 || copy.crtc.c9 != left_behind.crtc.c9 ||
+             copy.crtc.c0 != left_behind.crtc.c0);
+  /* And the machine it was copied from has not moved a character. */
+  TEST_EQUAL(cpc.crtc.c0, left_behind.crtc.c0);
+  TEST_EQUAL(cpc.crtc.c9, left_behind.crtc.c9);
+  TEST_EQUAL(cpc.crtc.c4, left_behind.crtc.c4);
+  TEST_EQUAL(cpc.cpu.pc, left_behind.cpu.pc);
+}
+
 int main(void) {
   TEST_RUN(reset_shows_both_roms_and_the_base_map);
   TEST_RUN(programs_fetch_from_the_lower_rom);
@@ -1004,5 +1055,6 @@ int main(void) {
   TEST_RUN(in_a_writes_the_crtc_register_the_accumulator_holds);
   TEST_RUN(the_disc_interface_decodes_its_two_ports);
   TEST_RUN(without_the_interface_the_ports_float);
+  TEST_RUN(a_copied_machine_runs_as_the_one_it_was_copied_from);
   return TEST_REPORT("cpc");
 }

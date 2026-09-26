@@ -8,7 +8,7 @@ The core is a machine, not an application. It has no `main`, it never asks the o
 
 Two rules produce all of that, and they are worth stating before anything else.
 
-**The core allocates nothing.** Every buffer it uses is handed to it: the RAM, the ROM images, the framebuffer, the disc images, the tape. It holds them by pointer and never copies them, so they must outlive the machine and must not move. The tape adds a function to that list — the deck asks the host for the next pulse rather than reading an image itself — and the reader behind it, and its bytes, are the host's to keep alive for as long as the machine runs.
+**The core allocates nothing.** Every buffer it uses is handed to it: the RAM, the ROM images, the framebuffer, the disc images, the tape, and — for a host driving the display chip directly — a second chip's worth of room for it to keep a line's end in, without which one of the five types quietly behaves as another. A machine assembled here holds that room inside itself and points the chip at it on every step, because a host that copies a whole machine must not leave the copy reaching into the one it came from. It holds them by pointer and never copies them, so they must outlive the machine and must not move. The tape adds a function to that list — the deck asks the host for the next pulse rather than reading an image itself — and the reader behind it, and its bytes, are the host's to keep alive for as long as the machine runs.
 
 **The core does no I/O.** Nothing in `src/` opens a file or writes to a stream. That is what lets the same C run behind a command line and inside a browser without either host inheriting the other's assumptions.
 
