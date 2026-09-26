@@ -820,7 +820,7 @@ static void authorize_vsync(crtc_t *crtc) {
    starting a second (ch. 16.3, 16.4.1). Each width is counted off where the
    counter it rides advances, so the ends are in enter_character and
    enter_scanline rather than here. */
-static void begin_syncs(crtc_t *crtc) {
+static void begin_the_hsync(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   /* "On CRTC 0, two HSYNC's cannot be contiguous if position C0=R2 is
      encountered when C3l reaches R3l, and R3l has not been modified on this
@@ -840,6 +840,31 @@ static void begin_syncs(crtc_t *crtc) {
       crtc->c3l = 0;
     }
   }
+}
+
+/* An equality a program makes by hand at the head of a line is a blocked
+   VSYNC here on every type but one: "the VSYNC is triggered immediately if it
+   was not already in progress, except if this modification occurs when C0vs=0
+   or C0vs=1 ... we are in a BLOCKED VSYNC" belongs to ch. 16.4.1.1, a type
+   0's chapter, and ch. 16.4.2 answers for a type 1 with no exception at all —
+   "if R7 is modified with the value of C4, then VSYNC is triggered
+   immediately".
+
+   The other three keep a type 0's block, which is not their chapters' answer
+   but the nearest thing this chip has to one. Ch. 16.4.3 gives a type 2 a
+   pulse outside its HSYNC and a GHOST VSYNC inside it, "except during the
+   HSYNC period (C0=R2 to C0=R2+R3), which triggers the GHOST VSYNC", and
+   ch. 16.4.4 gives types 3 and 4 a condition of their own: "VSYNC starts when
+   C4=R7 and C9=C0=0 ... if R7 is modified with the value of C4 while C0>0
+   and/or C9>0, it will not trigger CRTC VSYNC". Neither is here, and the disc
+   says the stand-in is the closer of the two answers for types 3 and 4: the
+   R7 line of its B (6) wants of them what it wants of a type 0. */
+static bool blocks_a_vsync_made_at_a_lines_head(const crtc_t *crtc) { return crtc->type != 1; }
+
+/* The C4/R7 equality, read on every character. A type 1 reads it on the
+   character a write lands on as well, which crtc_access says so. */
+static void begin_the_vsync(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
   /* On an even frame in either interlace mode the VSYNC is a MID-VSYNC:
      the C4/R7 equality does not start it where it falls, but where C0
      reaches R0/2, which is the half line the second field is raised by
@@ -882,6 +907,11 @@ static void begin_syncs(crtc_t *crtc) {
     crtc->vsync_began_mid_line = crtc->c0 != 0;
     crtc->vsync_began_on_its_half_line = mid_vsync;
   }
+}
+
+static void begin_syncs(crtc_t *crtc) {
+  begin_the_hsync(crtc);
+  begin_the_vsync(crtc);
 }
 
 /* The other character the R1 border is raised on: where C0 meets R0 having
@@ -1323,7 +1353,22 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            except if this modification occurs when C0vs=0 or C0vs=1. If the
            modification of R7 with the value of C4 took place when C0vs<2,
            we are in a BLOCKED VSYNC" (ch. 16.4.1.1). */
-        crtc->vsync_blocked = crtc->c0 < 2 && c4_stands_on_r7(crtc);
+        crtc->vsync_blocked =
+            blocks_a_vsync_made_at_a_lines_head(crtc) && crtc->c0 < 2 && c4_stands_on_r7(crtc);
+        /* And on a type 1 the equality a write makes is read on the character
+           the write lands on, not on the one after it, where the board
+           reports the write finishing on the character clock. It is the same
+           quarter-character ch. 13.7.1's phase shift gives R0, and the
+           chapters time it: a PPI read answers such a write "at the earliest
+           5 μsec after" on this chip (ch. 16.4.2) where ch. 16.4.1.1 has a
+           type 0 read "6 µsec later". What it buys a program is the last
+           chance of ch. 16.4 one microsecond later than the rest of them
+           have it: C4 has already walked onto the value being written, and
+           the others do not read that equality until the character after,
+           where the block above has already spent it. */
+        if (crtc->type == 1 && (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
+          begin_the_vsync(crtc);
+        }
       }
     }
   }

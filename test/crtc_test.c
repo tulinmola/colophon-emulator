@@ -965,6 +965,115 @@ static void a_take_back_carries_the_writes_it_cannot_undo(void) {
   TEST_EQUAL(crtc.registers[3], 0x26u);
 }
 
+/* Ch. 16.4.2 answers for this chip where ch. 16.4.1.1 answers for a type 0,
+   and the two part twice over. A program that writes R7 with the value C4
+   already holds gets its VSYNC outright here — "if R7 is modified with the
+   value of C4, then VSYNC is triggered immediately" — where a type 0 at the
+   head of a line gets a block instead: "except if this modification occurs
+   when C0vs=0 or C0vs=1 ... we are in a BLOCKED VSYNC" (ch. 16.4.1.1), which
+   is a type 0's chapter and has no counterpart in ch. 16.4.2. And this chip
+   reads that equality on the character the write lands on rather than on the
+   next, where the board says the write finished on the character clock: the
+   same quarter ch. 13.7.1's phase shift gives R0, which ch. 16.4.2 times at
+   "the earliest 5 μsec after" against ch. 16.4.1.1's "6 µsec later".
+
+   What it buys a program is ch. 16.4's last chance one microsecond later
+   than the other four have it: C4 has already walked onto the value being
+   written, and they do not read that equality until the character after,
+   where the block has already spent it. Shaker's B (6) grades exactly that,
+   and its "R7 LAST CHANCE 4TH uSec" came right with it. */
+static void an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t written_on; /* the character C0 names when the write lands */
+    bool on_the_clock;
+    bool at_once;   /* up before any further character is drawn */
+    bool a_tick_on; /* and up once one has been */
+    unsigned lines; /* line heads the pulse spans, 0 where none begins */
+  } cases[] = {
+      /* Blocked, and no later character brings it round (ch. 16.4.1.1). */
+      {0, 0, true, false, false, 0},
+      {0, 0, false, false, false, 0},
+      /* Read on the character the write lands on, and on the next where the
+         write lands a quarter too late for that one. Either way the pulse
+         crosses sixteen line heads, because a triggered one "counts the line
+         as if the VSYNC had started when C0=0" and so "ends at the end of
+         line 16" however far into a line it began (ch. 16.4.2) — where a type
+         0's, counting the part line as none of R3h's, ends at the end of line
+         17 (ch. 16.4.1.1). */
+      {1, 0, true, true, true, 16},
+      {1, 0, false, false, true, 16},
+      /* And away from the head, where no type is blocked and the quarter is
+         all that separates this one from the rest. */
+      {1, 20, true, true, true, 16},
+      {1, 20, false, false, true, 16},
+      {2, 20, true, false, true, 16},
+      /* The other three keep a type 0's block at a line's head, their own
+         chapters' answers not being implemented; crtc.h says which and why. */
+      {2, 0, true, false, false, 0},
+      {3, 0, true, false, false, 0},
+      {4, 0, true, false, false, 0},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(7, 60); /* beyond C4's reach, so no VSYNC of its own */
+    /* To a line four rows in, C0 having reached 2 on the line before it so
+       that nothing is blocked going in (ch. 13.2.2). */
+    bool arrived = false;
+    for (long tick = 0; tick < 64L * SCANLINE && !arrived; tick++) {
+      crtc_tick(&crtc);
+      arrived = crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == cases[index].written_on;
+    }
+    TEST_CHECK(arrived);
+    TEST_CHECK(!crtc.vsync);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+    uint64_t pins = CRTC_CS | CRTC_RS | crtc_set_data(0, crtc.c4);
+    if (cases[index].on_the_clock) {
+      pins |= CRTC_ON_THE_CHARACTER_CLOCK;
+    }
+    crtc_access(&crtc, pins);
+    TEST_EQUAL(crtc.vsync, cases[index].at_once);
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.vsync, cases[index].a_tick_on);
+    /* And how long the pulse the write raised runs, counted in the line heads
+       it crosses, which is what tells a pulse begun at a head from one begun
+       inside a line. */
+    unsigned heads = 0;
+    for (long tick = 0; tick < 64L * SCANLINE && crtc.vsync; tick++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0) {
+        heads++;
+      }
+    }
+    TEST_EQUAL(heads, cases[index].lines);
+  }
+
+  /* And the write lifts the block before it reads its own equality, which
+     matters wherever the chip arrives at the write already blocked. A line of
+     two characters never reaches the C0=2 that authorizes the pulse, so every
+     head of one blocks it (ch. 13.2.2); the write is what brings the
+     comparison round again, "whatever the value written" (ch. 16.3), and the
+     same character then reads it. */
+  crtc_init(&crtc, 1);
+  write_register(0, 1);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  bool blocked_at_a_head = false;
+  for (long tick = 0; tick < 64L * SCANLINE && !blocked_at_a_head; tick++) {
+    crtc_tick(&crtc);
+    blocked_at_a_head = crtc.c0 == 0 && crtc.vsync_blocked && crtc.c4 == 4;
+  }
+  TEST_CHECK(blocked_at_a_head);
+  TEST_CHECK(!crtc.vsync);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
+  TEST_CHECK(crtc.vsync);
+}
+
 /* A place to go back to that the host has taken away, or swapped for
    another: whatever the old one holds is not this one's, and a chip handed
    none has nowhere to go back to at all. Either way the line's end that was
@@ -4383,6 +4492,7 @@ int main(void) {
   TEST_RUN(a_line_taken_back_is_a_line_that_never_ended);
   TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
   TEST_RUN(a_take_back_carries_the_writes_it_cannot_undo);
+  TEST_RUN(an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0);
   TEST_RUN(a_line_end_does_not_outlive_the_buffer_holding_it);
   TEST_RUN(a_mode_taken_up_inside_a_row_is_counted_from_the_address);
   TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);

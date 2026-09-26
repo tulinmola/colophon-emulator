@@ -22,35 +22,51 @@
  * them takes the whole line below either, which ch. 19.7.1 gives "CRTC's 0, 3
  * and 4" alone. No line on the disc moves on the shortened count or the whole
  * line withheld: what stands behind those two is those chapters' sentences and
- * tests of our own. The third is how a type 1 reads R9 in the interlace video
- * mode, and it is the first of them the disc does grade: its odd-lined rows
- * come of an even R9 where a type 0's come of an odd one (ch. 19.5.3, 19.8.2),
- * and it reads the limit down to that parity where a type 0 reads it up — a
- * character of N lines wanting "the value N-1" of it where a type 0 asks
- * "value N-2" (ch. 19.4.1, 19.4.2), which is why a type 0 and a type 1 want R9
- * "programmed respectively with 6 and 7" for rows of the same four lines
- * (ch. 28.1.7). Entering that mode in the middle of a row still takes the
- * doubling up a line later, as ch. 19.8.1 gives a type 0; the parity
- * ch. 19.8.2 fixes at the write is fixed there now, and the fourth below says
- * how. A type 2 shares none of the third: ch. 19.4.3 and 19.5.4 give it an
- * interlace of its own, in which "parity is respected whatever the values of
- * R9 and C4", and it is answered here as a type 0 is. The fourth is the frame
- * parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame "switch
- * between each frame when C4 = C9 = C0 = 0" and does so "whatever the value of
- * R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type 2 take the parity R6
- * anticipated and hold it for ever once C4 can no longer reach R6 (ch. 19.5.2,
- * 19.5.4) — so those three cannot be frozen, and cannot be made to add the
- * interlace line to every frame. That line follows each type's own parity
- * (ch. 19.6.1 to 19.6.4). A type 1 holds ParityC9 as a state rather than a
- * sum, and so do types 3 and 4 by a rule of their own — bare, on the write
- * that turns the video mode on, reversed on an odd R9 where a type 1 reverses
- * on an even one, and leaving their own C9 where it stands (ch. 19.5.5,
- * 19.8.4) — because an R8 write sets it outright on all three: "these updates
- * are performed on the 3rd and 4th µseconds of the OUT(C),C instruction", and
- * toggling the mode "on and off on an even C9 line, regardless of the value of
- * R9" sets the parity even, which is the only means a program has of choosing
- * a field on this type (ch. 19.5.3). The write settles C9's low bit with it,
- * that bit being ParityC9 and not the count's own while the mode stands ("C9
+ * tests of our own. One more divergence of that pulse stands beside those
+ * two, and this one the disc does grade. An equality a program makes by hand
+ * at the head of a line is a blocked VSYNC here on every type but one: "the
+ * VSYNC is triggered immediately if it was not already in progress, except
+ * if this modification occurs when C0vs=0 or C0vs=1 ... we are in a BLOCKED
+ * VSYNC" is ch. 16.4.1.1's, that type's own chapter, and ch. 16.4.2 answers
+ * for a type 1 with no exception at all: "if R7 is modified with the value
+ * of C4, then VSYNC is triggered immediately". The other three are blocked
+ * because their own answers are absent rather than because their chapters
+ * ask for it — ch. 16.4.3 gives a type 2 a pulse outside its HSYNC and a
+ * GHOST VSYNC inside it, and ch. 16.4.4 gives types 3 and 4 a condition of
+ * their own, "VSYNC starts when C4=R7 and C9=C0=0 ... if R7 is modified with
+ * the value of C4 while C0>0 and/or C9>0, it will not trigger CRTC VSYNC" —
+ * and the disc is the reason to keep the stand-in for those last two: the
+ * line of its B (6) that grades this wants of them what it wants of a type
+ * 0. Lifting the block for a type 1 was what let the eighth below reach that
+ * line. The third is how a type 1 reads R9 in the interlace video mode, and
+ * the disc grades it too: its odd-lined rows come of an even R9 where a type
+ * 0's come of an odd one (ch. 19.5.3, 19.8.2), and it reads the limit down to
+ * that parity where a type 0 reads it up — a character of N lines wanting
+ * "the value N-1" of it where a type 0 asks "value N-2" (ch. 19.4.1, 19.4.2),
+ * which is why a type 0 and a type 1 want R9 "programmed respectively with 6
+ * and 7" for rows of the same four lines (ch. 28.1.7). Entering that mode in
+ * the middle of a row still takes the doubling up a line later, as ch. 19.8.1
+ * gives a type 0; the parity ch. 19.8.2 fixes at the write is fixed there
+ * now, and the fourth below says how. A type 2 shares none of the third: ch.
+ * 19.4.3 and 19.5.4 give it an interlace of its own, in which "parity is
+ * respected whatever the values of R9 and C4", and it is answered here as a
+ * type 0 is. The fourth is the frame parity itself. Types 1, 3 and 4
+ * anticipate none of it: ParityFrame "switch between each frame when C4 = C9
+ * = C0 = 0" and does so "whatever the value of R8" (ch. 19.5.3, 19.5.5),
+ * where a type 0 and a type 2 take the parity R6 anticipated and hold it for
+ * ever once C4 can no longer reach R6 (ch. 19.5.2, 19.5.4) — so those three
+ * cannot be frozen, and cannot be made to add the interlace line to every
+ * frame. That line follows each type's own parity (ch. 19.6.1 to 19.6.4). A
+ * type 1 holds ParityC9 as a state rather than a sum, and so do types 3 and 4
+ * by a rule of their own — bare, on the write that turns the video mode on,
+ * reversed on an odd R9 where a type 1 reverses on an even one, and leaving
+ * their own C9 where it stands (ch. 19.5.5, 19.8.4) — because an R8 write
+ * sets it outright on all three: "these updates are performed on the 3rd and
+ * 4th µseconds of the OUT(C),C instruction", and toggling the mode "on and
+ * off on an even C9 line, regardless of the value of R9" sets the parity
+ * even, which is the only means a program has of choosing a field on this
+ * type (ch. 19.5.3). The write settles C9's low bit with it, that bit being
+ * ParityC9 and not the count's own while the mode stands ("C9
  * = ParityC9", ch. 19.8.2), and the chapter names the cost: "deactivate the
  * IVM mode can also modify C9, and modify the end condition of character C4".
  * So a pulse landing on an odd C9 while the frame's parity is even puts the
@@ -127,15 +143,24 @@
  * CAN READ THIS...YOUR EMULATOR HAS A PROBLEM" without it, and nothing else
  * on the disc moves either way.
  *
- * The eighth is when a write reaches the comparison that ends a line. The
- * chip decides a line's end on the character clock, and on a type 1 a write
- * finishing on that same clock is still in time: "the comparison of C0 with
- * R0 ... takes place after R0 is updated at the 5th µsecond of the
- * instruction of the OUTI instruction" (ch. 13.7.1.1, whose doubled words
- * are its own), so the line that had just ended did not end and the counter
- * goes on from the character it stood on. Ch. 13.6 draws a chronogram to a
- * type (ch. 13.6.1, 13.6.2, 13.6.3), and this type's holds a placement the
- * others draw wrapping both instructions — the one where the OUT has
+ * The eighth is when a write reaches the comparisons a character clock
+ * settles. The chip decides a line's end on that clock, and on a type 1 a
+ * write finishing on that same clock is still in time: "the comparison of C0
+ * with R0 ... takes place after R0 is updated at the 5th µsecond of the
+ * instruction of the OUTI instruction" (ch. 13.7.1.1, whose doubled words are
+ * its own), so the line that had just ended did not end and the counter
+ * goes on from the character it stood on, and the same quarter reaches a
+ * second comparison: the C4/R7 equality that starts a VSYNC, which this type
+ * reads on the character a write lands on where the rest read it on the one
+ * after. Ch. 16.4.2 times that one — a PPI read answers such a write "at the
+ * earliest 5 μsec after" where ch. 16.4.1.1 has a type 0 read "6 µsec later"
+ * — and what it buys a program is ch. 16.4's last chance, "up to the last
+ * µsecond preceding C4=R7", one microsecond later than the other four have
+ * it: C4 has already walked onto the value being written, and they do not
+ * read that equality until the character after, where the block of the
+ * second exception above has already spent it. Ch. 13.6 draws a chronogram
+ * to a type (ch. 13.6.1, 13.6.2, 13.6.3), and this type's holds a placement
+ * the others draw wrapping both instructions — the one where the OUT has
  * wrapped the line at the old width and the OUTI has not — which is why its
  * table runs to five rows where theirs run to four. Ch. 13.7.1 names the
  * reason "an internal processing phase shift between this CRTC and CRTCs 0
@@ -162,7 +187,8 @@
  * to is the one a wider line would have met R1 on — and that comparison is
  * among the lost, so the rest of the line stands displayed where a chip
  * that had been that wide all along borders it. Shaker's B (6) grades the
- * rule and neither cost; its "4TH uSec ON C0=0" came right with it.
+ * rule and neither cost; its "4TH uSec ON C0=0" came right with the first
+ * comparison and its "R7 LAST CHANCE 4TH uSec" with the second.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — its register widths, its VMA/VMA' reload
@@ -274,9 +300,15 @@
  * counts C0 on; the microsecond an ASIC adds to an OUT(C),R8, "on the 3rd
  * NOP for a CRTC equipped with a GATE ARRAY, and on the 4th NOP for an ASIC
  * that emulates a CRTC" (ch. 4.4.4), this chip being given a GATE ARRAY's
- * entry whatever it is built as; the freeze ch. 13.2.1 puts on a line too
- * narrow to reach C0=1, kept here for every type where the chapters give it
- * to type 0 alone — "R0 accepts all values without causing any problem for
+ * entry whatever it is built as; the first of ch. 16.3's two protections
+ * against one C4/R7 equality raising two pulses, "it is not possible to
+ * trigger or inhibit a VSYNC during a VSYNC. Thus, modifying the value of R7
+ * with a value of C4 reached during the VSYNC does not cause a new VSYNC",
+ * where an R7 write here brings the comparison round again whenever it is
+ * made, a pulse standing or not, and only the second protection — the
+ * equality having to change — is kept; the freeze ch. 13.2.1 puts on a line
+ * too narrow to reach C0=1, kept here for every type where the chapters give
+ * it to type 0 alone — "R0 accepts all values without causing any problem for
  * other counters" (ch. 13.3, 13.4; ch. 13.5 says "problems"), and for three
  * of them in as many words, "if R0 is 0, then C9 and R4 continue to be
  * managed normally" (ch. 13.3, 13.5) — the plain absence of it being

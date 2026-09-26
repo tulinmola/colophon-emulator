@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-7 of them printed self-graded lines, 33 in all: 30 agree with Longshot's
-silicon and 3 do not. That is 91% of what this reader can score, and no
+7 of them printed self-graded lines, 33 in all: 31 agree with Longshot's
+silicon and 2 do not. That is 94% of what this reader can score, and no
 measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -81,13 +81,13 @@ B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                  
 B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
 B (4)       CRTC 2 FIND C0 MIN                                                               another CRTC type's
 B (5)       CRTC 2 RLAL                                                                      another CRTC type's
-B (6)       CRTC 1 BUG OUTI R0                                                               6 graded, 3 wrong
+B (6)       CRTC 1 BUG OUTI R0                                                               6 graded, 2 wrong
     ! OUTI ON R0.JIT 5TH uSec ON C0=0 - RES: #27 :WRONG!
       OUTI ON R0.JIT 4TH uSec ON C0=0 - RES: #14 :GOOD
       OUTI ON R0.JIT 5TH uSec ON C0=1 - RES: #26 :GOOD
     ! OUTI ON C0=0,R0=0, RES: #20 :WRONG!
       OUTI ON R7 LAST CHANCE 5TH uSec ON C0=0 - RES: #1E :GOOD
-    ! OUTI ON R7 LAST CHANCE 4TH uSec ON C0=0 - RES: #1E :WRONG!
+      OUTI ON R7 LAST CHANCE 4TH uSec ON C0=0 - RES: #1F :GOOD
 B (7)       CRTC 0 BUG OVF C4                                                                another CRTC type's
 B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded
 B (O)       CRTC 1-A OR 1-B?                                                                 recorded, ungraded
