@@ -629,29 +629,43 @@ static void a_mode_taken_up_inside_a_row_is_counted_from_the_address(void) {
   static const struct {
     uint8_t type;
     bool frame_parity_odd;
-    uint8_t c9;           /* the line the mode is asked for on */
-    uint8_t addresses[8]; /* and what RA carries from there to the row's end */
+    uint8_t c9;              /* the line the mode is asked for on */
+    unsigned given_up_after; /* and how many lines later it is given up */
+    uint8_t addresses[8];    /* what RA carries from there to the row's end */
     unsigned drawn;
   } cases[] = {
       /* Asked for at C9=0 the counting takes the address to 2 ("C9 =
          C9+1+(R9.0)", R9 odd), and given up on that line it goes on from
          2 rather than from half of it: 3, 4, 5, 6, 7, and the row ends
          where C9 meets R9. Asked for at 2 the same walk starts at 4. */
-      {1, false, 0, {2, 3, 4, 5, 6, 7}, 6},
-      {1, false, 2, {4, 5, 6, 7}, 4},
+      {1, false, 0, 1, {2, 3, 4, 5, 6, 7}, 6},
+      {1, false, 2, 1, {4, 5, 6, 7}, 4},
       /* An odd frame carries ParityC9 in the bit the doubling leaves, so
          the addresses it walks are the odd ones: from 1 the counting gives
          3, and the row runs to R9 itself rather than to the line below it.
          The write settles that bit of the counter before the doubling
          starts, which is what makes an odd line answerable at all. */
-      {1, true, 1, {3, 4, 5, 6, 7}, 5},
-      {1, true, 3, {5, 6, 7}, 3},
+      {1, true, 1, 1, {3, 4, 5, 6, 7}, 5},
+      {1, true, 3, 1, {5, 6, 7}, 3},
+      /* Types 3 and 4 walk it as a type 1 does — ch. 19.8.4 gives them the
+         same counter, which is the address — and the write that asks for the
+         mode takes bit 0 of that address and not of the count. */
+      {3, false, 0, 1, {2, 3, 4, 5, 6, 7}, 6},
+      {4, false, 0, 1, {2, 3, 4, 5, 6, 7}, 6},
+      /* A type 1 given the mode up on the line the doubling would have ended
+         its row on. Its limit is read down — 6 for an even parity — so the
+         row would have ended there; the register having gone, the limit is
+         R9 itself and "the counting logic normally resumes", 6 to 7, and the
+         row runs a line more. A limit that kept its parity past the
+         register's going would stop at 6, which is what types 3 and 4 want
+         and this type does not. */
+      {1, false, 0, 3, {2, 4, 6, 7}, 4},
       /* A type 0 is handed nothing back, and should not be: there "counter
          C9 continues to increment normally" while the mode stands and the
          address is that count doubled (ch. 19.8.1), so giving the mode up
          leaves the address at the count and not at the address it had —
          from 2 the row goes 6, then 4, 5, 6, 7. */
-      {0, false, 2, {6, 4, 5, 6, 7}, 5},
+      {0, false, 2, 1, {6, 4, 5, 6, 7}, 5},
   };
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, cases[index].type);
@@ -691,7 +705,7 @@ static void a_mode_taken_up_inside_a_row_is_counted_from_the_address(void) {
       if (counted < 8 && crtc.c0 == 1) {
         addresses[counted++] = crtc_ra(pins);
       }
-      if (!given_up && counted == 1 && crtc.c0 == 20) {
+      if (!given_up && counted == cases[index].given_up_after && crtc.c0 == 20) {
         uint8_t before_the_write = crtc.c9;
         /* Given up, asked for again and given up once more, all on the one
            line and all while the doubling stands: none of the three may
@@ -776,6 +790,216 @@ static void a_pulse_on_an_odd_line_lengthens_an_even_frame(void) {
     if (scanlines[0] > 0) {
       TEST_EQUAL(scanlines[1] - scanlines[0], cases[index].gains_a_line ? 1 : 0);
     }
+  }
+}
+
+/* Ch. 19.8.4 gives types 3 and 4 their interlace counting in an algorithm,
+   works two frames of it by hand and draws twenty-two counting cases beside
+   them, and this takes four in all: both frames and two of the cases. A
+   fifth block follows them for the late sync, which belongs to ch. 19.5.2,
+   19.5.5 and 19.7.1 rather than to the counting, and which these types can
+   lose altogether where the counting leaves a row off the address it names.
+   All run at R9=7, which for these two is the odd case — their R9 wants
+   "the number of character lines of character less 2", so an eight-line row
+   is an R9 of 6 — and an odd R9 is where a row comes out "5 even lines/ 4
+   odd lines" and its neighbour the other way about. First the chapter's own
+   Example 1, walking C4=0 and C4=1 of an even frame, where "for C4=0, we
+   obtain the lines C9 = 0, 2, 4, 6, 8" and then "on the character C4 = 1,
+   we will therefore have the C9=1, 3, 5, 7". Then the write's own rule,
+   which no counting reaches. Then one of the exit diagrams, giving the mode
+   up on a row's last line. Then Example 2, which turns a frame over on the
+   last C4 and shows the new frame opening odd — "on the new frame, we then
+   have odd C9s with an even C4". Their R9 is programmed a type 0's way (ch.
+   19.8.4), which is why the parity turns on an odd R9 here where a type 1
+   turns on an even one. */
+static void types_3_and_4_count_the_interlace_as_their_chapter_gives_it(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 3);
+    /* To the head of an even frame, where "Parityc9=ParityFrame". */
+    bool standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    /* The chapter's own two rows, in the order it draws them. */
+    static const uint8_t wanted[9][2] = {{0, 0}, {0, 2}, {0, 4}, {0, 6}, {0, 8},
+                                         {1, 1}, {1, 3}, {1, 5}, {1, 7}};
+    unsigned counted = 0;
+    for (long tick = 0; tick < 24L * SCANLINE && counted < 9; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c0 != 1) {
+        continue;
+      }
+      TEST_EQUAL(crtc.c4, wanted[counted][0]);
+      TEST_EQUAL(crtc_ra(pins), wanted[counted][1]);
+      counted++;
+    }
+    TEST_EQUAL(counted, 9u);
+
+    /* And the write's own rule, which is the half no counting can reach: a
+       mode asked for in the middle of a row takes the line's parity, "the
+       parity of the C9 can therefore be in contradiction with the parity of
+       the current frame until the next frame". Asked for on an odd line of
+       an even frame, the rest of the row runs odd. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 3 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    write_register(8, 3);
+    TEST_EQUAL(crtc.parity_c9_held, true);
+    /* The line being drawn keeps its address, because the write moves no
+       counter on these two — "unlike CRTC's 1 and 2, and as CRTC 0, C9 does
+       not change during the line" — and the two lines after it are the
+       chapter's "C9=C9+2", then "C9=C9 or ParityC9", from there to the
+       row's end at R9 itself. */
+    static const uint8_t after_the_write[3] = {3, 5, 7};
+    counted = 0;
+    for (long tick = 0; tick < 24L * SCANLINE && counted < 3; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c0 != 1) {
+        continue;
+      }
+      TEST_EQUAL(crtc_ra(pins), after_the_write[counted]);
+      counted++;
+    }
+    TEST_EQUAL(counted, 3u);
+
+    /* And the mode given up on a row's own last line, which ch. 19.8.4's
+       exit diagrams draw ending the row there: the address has reached the
+       limit, so the row ends whatever R8 now asks, and the next line is the
+       next character's first. Read against the bare register instead, that
+       line misses its limit and the row walks C9 to 31. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 3);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    bool on_the_rows_last_line = false;
+    for (long tick = 0; tick < 24L * SCANLINE && !on_the_rows_last_line; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      on_the_rows_last_line = crtc.c0 == 20 && crtc.c4 == 0 && crtc_ra(pins) == 8;
+    }
+    TEST_CHECK(on_the_rows_last_line);
+    if (!on_the_rows_last_line) {
+      continue;
+    }
+    write_register(8, 0);
+    uint64_t pins = 0;
+    for (int character = 0; character < SCANLINE; character++) {
+      pins = crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c4, 1u);
+    TEST_EQUAL(crtc_ra(pins), 0u);
+
+    /* The chapter's second worked frame: on the last C4 of an even frame the
+       parity turns and the row parity goes with it — "on the new frame, we
+       then have odd C9s with an even C4" — so the frame opens at C4=0 with
+       its first line odd, and the next is two on from it. R4 is odd here, as
+       the example has it, which is what leaves the old frame's last C4 odd.
+       The chapter's "C9=1" is the address, which this chip carries as a count
+       of 0 with the parity filling the bit the doubling leaves. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 9);
+    write_register(6, 9);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 3);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    static const uint8_t the_new_frames_rows[2] = {1, 3};
+    counted = 0;
+    bool turned = false;
+    for (long tick = 0; tick < 3L * FRAME_TICKS && counted < 2; tick++) {
+      uint64_t drawn = crtc_tick(&crtc);
+      if (!turned) {
+        turned = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame;
+        continue;
+      }
+      if (crtc.c0 != 1) {
+        continue;
+      }
+      TEST_EQUAL(crtc.c4, 0u);
+      TEST_EQUAL(crtc_ra(drawn), the_new_frames_rows[counted]);
+      counted++;
+    }
+    TEST_CHECK(turned);
+    TEST_EQUAL(counted, 2u);
+
+    /* And the sync a row of odd lines takes late, which on these two can
+       fall on a line the row does not visit. Ch. 19.5.2 names a type 0's
+       outright — "it occurs when C4=R7 and C9.VMA=2 on the odd C4s" — but of
+       these ch. 19.5.5 says only that "the VSYNC is delayed by 1 line", and
+       a row a write has left on an odd parity walks 1, 3, 5, 7 and never 2
+       at all. The second line is what both mean, so the sync
+       falls on 3 here, and a frame must not lose it. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 1);
+    write_register(9, 7);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    while (!(crtc.c4 == 0 && crtc.c9 == 0 && crtc.c0 == 20)) {
+      crtc_tick(&crtc);
+    }
+    write_register(8, 3);
+    uint8_t rose_on = 0xFF;
+    for (long tick = 0; tick < FRAME_TICKS && rose_on == 0xFF; tick++) {
+      uint64_t drawn = crtc_tick(&crtc);
+      if ((drawn & CRTC_VSYNC) != 0) {
+        rose_on = crtc_ra(drawn);
+      }
+    }
+    TEST_EQUAL(rose_on, 3u);
   }
 }
 
@@ -3780,6 +4004,7 @@ int main(void) {
   TEST_RUN(an_r8_pulse_leaves_the_parities_the_diagrams_draw);
   TEST_RUN(a_mode_taken_up_inside_a_row_is_counted_from_the_address);
   TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);
+  TEST_RUN(types_3_and_4_count_the_interlace_as_their_chapter_gives_it);
   TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
   TEST_RUN(each_type_counts_the_adjustment_lines_its_own_way);
   TEST_RUN(a_type_1_holds_a_frame_open_where_r5_is_cancelled);

@@ -28,6 +28,27 @@ void crtc_init(crtc_t *crtc, uint8_t type) {
   crtc->c9_processing_managed = true;
 }
 
+/* The types an R8 write hands ParityC9 outright, which is why they cannot
+   read it back off the row. A type 2 is not one of them and nothing here
+   could tell if it were: ch. 19.8.3 gives that chip "another counter,
+   C9.IVM ... used for displaying" and compares its own C9 "with R9 in a
+   conventional way", which is a second counter this chip does not keep, so
+   the two readings of its parity part company nowhere it is asked. A type 1 takes it either way the
+   mode is going and with C4's correction (ch. 19.5.3); types 3 and 4 take it only on the way in and
+   bare — "when R8 changes to 1 or 3, Parityc9=C9.0", and again in ch. 19.8.4: "when R8 goes from 0
+   to 3 (mode IVM on), ParityC9 state is immediately assigned with the parity of the current C9"
+   (ch. 19.5.5, 19.8.4). */
+static bool holds_its_c9_parity(const crtc_t *crtc) {
+  return crtc->type == 1 || crtc->type == 3 || crtc->type == 4;
+}
+
+/* And whether R9 as it stands is the parity that row makes the two frames
+   share, which is where the state turns over with C4: an even R9 on a type
+   1, an odd one on types 3 and 4, whose R9 is programmed a type 0's way. */
+static bool reverses_its_parity_on_this_r9(const crtc_t *crtc) {
+  return holds_its_c9_parity(crtc) && ((crtc->registers[9] & 1) != 0) != (crtc->type == 1);
+}
+
 /* Moving C4 lifts the VSYNC block, because the comparison with R7 has
    changed; setting it to the value it already held does not (ch. 16.3). */
 static void enter_character_row(crtc_t *crtc, uint8_t row) {
@@ -35,8 +56,11 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
   if (next != crtc->c4) {
     crtc->vsync_blocked = false;
     /* "ParityC9 is reversed with each C4 increasing when R9 is peer", which
-       on a type 1 is an even R9 (ch. 19.5.3). */
-    if (crtc->type == 1 && (crtc->registers[9] & 1) == 0) {
+       on a type 1 is an even R9 (ch. 19.5.3); types 3 and 4 reverse it on an
+       odd one — "if R9 is odd, C9's parity switches each time C4 changes"
+       (ch. 19.8.4) — which is the same balancing read off the other parity,
+       as their R9 is programmed a type 0's way. */
+    if (reverses_its_parity_on_this_r9(crtc)) {
       crtc->parity_c9_held = !crtc->parity_c9_held;
     }
   }
@@ -90,8 +114,11 @@ static bool anticipates_the_parity(const crtc_t *crtc) {
    "if ParityFrame is even, then an additional line and a MID-VSYNC are
    scheduled" (ch. 19.5.3, 19.5.5), and for those three the line "does not
    depend on the C4=R6 equivalence, unlike CRTC's 0 and 2" (ch. 19.6.2,
-   19.6.4). What ch. 19.6.4 asks of a type 3 or 4 besides — that "C4 is not
-   incremented (unlike all other CRTC's)" for that line — is not here. */
+   19.6.4). What ch. 19.6.4 asks of a type 3 or 4 besides is not here: that
+   "C4 is not incremented (unlike all other CRTC's)" for that line, and that
+   the line takes no parity with it — "the additional line generated does not
+   consider parity states as on other CRTC's. C9 will always be 0, even if
+   the other lines are odd on C4=R4". */
 static bool interlace_line_asked_for(const crtc_t *crtc) {
   return interlace_asked(crtc) &&
          (anticipates_the_parity(crtc) ? crtc->parity_r6 : !crtc->parity_frame);
@@ -117,14 +144,15 @@ static bool interlace_video_asked(const crtc_t *crtc) {
    address under the line being drawn, which is the very thing ch. 19.8.1
    gives the delayed take-up to prevent. Nothing we can run grades it. */
 static bool parity_c9(const crtc_t *crtc) {
-  if (crtc->type == 1) {
+  if (holds_its_c9_parity(crtc)) {
     return crtc->parity_c9_held;
   }
-  /* The other four take it from the row: where a row is an odd number of
-     lines the two frames must share them, so an odd C4 runs on the parity
-     opposite the frame's. A type 1 never reaches here — it reads the same
-     rule off an even R9 rather than an odd one, and r9_with_parity is where
-     that lives. */
+  /* Types 0 and 2 take it from the row: where a row is an odd number of
+     lines the two frames must share them, so an odd C4 runs on the
+     parity opposite the frame's. The three above never reach here — a
+     type 1 reads the same rule off an even R9 rather than an odd one,
+     which the reversal above carries, and all three keep the state
+     instead because a write can set it against the row. */
   bool odd_lined_rows = (crtc->registers[9] & 1) != 0;
   if (odd_lined_rows && (crtc->c4 & 1) != 0) {
     return !crtc->parity_frame;
@@ -149,7 +177,8 @@ static uint8_t c9_vma(const crtc_t *crtc) {
 
 /* The line the count goes on from, where the doubling is about to start or
    stop under it. Ch. 19.8.2 gives a type 1 one counter and it is the
-   address: in the mode it steps by two with ParityC9 in the bit it leaves,
+   address, and ch. 19.8.4 gives types 3 and 4 the same one — "C9 = C9+2",
+   then "C9 = C9 or ParityC9": in the mode it steps by two with ParityC9 in the bit it leaves,
    and "as soon as R8 returns to 0, the counting logic normally resumes" —
    from the line the address had reached. This chip keeps that as a count
    and a parity, ch. 19.8.1's arrangement, so the two have to be handed back
@@ -157,17 +186,27 @@ static uint8_t c9_vma(const crtc_t *crtc) {
    row: doubled where the doubling stops, halved where it starts, which is
    also where the bit ch. 19.5.3 has the write settle arrives when the write
    was too early to see it. At a row's head both are zero and neither moves,
-   which is every frame that asks for the mode and keeps it. */
+   which is every frame that asks for the mode and keeps it. The frame's
+   padding is measured against whatever this hands back, so an edge inside
+   R5's lines reconciles that comparison too — and the count it is measured
+   against while the mode stands is the count and not the address, where ch.
+   11.3.3 asks for "the number of the next additional line (C9+1)" with C9
+   the address. That, and an equality where the same chapter wants "if R5 is
+   modified with a value below C9+1, then the line is considered the last",
+   are older than this and are not here. */
 static uint8_t c9_the_count_goes_on_from(const crtc_t *crtc) {
   bool asked = interlace_video_asked(crtc);
-  if (crtc->type != 1 || crtc->interlace_video_mode == asked) {
+  if (!holds_its_c9_parity(crtc) || crtc->interlace_video_mode == asked) {
     return crtc->c9;
   }
   return asked ? (uint8_t)(crtc->c9 >> 1) : c9_vma(crtc);
 }
 
-/* R9 read to the nearest line of ParityC9's own parity — up on a type 0,
-   down on a type 1 below — which is the limit a row ends on while the
+/* R9 read to the nearest line of ParityC9's own parity — up on a type 0
+   and on types 3 and 4, whose rows end where the address reaches or passes
+   R9 ("If C9 >= R9", ch. 19.8.4), which is the first line of the row's own
+   parity at R9 or above; down on a type 1 below — which is the limit a row
+   ends on while the
    raster address carries parity in bit 0. On a type 0: The
    Compendium says this three ways that do not agree — "R9 + ParityFrame"
    (ch. 19.8.1), "R9 or ParityC9" (its note), and ch. 19.3.3's "it suffices
@@ -215,7 +254,27 @@ static uint8_t r9_with_parity(const crtc_t *crtc) {
    ParityC9 is the bit that will fill the address, and a limit of the other
    parity is one no address of that row could ever meet. */
 static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
-  return c9_vma(crtc) == (interlace_video_asked(crtc) ? r9_with_parity(crtc) : crtc->registers[9]);
+  /* The limit keeps the parity for as long as the address carries it, and on
+     types 3 and 4 that outlasts the register: ch. 19.8.4 ends their row on
+     "C9 >= R9" with C9 the address, and its own exit diagrams give up the
+     mode on a row's last line and end the row there all the same. Read
+     against the bare register that line misses its limit by one and the row
+     walks C9 to 31 before coming round. The equality is kept rather than the
+     chapter's inequality, and on these two types that is a divergence rather
+     than a reading: ch. 10.3.4.1 says "it is impossible to 'overflow' C9 on
+     these CRTC's. It is not a simple equality test which takes place, but a
+     'more complex' comparison performed by the ASIC: If current-C9 > R9 then
+     next-C9=0", and ch. 11.3.3 says it again of R5 and R9 both. So a row
+     whose address passes its limit walks C9 to 31 here where silicon would
+     zero it. The equality is shared machinery — ch. 10.3.1.1 gives a type 0
+     that walk outright, "it will count to its maximum value (31) before
+     looping back to 0" — and moving it is larger than this work. A type 0's
+     limit loses the parity the moment the register does, which is the
+     counting its own chapter describes, and a type 1's row ends on ch.
+     19.8.2's comparison with the parity left out. */
+  bool parity_in_the_limit = interlace_video_asked(crtc) ||
+                             (crtc->interlace_video_mode && (crtc->type == 3 || crtc->type == 4));
+  return c9_vma(crtc) == (parity_in_the_limit ? r9_with_parity(crtc) : crtc->registers[9]);
 }
 
 /* A frame begins where the last one is done with, whatever the counters
@@ -420,7 +479,8 @@ static void enter_scanline(crtc_t *crtc) {
        having reached its last line, and C4 returns to 0 when the adjustment
        is done whatever R4 holds by then. */
     bool row_ended_on_r4 = row_is_on_its_last_scanline(crtc) && crtc->c4 == r[4];
-    uint8_t next_c9 = row_ended_on_r4 ? 0 : (uint8_t)((crtc->c9 + 1) & C9_BITS);
+    uint8_t next_c9 =
+        row_ended_on_r4 ? 0 : (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
     bool r5_lines_spent = next_c9 == r[5];
     /* An adjustment a narrow line brought is entered before it is measured.
        Ch. 11.2.2 lists the ways one comes about with R5 at 0 — an R4 or R9
@@ -773,15 +833,25 @@ static void begin_syncs(crtc_t *crtc) {
      (ch. 19.7.2). */
   bool mid_vsync = interlace_asked(crtc) && !crtc->parity_frame;
   /* And where the video mode gives a row an odd number of lines, an odd C4
-     of an odd frame starts its VSYNC a line late, at C9.VMA=2 rather than
-     at the row's own first line: the two frames' rows are of unequal length
-     there, and this is what still leaves their syncs half a line apart
-     (ch. 19.5.2, 19.7.1). It never meets a MID-VSYNC, which happens only on
-     an even frame: "MID-VSYNC is not cumulative with this line because it
-     cannot occur on an odd frame with an odd C4" (ch. 19.7.1). A row of one
-     line never reaches C9.VMA=2 and so raises no VSYNC at all, which an R9
-     of 31 makes of every even-parity row; the Compendium describes
-     neither. */
+     of an odd frame starts its VSYNC a line late, on the row's second line
+     rather than its first: the two frames' rows are of unequal length there,
+     and this is what still leaves their syncs half a line apart (ch. 19.5.2,
+     19.7.1). The second line is what the chapters ask for and not the
+     address 2 one of them names: ch. 19.5.2 gives a type 0 "C4=R7 and
+     C9.VMA=2 on the odd C4s", where a row of that type always runs the even
+     addresses and 2 is its second line, while of types 3 and 4 ch. 19.5.5
+     says only that "the VSYNC is delayed by 1 line" and ch. 19.7.1 that it
+     "can then be delayed by one line" — and their ParityC9 is a state a
+     write can set against the row, leaving it to walk 1, 3, 5, 7 and never
+     reach 2 at all. The two readings part on a type 0 only where a row is
+     carried past its limit and frozen with C9 at 17, whose doubling comes
+     back round to 2: a sync fifteen lines late answers neither reading, and
+     no chapter draws the row that would ask for it. Read as the literal address, such a frame
+     raises no VSYNC whatsoever; read as the second line, it takes one on 3, a line late, as the
+     chapter asks. The delay never meets a MID-VSYNC, which happens only on an even frame:
+     "MID-VSYNC is not cumulative with this line because it cannot occur on an odd frame with an odd
+     C4" (ch. 19.7.1). A row of one line has no second line and so raises no VSYNC at all, which an
+     R9 of 31 makes of every even-parity row; the Compendium describes that case nowhere. */
   /* Three of the five take that delay at all: "there is also an exception
      on CRTC's 0, 3 and 4 when the line count of a C4 character is odd on an
      odd frame and an odd C4" (ch. 19.7.1), and of a type 1 ch. 19.5.3 says
@@ -792,7 +862,7 @@ static void begin_syncs(crtc_t *crtc) {
   bool late_vsync = delays_a_whole_line && crtc->interlace_video_mode && (r[9] & 1) != 0 &&
                     (crtc->c4 & 1) != 0 && crtc->parity_frame;
   if (c4_stands_on_r7(crtc) && !crtc->vsync && !crtc->vsync_blocked &&
-      (!mid_vsync || crtc->c0 == r[0] / 2) && (!late_vsync || c9_vma(crtc) == 2)) {
+      (!mid_vsync || crtc->c0 == r[0] / 2) && (!late_vsync || crtc->c9 == 1)) {
     crtc->vsync = true;
     crtc->vsync_blocked = true;
     crtc->c3h = 0;
@@ -990,7 +1060,8 @@ static void settle_parity(crtc_t *crtc) {
        a type 2 holds its parity for ever once C4 can no longer reach R6,
        those three cannot be frozen at all. */
     crtc->parity_frame = anticipates_the_parity(crtc) ? crtc->parity_r6 : !crtc->parity_frame;
-    /* "At the beginning of the Frame, ParityC9=ParityFrame" (ch. 19.5.3). */
+    /* "At the beginning of the Frame, ParityC9=ParityFrame" (ch. 19.5.3),
+       and the same sentence for types 3 and 4 in ch. 19.5.5. */
     crtc->parity_c9_held = crtc->parity_frame;
   }
   crtc->stood_on_the_frame_head = on_the_frame_head;
@@ -1042,17 +1113,36 @@ static uint8_t readable_register(const crtc_t *crtc) {
 }
 
 /* An R8 write that turns the interlace video mode on or off sets a type 1's
-   parities outright, where this chip gives the other four theirs from the
-   counters alone. Ch. 19.5.3 gives the rules and the microseconds they fall on —
-   "these updates are performed on the 3rd and 4th µseconds of the OUT(C),C
-   instruction" — and since both fall inside the one instruction, they are
-   taken here in that order. What they are for is stated plainly: "if IVM
-   mode is toggled on and off on an even C9 line, regardless of the value of
-   R9, the parity is set to EVEN. It is thus possible to fix the parity
-   quite easily on this CRTC", which is the only means a program has of
-   choosing a field on this type. */
+   parities outright, and hands types 3 and 4 the one they keep, where types
+   0 and 2 take theirs from the counters alone. Ch. 19.5.3 gives a type 1's
+   rules and the microseconds they fall on — "these updates are performed on
+   the 3rd and 4th µseconds of the OUT(C),C instruction" — and since both
+   fall inside the one instruction, they are taken here in that order. What
+   they are for is stated plainly: "if IVM mode is toggled on and off on an
+   even C9 line, regardless of the value of R9, the parity is set to EVEN. It
+   is thus possible to fix the parity quite easily on this CRTC", which is
+   the only means a program has of choosing a field on that type. */
 static void take_up_r8_parity(crtc_t *crtc, bool was_video_mode) {
-  if (crtc->type != 1 || was_video_mode == interlace_video_asked(crtc)) {
+  if (!holds_its_c9_parity(crtc) || was_video_mode == interlace_video_asked(crtc)) {
+    return;
+  }
+  if (crtc->type != 1) {
+    /* Types 3 and 4 take the line's own parity and nothing else: "when R8
+       changes to 1 or 3, Parityc9=C9.0" (ch. 19.5.5, 19.8.4). Their
+       ParityFrame is not touched by the write. Taking it on the way in alone
+       is a reading: the chapter's "to 1 or 3" covers an R8 driven to 1 from
+       0, from 2 or from 3, and none of those is taken here. Nothing can tell
+       the two apart, because the bit assigned is the one the address already
+       carries while the doubling stands, and a line cannot move under the two
+       writes of a pulse that never latches it — so a write on any of those
+       edges sets what was already there, and "this C9 parity is managed only
+       when R8 = 3 to update C9" while any later return to 3 assigns afresh.
+       The toggle a C4 brings reaches nothing a program can see while the mode
+       is off, for the same reason, though a test reading the state could hold
+       it. Both stand where their chapter puts them. */
+    if (interlace_video_asked(crtc)) {
+      crtc->parity_c9_held = (c9_vma(crtc) & 1) != 0;
+    }
     return;
   }
   /* "C4.0 and not (R9.0)", which stands for the whole of the third rule's

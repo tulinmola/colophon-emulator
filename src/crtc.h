@@ -41,9 +41,12 @@
  * anticipated and hold it for ever once C4 can no longer reach R6 (ch. 19.5.2,
  * 19.5.4) — so those three cannot be frozen, and cannot be made to add the
  * interlace line to every frame. That line follows each type's own parity
- * (ch. 19.6.1 to 19.6.4). A type 1 also holds ParityC9 as a state rather than
- * a sum, because an R8 write sets it outright on that type: "these updates are
- * performed on the 3rd and 4th µseconds of the OUT(C),C instruction", and
+ * (ch. 19.6.1 to 19.6.4). A type 1 holds ParityC9 as a state rather than a
+ * sum, and so do types 3 and 4 by a rule of their own — bare, on the write
+ * that turns the video mode on, reversed on an odd R9 where a type 1 reverses
+ * on an even one, and leaving their own C9 where it stands (ch. 19.5.5,
+ * 19.8.4) — because an R8 write sets it outright on all three: "these updates
+ * are performed on the 3rd and 4th µseconds of the OUT(C),C instruction", and
  * toggling the mode "on and off on an even C9 line, regardless of the value of
  * R9" sets the parity even, which is the only means a program has of choosing
  * a field on this type (ch. 19.5.3). The write settles C9's low bit with it,
@@ -397,21 +400,33 @@ typedef struct {
      already stands on, and nothing we can run grades that. */
   bool parity_frame;
   bool parity_r6;
-  /* ParityC9 as a type 1 keeps it: a state of its own rather than a sum
-     of the others, because an R8 write sets it outright on that type and
-     the sum cannot be told what to hold (ch. 19.5.3). It reaches C9 as
-     well: the write settles that counter's low bit, except while the
-     doubling stands, where the bit it would settle is the one c9_vma
-     fills. Types 0 and 2 are answered by parity_c9() from R9, C4 and
-     ParityFrame, which is what their own chapters describe. Types 3 and
-     4 are answered that way too and should not be: "when R8 changes to 1
-     or 3, Parityc9=C9.0" on those as well (ch. 19.5.5), and nothing here
-     does it. The write itself leaves their C9 where it is — "as CRTC 0,
-     C9 does not change during the line" — but ch. 19.8.4 gives them a
-     type 1's counting once the mode stands, one counter that is the
-     address, so the edges want the same handing back a type 1 gets here
-     and do not have it. Two things missing, then, and no line either
-     record grades reaches either. */
+  /* ParityC9 as the three types that are handed it keep it: a state of
+     their own rather than a sum of the others, because an R8 write sets
+     it outright on those and a sum cannot be told what to hold. On a
+     type 1 the write takes it either way the mode is going, corrects it
+     for C4 where R9 is even, and reaches C9 itself — the write settles
+     that counter's low bit, except while the doubling stands, where the
+     bit it would settle is the one c9_vma fills (ch. 19.5.3). Types 3
+     and 4 take it only on the way in and bare: "when R8 changes to 1 or
+     3, Parityc9=C9.0" (ch. 19.5.5, 19.8.4), with no ParityFrame moved,
+     no correction for C4, and their own C9 left where it stands — "as
+     CRTC 0, C9 does not change during the line" — and they reverse it on
+     an odd R9 where a type 1 reverses it on an even one, their R9 being
+     programmed a type 0's way. Ch. 19.8.4 gives those two a type 1's
+     counting in the mode, one counter that is the address, so the count
+     and the parity are handed back to each other at the mode's edges for
+     them as well. Types 0 and 2 are answered by parity_c9() from R9, C4 and
+     ParityFrame, which is a type 0's counting and a type 0's for a type 2 as
+     well — that chip respects its parity "whatever the values of R9 and C4"
+     (ch. 19.5.4), and the divergence is declared at the head of this file.
+     No line either record grades reaches any of the two ASICs' share of
+     this: what stands behind it is ch. 19.8.4's algorithm, the two frames it
+     works by hand, two of the twenty-two counting cases it draws beside
+     them, and tests of ours. Two rules of theirs are not here either: the
+     line an interlaced frame adds leaves their C4 where it is and carries no
+     parity of its own — "C9 will always be 0, even if the other lines are
+     odd on C4=R4" (ch. 19.6.4) — and a row whose counter is sent past its
+     limit walks to 31 here where ch. 10.3.4.1 says those two zero it. */
   bool parity_c9_held;
   /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a
      microsecond before the line it decides could begin. */
