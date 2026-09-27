@@ -555,7 +555,17 @@ static void enter_scanline(crtc_t *crtc) {
    C0: R0 takes all 256 values C0 does, and 255 is one a program can write,
    so a sentinel there would read as the end of a 256-character line. */
 static void enter_character(crtc_t *crtc) {
-  crtc->a_line_end_is_kept = false;
+  /* The room holds what the ending stood on for the character it was taken
+     on, and on a type 1 for the character after that as well. The second one
+     is ours: ch. 13.6.2's fifth row draws that placement wrapping the line,
+     and Shaker's "OUTI ON R0.JIT 5TH uSec ON C0=0" says it runs on. The disc
+     is followed; crtc.h says so where it lists what we diverge on. */
+  if (crtc->a_line_end_is_kept && crtc->type == 1 && !crtc->a_character_was_drawn_since) {
+    crtc->a_character_was_drawn_since = true;
+  } else {
+    crtc->a_line_end_is_kept = false;
+    crtc->a_character_was_drawn_since = false;
+  }
   if (!crtc->has_drawn_a_character) {
     crtc->has_drawn_a_character = true;
     return;
@@ -583,10 +593,12 @@ static void enter_character(crtc_t *crtc) {
     }
     return;
   }
-  /* A type 1 has not quite finished deciding: a write landing on this same
-     character clock is still in time to move R0 under the comparison, so
-     what the chip stood on is kept where it can be taken back (ch. 13.3,
-     note 3, and ch. 13.7.1's phase shift). */
+  /* The chip has not quite finished deciding: a write landing on this same
+     character clock is still in time to move R0 under the comparison that
+     has just been made, so what the chip stood on is kept where it can be
+     taken back. Ch. 13.6 draws that for every type — each chronogram has
+     placements where "update of R0 ok (just in time)" leaves the line
+     running on — and ch. 13.3's third note is the type 1 case of it. */
   if (crtc->line_end_room != 0 && crtc->type == 1) {
     *crtc->line_end_room = *crtc;
     /* One latch in the copy belongs to the character rather than to the
@@ -594,6 +606,7 @@ static void enter_character(crtc_t *crtc) {
        line's end is not an R3 write, so the copy carries none back. */
     crtc->line_end_room->r3_written_for_this_character = false;
     crtc->a_line_end_is_kept = true;
+    crtc->a_character_was_drawn_since = false;
   }
   crtc->c0 = 0;
   crtc->c0_reached_r0 = true;
@@ -1285,16 +1298,23 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
       if (crtc->address_register == 0 && crtc->a_line_end_is_kept &&
           (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
-        /* "The comparison of C0 with R0 ... takes place after R0 is updated
-           at the 5th µsecond of the OUTI instruction" (ch. 13.7.1.1), and
-           ch. 13.3's third note draws it: "on the position where C0 should
+        /* Ch. 13.3's third note draws it: "on the position where C0 should
            have gone to 0, if R0 is modified on the last µsecond of the OUTI
            instruction, then C0 is compared with the new value of R0, which
-           can lead to an overflow of C0". So the line that had just ended
-           did not end: the counter goes on from the character it stood on,
-           and ch. 13.6.2's chronogram gives this type one microsecond of
-           instruction more than the rest for it. */
+           can lead to an overflow of C0". So the line that had just ended did
+           not end, and the counter goes on from the characters actually
+           drawn. Ch. 13.6.2 gives a type 1's OUTI one placement more than
+           ch. 13.6.1 gives the others, which is ch. 13.7.1's "internal
+           processing phase shift between this CRTC and CRTCs 0 and 2";
+           "the comparison of C0 with R0 ... takes place after R0 is updated
+           at the 5th µsecond of the instruction of the OUTI instruction" is
+           that chip's own sentence (the doubled words are ch. 13.7.1.1's
+           own). The second character this chip allows is one placement past
+           that again, which the disc asks for and the chapter does not. */
         uint8_t the_character_it_ended_on = crtc->line_end_room->c0;
+        /* Read before the copy comes back, which would carry the room's own
+           stale answer to this question. */
+        bool a_character_was_drawn_since = crtc->a_character_was_drawn_since;
         if (crtc->registers[0] != the_character_it_ended_on) {
           /* What is taken back is the line's ending, not the write that
              cancelled it: the copy was taken before the host touched the
@@ -1305,7 +1325,20 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
           }
           crtc->line_end_room->address_register = crtc->address_register;
           *crtc = *crtc->line_end_room;
-          crtc->c0 = (uint8_t)(the_character_it_ended_on + 1);
+          crtc->a_line_end_is_kept = false;
+          crtc->a_character_was_drawn_since = false;
+          crtc->c0 = (uint8_t)(the_character_it_ended_on + (a_character_was_drawn_since ? 2 : 1));
+          if (a_character_was_drawn_since) {
+            /* That character was drawn, and drawing one advances the address
+               and any sync riding on it; the copy predates it. */
+            crtc->vma = (crtc->vma + 1) & 0x3FFF;
+            if (crtc->hsync) {
+              crtc->c3l = (crtc->c3l + 1) & 0x0F;
+              if (crtc->c3l == (crtc->registers[3] & 0x0F)) {
+                crtc->hsync = false;
+              }
+            }
+          }
           if (crtc->c0 == 1) {
             /* The one line whose management was never given back is the one
                C0 could not carry to 1, and the counter now stands there

@@ -355,7 +355,14 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
    So the two windows are compared with each other rather than with any
    absolute lead, which is what the chapter states and what survives a change
    of instruction lengths: one microsecond apart on the type that takes the
-   shift, two on the four that do not. Shaker's B (6) grades the difference,
+   shift, two on the four that do not.
+
+   Only the first character of that type's window is measured here. The walk
+   stops at the character the wrap is taken on, so a write rescuing the line
+   from the character after it arrives after the walk has already stopped and
+   cannot be seen. What the second character does is graded in the chip's own
+   suite, where the pin is driven directly and C0 is read out character by
+   character. Shaker's B (6) grades the difference,
    and its "4TH uSec ON C0=0" came right when a write landing on the
    character clock was let take a type 1's line end back.
 

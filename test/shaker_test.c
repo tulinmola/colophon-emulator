@@ -1436,7 +1436,52 @@ static void print_capture(FILE *report, const capture *taken) {
   }
 }
 
-static void run_group(const char *module, const group *entry, FILE *report) {
+/* A group the menu gave to another CRTC type may still be this machine's: some
+   of them read the type for themselves and print a screen headed with it,
+   grading against the answer that type owes. Shaker's B (6) is one — its menu
+   line says "CRTC 1 BUG OUTI R0" and its own screen says "CRTC 0  OUTI STORY"
+   on a type 0, with a different expectation behind every line. So the menu
+   decides what to try and the group's own screen decides whether it spoke for
+   this machine; a group that named another type and no other is left to it. */
+static bool a_capture_names_this_crtc_type(void) {
+  for (int index = 0; index < capture_count; index++) {
+    /* The menu's own foot prints the type Shaker detected, so a group that
+       drew nothing but the menu would otherwise claim every machine. Only
+       what the group drew for itself speaks for it. */
+    if (memcmp(captures[index].text, menu_screen, sizeof menu_screen) == 0) {
+      continue;
+    }
+    for (int row = 0; row < ROWS; row++) {
+      /* At the head of a row and nowhere else, which is the same discipline
+         the menu reader keeps: "a type named later in a label is a remark
+         about the test, not its scope", and a legend or a caution naming a
+         type mid-line would otherwise hand this machine a group that never
+         spoke for it. */
+      const char *at = captures[index].text[row];
+      while (*at == ' ') {
+        at++;
+      }
+      if (!begins_with(at, "CRTC")) {
+        continue;
+      }
+      const char *digits = at + 4;
+      while (*digits == ' ') {
+        digits++;
+      }
+      const char *end = digits;
+      while (*end != '\0' && *end != ' ') {
+        end++;
+      }
+      if (end != digits && names_the_crtc_type(digits, end, crtc_type)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static void run_group(const char *module, const group *entry, FILE *report,
+                      bool the_menu_gave_it_to_another_type) {
   restore_machine();
   shaker_trace_group(&cpc, entry->key, 2L * FRAMES_KEY_HELD);
   grid_left = NOMINAL_LEFT;
@@ -1478,6 +1523,13 @@ static void run_group(const char *module, const group *entry, FILE *report) {
     }
   }
 
+  if (the_menu_gave_it_to_another_type && !a_capture_names_this_crtc_type()) {
+    fprintf(report, "\n(%s) %s\n  another CRTC type's test; nothing it drew named this machine\n",
+            entry->key, entry->label);
+    write_scoreboard_line(module, entry, "another CRTC type's");
+    total_groups_skipped++;
+    return;
+  }
   fprintf(report, "\n(%s) %s\n", entry->key, entry->label);
   if (entry->declared_tests > 0) {
     fprintf(report, "  the label declares %d test%s\n", entry->declared_tests,
@@ -1593,14 +1645,12 @@ static void run_module(const char *module, const char *only_group) {
     if (only_group != NULL && strcmp(only_group, entry->key) != 0) {
       continue;
     }
-    if (!entry->applies_to_this_crtc_type) {
-      fprintf(report, "\n(%s) %s\n  another CRTC type's test; not run\n", entry->key, entry->label);
-      write_scoreboard_line(module, entry, "another CRTC type's");
-      total_groups_skipped++;
+    int skipped_before = total_groups_skipped;
+    run_group(module, entry, report, !entry->applies_to_this_crtc_type);
+    if (total_groups_skipped > skipped_before) {
       skipped++;
       continue;
     }
-    run_group(module, entry, report);
     total_groups_run++;
     ran++;
   }
