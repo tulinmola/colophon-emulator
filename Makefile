@@ -93,8 +93,8 @@ DEMO_FRAMES ?=
 
 # Which CRTC the machine is built with, which decides both what Shaker runs
 # and the record it is set against. Only type 0 behaves as itself here;
-# CRTC=1 builds a machine a program names a type 1 and runs the groups that
-# belong to one. The chip answers to all five, and two have a record.
+# CRTC=N builds a machine a program names a type N and runs the groups that
+# belong to one. The chip answers to all five, and each has a record.
 CRTC ?= 0
 ifeq ($(filter $(CRTC),0 1 2 3 4),)
 $(error CRTC=$(CRTC) names no CRTC; the types are 0 to 4)
@@ -337,14 +337,19 @@ test-exerciser: $(BUILD)/z80_exerciser_test
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexdoc.com $(EXERCISER_GROUPS)
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexall.com $(EXERCISER_GROUPS)
 
-# Both CRTCs, whatever the command line asked for: the point of the tier is
-# every record, and a type named here would silently grade one of them twice.
-# And the whole demo, for the same reason: a tier that compares a part of a
-# run against a record of a whole one compares nothing at all.
+# Every CRTC the reader keeps a record for, whatever the command line asked
+# for — type 0 by the prerequisite below, the rest by the loop: the point of
+# the tier is every record, and a type named here would silently grade one of
+# them twice. And the whole demo, for the same reason: a
+# tier that compares a part of a run against a record of a whole one compares
+# nothing at all. Only two types have a demo record, so only those two are
+# played.
 test-all: override CRTC := 0
 test-all: override DEMO_FRAMES :=
 test-all: test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser
-	@$(MAKE) --no-print-directory test-shaker CRTC=1
+	@for type in 1 2 3 4; do \
+		$(MAKE) --no-print-directory test-shaker CRTC=$$type || exit 1; \
+	done
 	@$(MAKE) --no-print-directory test-demos CRTC=1
 
 format:

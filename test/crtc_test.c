@@ -637,7 +637,7 @@ static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
    shift between this CRTC and CRTCs 0 and 2". A character was drawn in the
    meantime, and it counts: the counter goes on from what was drawn, not from
    the ending, or the line comes out a microsecond long. Shaker's B (6) grades
-   both widths of the window, and on both CRTC types it records.
+   both widths of the window, and on all three CRTC types it records.
 
    The chapter's two blocks are both here: a line of #3F given a new width,
    and the "Previous R0=0" line, one character long and ending on every

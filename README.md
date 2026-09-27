@@ -75,12 +75,12 @@ make test               # fast, hermetic, no network — runs on every change
 make test-sanitized     # the same, under the address and behaviour sanitizers
 make test-firmware      # boots the real firmware and types at it
 make test-shaker        # sets what Shaker's modules say against the record
-make test-shaker CRTC=1 # the same, on a machine a program names a type 1
+make test-shaker CRTC=1 # the same, as any of the five the chip answers to
 make test-demos         # plays a demo to the end and sets its frames against the record
 make test-demos CRTC=1  # the same, on a machine a program names a type 1
 make test-single-step   # the complete SingleStepTests corpus
 make test-exerciser     # the Z80 instruction set exerciser
-make test-all           # all seven, with Shaker and the demo against both records
+make test-all           # all seven, with Shaker against all five records and the demo against both of its
 ```
 
 And one that asserts nothing, for the before and after of a change made for speed:

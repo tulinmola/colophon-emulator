@@ -1069,7 +1069,7 @@ static bool read_a_measured_verdict(const char *line, uint8_t type, bool *failed
    and the reading is asked only of lines the readers above left ungraded,
    which is where that difference has already been made. A bracket naming
    the word and no value is no title: the group would have nothing to grade
-   its rows against. No other group on either record is graded this way, and
+   its rows against. No other group on any record is graded this way, and
    a second one would arrive there as lines the record has never held. */
 static bool read_a_governing_expectation(const char *line, unsigned long *expected) {
   const char *opening = strchr(line, '(');
