@@ -1298,6 +1298,28 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     if (mask != 0) {
       bool was_video_mode = interlace_video_asked(crtc);
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
+      if (crtc->address_register == 0 && crtc->registers[0] == 0) {
+        /* A width of nothing leaves the counter nothing to count to. The
+           chapters put that only from a counter already home — "if R0=0,
+           then C0 never reaches 1 (and therefore remains at 0)"
+           (ch. 13.2.1), "when R0 is 0 and C0=0, then C0 remains at 0"
+           (ch. 13.2.6) — and ch. 6.1.4 draws the rule as the comparison
+           itself, "If C0=R0 / Then C0=0", which under a counter past 0 gives
+           the overflow a narrowed width gives any running counter instead.
+           The reach past C0=0 is this chip's own, and Shaker's B (6) is all
+           that stands behind it: its "OUTI ON C0=0,R0=0" writes the width
+           seven microseconds before the OUTI's write lands, and reads that
+           write landing on C0=0, which a counter spending those microseconds
+           climbing cannot do. The disc grades a type 0 and a type 1: the
+           type 0's line came right on this and the type 1's is still a
+           microsecond over, which is the one line that record has left. The
+           other three take it with nothing outside this repository to say
+           so. Where a line's end is standing, the take-back below outranks
+           this: it restores the character the ending was taken on and the
+           counter goes on from there, the premature comparison of ch. 13.3's
+           third note being made against a width of nothing like any other. */
+        crtc->c0 = 0;
+      }
       if (crtc->address_register == 0 && crtc->a_line_end_is_kept &&
           (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
         /* Ch. 13.3's third note draws it: "on the position where C0 should

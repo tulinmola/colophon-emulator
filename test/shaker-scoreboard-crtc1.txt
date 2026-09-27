@@ -85,7 +85,7 @@ B (6)       CRTC 1 BUG OUTI R0                                                  
       OUTI ON R0.JIT 5TH uSec ON C0=0 - RES: #13 :GOOD
       OUTI ON R0.JIT 4TH uSec ON C0=0 - RES: #14 :GOOD
       OUTI ON R0.JIT 5TH uSec ON C0=1 - RES: #26 :GOOD
-    ! OUTI ON C0=0,R0=0, RES: #20 :WRONG!
+    ! OUTI ON C0=0,R0=0, RES: #27 :WRONG!
       OUTI ON R7 LAST CHANCE 5TH uSec ON C0=0 - RES: #1E :GOOD
       OUTI ON R7 LAST CHANCE 4TH uSec ON C0=0 - RES: #1F :GOOD
 B (7)       CRTC 0 BUG OVF C4                                                                another CRTC type's

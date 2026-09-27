@@ -681,6 +681,17 @@ static void a_write_on_the_character_clock_takes_a_line_end_back(void) {
       {0, 0, 16, true, 0, {1, 2, 3}},
       /* And the same write a quarter late, which no type takes. */
       {1, 0, 16, false, 0, {0, 1, 2}},
+      /* A width of nothing written where a line's end is standing: the
+         take-back outranks the rule that puts the counter home, so the
+         counter goes on from the character the ending was taken on. */
+      {1, 49, 0, true, 0, {50, 51, 52}},
+      {0, 49, 0, true, 0, {50, 51, 52}},
+      /* And off the clock, where no end is taken back and the width of
+         nothing has the counter to itself: it goes home and stays. A
+         character into a type 1's window the counter is standing on 1 rather
+         than on 0, which is where the two can be told apart. */
+      {1, 49, 0, false, 0, {0, 0, 0}},
+      {1, 49, 0, false, 1, {0, 0, 0}},
       /* A width of 1, where the take-back lands on the character C0 names
          2 rather than on its first: the chapter's overflow is an overflow of
          whatever C0 stood on, not a return to the head of a line. */
@@ -1114,6 +1125,76 @@ static void an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0(voi
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
   crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
   TEST_CHECK(crtc.vsync);
+}
+
+/* A width of nothing puts the counter home wherever it stood when the write
+   landed. The chapters put it only from a counter already there — "if R0=0,
+   then C0 never reaches 1 (and therefore remains at 0)" (ch. 13.2.1), "when
+   R0 is 0 and C0=0, then C0 remains at 0" (ch. 13.2.6) — so the reach past
+   C0=0 is this chip's own and Shaker's B (6) is all that stands behind it:
+   its "OUTI ON C0=0,R0=0" writes the width seven microseconds before the
+   OUTI's write lands, and reads that write landing on C0=0, which a counter
+   spending those microseconds climbing cannot do. The disc grades a type 0
+   and a type 1 — the type 0's line came right on this and the type 1's is
+   still a microsecond over — and the other three are walked here on nothing
+   but that.
+
+   What it must not become is the plain overrun of a counter that can no
+   longer meet its width, which leaves it climbing the eight bits it has and
+   coming round — ch. 13.3's third note reaches the same overflow by another
+   road, "C0 will not be equal to 0 but to 50 in some cases". The two rules
+   part on whether the width written is zero, and a chip that ran them
+   together would answer this line and fail that note, so both are graded
+   here. */
+static void a_width_of_nothing_puts_the_counter_at_nothing(void) {
+  static const uint8_t types[] = {0, 1, 2, 3, 4};
+  for (unsigned index = 0; index < sizeof types / sizeof types[0]; index++) {
+    crtc_init(&crtc, types[index]);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    /* Well into a line, so the counter has somewhere to fall from. */
+    for (long tick = 0; tick < 4L * SCANLINE && crtc.c0 != 20; tick++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 20u);
+    write_register(0, 0);
+    TEST_EQUAL(crtc.c0, 0u);
+    /* And it stays there, drawing a character to a line for as long as the
+       width says nothing. */
+    for (int character = 0; character < 8; character++) {
+      crtc_tick(&crtc);
+      TEST_EQUAL(crtc.c0, 0u);
+    }
+    /* The quarter the write lands on is nothing to it: a width of nothing
+       names every character whenever it arrives. */
+    crtc_init(&crtc, types[index]);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (long tick = 0; tick < 4L * SCANLINE && crtc.c0 != 20; tick++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 20u);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 0));
+    TEST_EQUAL(crtc.c0, 0u);
+
+    /* Where a width narrowed to something the counter has passed does climb,
+       which is the overflow ch. 13.3's third note reaches by its own road. */
+    crtc_init(&crtc, types[index]);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (long tick = 0; tick < 4L * SCANLINE && crtc.c0 != 20; tick++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 20u);
+    write_register(0, 10);
+    TEST_EQUAL(crtc.c0, 20u);
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.c0, 21u);
+  }
 }
 
 /* A place to go back to that the host has taken away, or swapped for
@@ -2999,11 +3080,9 @@ static void a_run_begun_under_a_stopped_picture_ends_on_r5(void) {
       break;
     }
   }
-  write_register(0, 0); /* narrowed away from the line's own head */
-  for (int character = 0; character < 400 && crtc.c0 != 0; character++) {
-    crtc_tick(&crtc); /* C0 runs to its top and comes back the long way */
-  }
-  TEST_CHECK(crtc.c0 == 0);
+  /* A width of nothing under a running counter, which puts it home at once. */
+  write_register(0, 0);
+  TEST_EQUAL(crtc.c0, 0u);
   run_characters(4);
   TEST_EQUAL(crtc.c4, 1); /* R4+1, and the run begun */
   TEST_EQUAL(crtc.c9, 0);
@@ -3150,15 +3229,10 @@ static void a_line_of_one_character_freezes_the_counters(void) {
     TEST_CHECK(run_to_row(10));
     run_scanlines(cases[index].from_c9);
     run_characters(cases[index].at_c0);
+    /* Wherever the counter stood, a width of nothing puts it home, so the
+       write itself is the first C0=0 with R0=0. */
     write_register(0, 0);
-    if (cases[index].at_c0 != 0) {
-      /* C0 stood past 0 when R0 became 0, so it climbs to its own top and
-         comes back the long way; that wrap is the first C0=0 with R0=0. */
-      for (int character = 0; character < 400 && crtc.c0 != 0; character++) {
-        crtc_tick(&crtc);
-      }
-      TEST_CHECK(crtc.c0 == 0);
-    }
+    TEST_EQUAL(crtc.c0, 0u);
     for (int character = 0; character < 8; character++) { /* well past a second */
       crtc_tick(&crtc);
     }
@@ -3207,10 +3281,7 @@ static void a_frozen_chip_still_reads_r8(void) {
   run_scanlines(3);
   run_characters(5);
   write_register(0, 0);
-  for (int character = 0; character < 400 && crtc.c0 != 0; character++) {
-    crtc_tick(&crtc);
-  }
-  TEST_CHECK(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c0, 0u);
   TEST_EQUAL(crtc_ra(crtc_tick(&crtc)), 4); /* C9, frozen where it landed */
   write_register(8, 3);
   uint8_t raster = 0;
@@ -4530,6 +4601,7 @@ int main(void) {
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
   TEST_RUN(an_r8_pulse_leaves_the_parities_the_diagrams_draw);
   TEST_RUN(a_write_on_the_character_clock_takes_a_line_end_back);
+  TEST_RUN(a_width_of_nothing_puts_the_counter_at_nothing);
   TEST_RUN(a_line_end_taken_back_is_the_one_just_taken);
   TEST_RUN(a_line_taken_back_is_a_line_that_never_ended);
   TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
