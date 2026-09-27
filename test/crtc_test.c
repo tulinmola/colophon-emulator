@@ -617,10 +617,12 @@ static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
 }
 
 /* Ch. 13.6 draws what an R0 written across a line's end does, a chronogram to
-   a type (ch. 13.6.1, 13.6.2, 13.6.3), and every one of them has placements
-   where "update of R0 ok (just in time)" leaves the line running on: a write
-   landing on the character clock that has just ended a line is still in time
-   to move R0 under that comparison, so the line did not end. Ch. 13.3's third
+   a type (ch. 13.6.1, 13.6.2, 13.6.3), each with placements where "Update of
+   R0 ok (just in time)" leaves the line running on and a next one where it is
+   "not considered (too late)". Here a write landing on the character clock
+   that has just ended a line is still in time to move R0 under that
+   comparison, so the line did not end — which of the chronograms' placements
+   that answers to is the one character of shift crtc.h declares. Ch. 13.3's third
    note works the example for a type 1: "if R0 was 49 and the 5th µsecond of
    the OUTI is at the position following C0=49, and R0 is modified to 20, then
    C0 will not be equal to 0 but to 50 in some cases". The hedge is the
@@ -654,26 +656,29 @@ static void a_write_on_the_character_clock_takes_a_line_end_back(void) {
       /* Ch. 13.3's worked example, and the same write a quarter late. */
       {1, 49, 20, true, 0, {50, 51, 52}},
       {1, 49, 20, false, 0, {0, 1, 2}},
-      /* The other four never take a line's end back, whichever edge it is. */
-      {0, 49, 20, true, 0, {0, 1, 2}},
-      {2, 49, 20, true, 0, {0, 1, 2}},
-      {3, 49, 20, true, 0, {0, 1, 2}},
-      {4, 49, 20, true, 0, {0, 1, 2}},
+      /* Every type takes the character the ending was decided on. */
+      {0, 49, 20, true, 0, {50, 51, 52}},
+      {2, 49, 20, true, 0, {50, 51, 52}},
+      {3, 49, 20, true, 0, {50, 51, 52}},
+      {4, 49, 20, true, 0, {50, 51, 52}},
       /* The window is two characters wide, and the character drawn in the
          second is counted: the counter goes on from 51, not from 50, or the
          line comes out a microsecond too long. */
       {1, 49, 20, true, 1, {51, 52, 53}},
       /* Not three, though. */
       {1, 49, 20, true, 2, {2, 3, 4}},
-      /* And the other four have nothing to take back a character late
-         either. */
+      /* The other four have let it go a character later. */
       {0, 49, 20, true, 1, {1, 2, 3}},
       {2, 49, 20, true, 1, {1, 2, 3}},
+      {3, 49, 20, true, 1, {1, 2, 3}},
+      {4, 49, 20, true, 1, {1, 2, 3}},
       /* A width rewritten with the width it already had ends its line all
          the same: the comparison it is put to is the one that just held. */
       {1, 49, 49, true, 0, {0, 1, 2}},
-      /* The chapter's "Previous R0=0" line, given a width to run to. */
+      /* The chapter's "Previous R0=0" line, given a width to run to, where
+         every character is an ending and the room is re-taken on each. */
       {1, 0, 16, true, 0, {1, 2, 3}},
+      {0, 0, 16, true, 0, {1, 2, 3}},
       /* And the same write a quarter late, which no type takes. */
       {1, 0, 16, false, 0, {0, 1, 2}},
       /* A width of 1, where the take-back lands on the character C0 names
@@ -805,7 +810,7 @@ static void a_line_end_taken_back_is_the_one_just_taken(void) {
    parities, the line a frame is owed and the raster address the count is
    read up to are all live, and all of them are the ending's to move and the
    rescue's to put back (ch. 19.5.3, 19.8.2). */
-static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t r8,
+static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t type, uint8_t r8,
                                                                unsigned characters_late) {
   static crtc_t never_ended;
   static crtc_t line_end_room[2];
@@ -813,7 +818,7 @@ static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t r8,
   const uint8_t registers[] = {1, 40, 48, 0x26, 5, 2, 3, 4, r8, 3};
   crtc_t *chips[2] = {&never_ended, &ended};
   for (int which = 0; which < 2; which++) {
-    crtc_init(chips[which], 1);
+    crtc_init(chips[which], type);
     crtc_give_line_end_room(chips[which], &line_end_room[which]);
     crtc = *chips[which];
     for (int number = 1; number < (int)(sizeof registers); number++) {
@@ -869,12 +874,17 @@ static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t r8,
 }
 
 static void a_line_taken_back_is_a_line_that_never_ended(void) {
-  /* At both widths of the window, and with the interlace mode quiet and
-     live, so the parities and the raster address are in the comparison too. */
+  /* At both widths of the window, and with the interlace mode quiet and live,
+     so the parities and the raster address are in the comparison too. A type 0
+     keeps the first character as a type 1 does, and its line ending moves
+     state a type 1's does not — C9 spent on the adjustment where the other
+     keeps C5 — so it is walked for that character as well. */
   for (unsigned characters_late = 0; characters_late < 2; characters_late++) {
-    walk_a_taken_back_line_beside_one_that_never_ended(0, characters_late);
-    walk_a_taken_back_line_beside_one_that_never_ended(3, characters_late);
+    walk_a_taken_back_line_beside_one_that_never_ended(1, 0, characters_late);
+    walk_a_taken_back_line_beside_one_that_never_ended(1, 3, characters_late);
   }
+  walk_a_taken_back_line_beside_one_that_never_ended(0, 0, 0);
+  walk_a_taken_back_line_beside_one_that_never_ended(0, 3, 0);
 }
 
 /* And the two costs the rescue cannot pay, which crtc.h declares and no line

@@ -98,8 +98,9 @@ static void run_psg(cpc_t *cpc) {
    one of the two write ports latches whatever the address bus carried. */
 static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
   uint64_t pins = CRTC_CS | crtc_set_data(0, data);
-  /* Which edge of the character the access finished on, which a type 1's own
-     comparison turns on (ch. 13.7.1). */
+  /* Which edge of the character the access finished on, which every type's
+     line-ending comparison turns on, and a type 1's C4/R7 comparison besides
+     (ch. 13.3, note 3; ch. 13.7.1). */
   if (gate_array_character_clock(&cpc->gate_array)) {
     pins |= CRTC_ON_THE_CHARACTER_CLOCK;
   }

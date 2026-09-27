@@ -556,10 +556,9 @@ static void enter_scanline(crtc_t *crtc) {
    so a sentinel there would read as the end of a 256-character line. */
 static void enter_character(crtc_t *crtc) {
   /* The room holds what the ending stood on for the character it was taken
-     on, and on a type 1 for the character after that as well. The second one
-     is ours: ch. 13.6.2's fifth row draws that placement wrapping the line,
-     and Shaker's "OUTI ON R0.JIT 5TH uSec ON C0=0" says it runs on. The disc
-     is followed; crtc.h says so where it lists what we diverge on. */
+     on, and on a type 1 for the character after that as well. Shaker's
+     B (6) is what sets both widths: its "4TH uSec ON C0=0" wants the first
+     of every type and its "5TH uSec ON C0=0" the second of a type 1. */
   if (crtc->a_line_end_is_kept && crtc->type == 1 && !crtc->a_character_was_drawn_since) {
     crtc->a_character_was_drawn_since = true;
   } else {
@@ -596,10 +595,13 @@ static void enter_character(crtc_t *crtc) {
   /* The chip has not quite finished deciding: a write landing on this same
      character clock is still in time to move R0 under the comparison that
      has just been made, so what the chip stood on is kept where it can be
-     taken back. Ch. 13.6 draws that for every type — each chronogram has
-     placements where "update of R0 ok (just in time)" leaves the line
-     running on — and ch. 13.3's third note is the type 1 case of it. */
-  if (crtc->line_end_room != 0 && crtc->type == 1) {
+     taken back. Ch. 13.6 draws every type a placement where "Update of R0 ok
+     (just in time)" leaves the line running on and the next one where it is
+     "not considered (too late)"; which of our microseconds those two land in
+     is a question this chip cannot yet answer, its placements measuring one
+     late against all three chronograms. The window is what carries that
+     microsecond, and crtc.h says what it leaves unsettled. */
+  if (crtc->line_end_room != 0) {
     *crtc->line_end_room = *crtc;
     /* One latch in the copy belongs to the character rather than to the
        line: this tick is about to spend the R3 write it records, and a
@@ -1309,8 +1311,9 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            "the comparison of C0 with R0 ... takes place after R0 is updated
            at the 5th µsecond of the instruction of the OUTI instruction" is
            that chip's own sentence (the doubled words are ch. 13.7.1.1's
-           own). The second character this chip allows is one placement past
-           that again, which the disc asks for and the chapter does not. */
+           own). The second character this chip gives it is one placement
+           past that again, which the disc asks for and the chapter does
+           not. */
         uint8_t the_character_it_ended_on = crtc->line_end_room->c0;
         /* Read before the copy comes back, which would carry the room's own
            stale answer to this question. */

@@ -353,35 +353,86 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
    CRTCs 0 and 2".
 
    So the two windows are compared with each other rather than with any
-   absolute lead, which is what the chapter states and what survives a change
-   of instruction lengths: one microsecond apart on the type that takes the
-   shift, two on the four that do not.
+   absolute lead, which is what the chapter states and what survives a
+   change of instruction lengths. What comes out is not the chapter's two
+   microseconds, though, and the reason is worth having in one place: the
+   chip offers a window in which a write can still cancel a line's ending,
+   the board reports a write finishing on the character clock, and only the
+   OUTI's entry lands on that clock — the OUT's falls a quarter later. So
+   the OUT is never rescued where the OUTI is, and the two stand one
+   microsecond apart here on the types that keep one character of window
+   and level on the type that keeps two. Which instruction reaches the
+   window is a Z80 and Gate Array fact; the window itself is the chip's.
 
-   Only the first character of that type's window is measured here. The walk
-   stops at the character the wrap is taken on, so a write rescuing the line
-   from the character after it arrives after the walk has already stopped and
-   cannot be seen. What the second character does is graded in the chip's own
-   suite, where the pin is driven directly and C0 is read out character by
-   character. Shaker's B (6) grades the difference,
-   and its "4TH uSec ON C0=0" came right when a write landing on the
-   character clock was let take a type 1's line end back.
+   What still holds of the chapter is the distance between the
+   instructions' own entries, the OUT's on its 3rd microsecond and the
+   OUTI's on its 5th, which the test above this one pins where they fall.
+   And the relation ch. 13.6 is really about survives whole: a type 1's
+   OUTI reaches one placement beyond every other chip's, which is the
+   difference the two cross-type assertions below measure.
+
+   The walk watches three characters past the wrap rather than stopping at
+   it. A rescue from the character the ending was decided on shows up as C0
+   stepping from #3F to #40 on the wrap's own tick; a rescue from the
+   character after it, which a type 1 alone takes, only shows up a
+   microsecond later, and a walk that stopped at the wrap could not see it
+   at all. This one could not, for as long as it existed, and reported a
+   type 1's window as one character wide while the chip gave it two.
 
    Types 3 and 4 are not walked. Ch. 4.4.4 puts their OUT's entry a
    microsecond later than the other three's — "an output entry with an
    OUT(C),R8 occurs on the 3rd NOP for a CRTC equipped with a GATE ARRAY,
-   and on the 4th NOP for an ASIC that emulates a CRTC" — so the two
-   instructions stand one microsecond apart on them and not two, which is
-   how ch. 13.6.3 draws it. That microsecond is not here, cpc.c wiring a
-   Gate Array whatever the chip is built as, and rows asserting two would
-   state a machine that never shipped and would have to be edited for a
-   correct change to land. crtc.h's list of what is missing carries it
-   instead.
+   and on the 4th NOP for an ASIC that emulates a CRTC" — and that
+   microsecond is not here, cpc.c wiring a Gate Array whatever the chip is
+   built as. Rows for them would come out the same as a type 0's and for a
+   reason that is not theirs, so crtc.h's list of what is missing carries
+   it instead.
 
    The leads are counted in microseconds from the start of the code under
    test and straddle the end of a 64-character line, which falls within
    them: a placement below the window is too early for the walk to mean
    anything, so the edge found is checked to be inside it and not at its
    floor. */
+/* The fact the walk below rests on, checked directly rather than inferred
+   from the difference it produces: an OUTI's entry to the CRTC falls on the
+   quarter the board calls the character clock and an OUT (C),r's does not.
+   That is a Z80 and Gate Array fact — where each instruction's I/O cycle
+   begins against the released WAIT — and it is what decides which of the two
+   can reach the window a chip holds a line's ending open in. */
+static void an_outi_enters_on_the_character_clock_and_an_out_does_not(void) {
+  static const struct {
+    uint8_t opcode; /* after the ED prefix */
+    uint8_t b;      /* so both reach &BD00 */
+    bool on_the_clock;
+  } instructions[] = {{0x49, 0xBD, false}, {0xA3, 0xBE, true}};
+  for (unsigned index = 0; index < sizeof instructions / sizeof *instructions; index++) {
+    memset(ram, 0, sizeof ram);
+    memset(lower_rom, 0, sizeof lower_rom);
+    cpc_init(&cpc, ram, sizeof ram, lower_rom, 0);
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0 selected */
+    lower_rom[UNDER_TEST] = 0xED;
+    lower_rom[UNDER_TEST + 1] = instructions[index].opcode;
+    ram[0x9000] = 0x2A; /* the width the write hands over */
+    cpc.cpu.pc = UNDER_TEST;
+    cpc.cpu.b = instructions[index].b;
+    cpc.cpu.c = 0x2A;
+    cpc.cpu.h = 0x90;
+    cpc.cpu.sp = 0x8000;
+    int quarter = -1;
+    for (int tick = 0; tick < 4 * 12 && quarter < 0; tick++) {
+      uint8_t before = cpc.crtc.registers[0];
+      cpc_tick(&cpc);
+      if (cpc.crtc.registers[0] != before) {
+        /* The quarter as the write saw it: cpc_tick advances the phase before
+           it steps anything, so this is the value the pin was decided on. */
+        quarter = cpc.gate_array.cpu_phase;
+      }
+    }
+    TEST_CHECK(quarter >= 0);
+    TEST_EQUAL(quarter == 0, instructions[index].on_the_clock);
+  }
+}
+
 static const int earliest_placement = 54;
 static const int latest_placement = 70;
 
@@ -413,14 +464,30 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
         cpc.cpu.h = 0x90;
         cpc.cpu.sp = 0x8000;
         bool ran_on = false;
+        bool wrapped = false;
+        int characters_since_the_wrap = 0;
         uint8_t previous = cpc.crtc.c0;
-        for (int tick = 0; tick < 4 * 90; tick++) {
+        for (int tick = 0; tick < 4 * 90 && !ran_on; tick++) {
           cpc_tick(&cpc);
           if (previous == 0x3F && cpc.crtc.c0 == 0x40) {
             ran_on = true;
           }
           if (previous == 0x3F && cpc.crtc.c0 == 0) {
-            break;
+            wrapped = true;
+          }
+          if (wrapped && cpc.crtc.c0 != previous) {
+            /* The watch does not stop at the wrap. A write reaching the chip
+               from a character after it puts C0 back above the width the line
+               ended on, where a wrap that stands leaves C0 climbing from
+               nothing — so three characters of watching tell the two apart,
+               and stopping at the wrap would have seen only the first of
+               them. */
+            if (cpc.crtc.c0 > 0x3F) {
+              ran_on = true;
+            }
+            if (++characters_since_the_wrap > 3) {
+              break;
+            }
           }
           previous = cpc.crtc.c0;
         }
@@ -436,11 +503,17 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
     if (edges[0] < 0 || edges[1] < 0) {
       continue;
     }
-    TEST_EQUAL(edges[0] - edges[1], type == 1 ? 1 : 2);
+    /* One microsecond, not the chapter's two: the chip offers the window and
+       the Z80 decides which instruction reaches it, the OUTI's entry landing
+       on the character clock the board reports and the OUT's a quarter
+       later, so the OUT is never rescued where the OUTI is. The distance
+       between the instructions' own entries is untouched and the test above
+       this one pins it. */
+    TEST_EQUAL(edges[0] - edges[1], type == 1 ? 0 : 1);
     out_edge[index] = edges[0];
     outi_edge[index] = edges[1];
   }
-  /* And where the microsecond falls, which the difference alone cannot say:
+  /* And the relation the chapter is really about, which survives intact:
      ch. 13.6.2 holds the OUTI's placements one row longer than ch. 13.6.1
      does and leaves the OUT's where they are, so it is the OUTI that gains
      the microsecond on a type 1 and not the OUT that loses one. A change
@@ -589,6 +662,7 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
   TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
+  TEST_RUN(an_outi_enters_on_the_character_clock_and_an_out_does_not);
   TEST_RUN(an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
