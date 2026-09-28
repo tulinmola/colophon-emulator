@@ -340,6 +340,7 @@ static void begin_frame(crtc_t *crtc) {
   crtc->c9_ivm = 0;
   crtc->c5 = 0;
   crtc->interlace_line_given = false;
+  crtc->frames_counted++;
   enter_character_row(crtc, 0);
 }
 
@@ -1240,6 +1241,90 @@ uint64_t crtc_tick(crtc_t *crtc) {
   return pins_of(crtc);
 }
 
+/* STATUS 1, which types 3 and 4 answer in place of R10. "The designers of
+   these ASIC's used R10 and R11 as status registers in order to trace a large
+   number of events", and ch. 21.3.4.1 tabulates this one bit by bit: each
+   names the value the bit takes while its event holds, so all but the first
+   stand at 1 and fall to 0 on their character. Ch. 28.1.10 confirms the
+   reading of the first, "bit 0 of status 1 which is worth 1 when C0=R0 (0
+   otherwise)". The chapter warns what precision they are written at: "several
+   bits only change state for 1 µsec". */
+static uint8_t status_1(const crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  /* Ch. 4.3's own view of the register gives this byte one fixed bit and
+     seven traced ones — "s 1 s s s s s s" against R10's CRTC 3,4 column — so
+     every bit but the sixth idles here and is pulled to its event's value. */
+  uint8_t status = 0xFE;
+  if (crtc->c0 == r[0]) {
+    status |= 0x01;
+  }
+  if (crtc->c0 == r[0] / 2) {
+    status &= (uint8_t)~0x02;
+  }
+  /* "C0=R1-1 (if R0>=R1)", taken at its arithmetic: an R1 of 0 puts the event
+     at 255, which only a line of 256 characters ever reaches. */
+  if (r[0] >= r[1] && crtc->c0 == (uint8_t)(r[1] - 1)) {
+    status &= (uint8_t)~0x04;
+  }
+  if (crtc->c0 == r[2]) {
+    status &= (uint8_t)~0x08;
+  }
+  /* "C0=R2+R3", where the R3 that ends an HSYNC is its low nibble alone —
+     the same table names the other half R3h where it means it. */
+  if (crtc->c0 == (uint8_t)(r[2] + (r[3] & 0x0F))) {
+    status &= (uint8_t)~0x10;
+  }
+  /* Bit 5 counts lines from the VSYNC and is not answered here. The chapter
+     gives it two rows that cannot share an idle value — "R3h>0 : C0=0..R0 on
+     the line R3h from Vsync (C4=R7)" takes the bit to 0 on its event where
+     "R3h=0 : C0=0..R0 over 15 lines from Vsync (C4=R7)" takes it to 1 — and
+     settles neither the character the count begins at nor why the second
+     spans fifteen lines where a width of nothing runs sixteen. It stands at
+     the idle the rest of this byte keeps, whatever R3h holds. */
+  /* "Bit 7 is used to indicate that on the next CRTC character, the less
+     significant byte of the video pointer will be reset to 0 (either from an
+     overrun on the current VMA pointer, or when this pointer is going to be
+     reloaded from VMA' at the end of the line)" (ch. 21.3.4.1). */
+  bool pointer_wraps = crtc->c0 < r[0] ? (crtc->vma & 0xFF) == 0xFF : (crtc->vma_ & 0xFF) == 0x00;
+  if (pointer_wraps) {
+    status &= (uint8_t)~0x80;
+  }
+  return status;
+}
+
+/* STATUS 2, answered in place of R11 (ch. 21.3.4.2). Three of its bits name a
+   frame's last character of a kind, one is a timer, and two are wired. */
+static uint8_t status_2(const crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  uint8_t status = 0x37; /* bit 4 "Always 1", bit 6 "Always 0", the rest idle */
+  /* "C9=R9" is the documented counter, and on these two in the interlace
+     video mode this chip keeps a count and a parity where ch. 19.8.4 keeps
+     the address, so the line the chapter means is the one the row actually
+     ends on rather than the bare comparison. */
+  bool row_and_line_ending = row_is_on_its_last_scanline(crtc) && crtc->c0 == r[0];
+  if (row_and_line_ending && crtc->c4 == r[4]) {
+    status &= (uint8_t)~0x01; /* "Last char of screen" */
+  }
+  if (row_and_line_ending && crtc->c4 == (uint8_t)(r[6] - 1)) {
+    status &= (uint8_t)~0x02; /* "Last char displayed" */
+  }
+  if (row_and_line_ending && crtc->c4 == (uint8_t)(r[7] - 1)) {
+    status &= (uint8_t)~0x04; /* "Last char before Vsync" */
+  }
+  /* "Bit 3 of status 2 toggles from 1 to 0 and vice versa over the entire
+     frame every 16 frames." */
+  if ((crtc->frames_counted & 0x10) != 0) {
+    status |= 0x08;
+  }
+  if (row_is_on_its_last_scanline(crtc)) {
+    status &= (uint8_t)~0x20; /* "C9=R9 : C0=0 to R0", the whole line long */
+  }
+  if (row_and_line_ending || (crtc->c9 == 0 && crtc->c0 < r[0])) {
+    status |= 0x80;
+  }
+  return status;
+}
+
 /* What the read port answers. Type 0 reads R12-R17; types 1 and 2 read only
    the cursor and the light pen, and for either "an attempt to read another
    register (0 to 255) returns the value 0" — except register 31 on type 1,
@@ -1251,9 +1336,28 @@ uint64_t crtc_tick(crtc_t *crtc) {
    and R17", where ch. 21.2.2 gives it R14 to R17 as it gives type 1. The
    register table is followed over the identification chapter's summary of
    it, and nothing here grades the difference: the cursor is the only place
-   the two disagree, and no suite on this disc reads it. */
+   the two disagree, and no suite on this disc reads it.
+
+   Types 3 and 4 read a table of eight instead, "only the 3 least significant
+   bits of the selected register number" choosing the row (ch. 21.2.3). The
+   chapter prints it, and these are its eight: R16, R17, R10, R11, R12, R13,
+   R14, R15, where R10 and R11 hold no register but "Asic CRTC Status 1" and
+   "Asic CRTC Status 2". The same disagreement as above sits over it — ch.
+   28.1.9's summary names R16, R17, R10, R11, R12 and R13 and leaves the
+   cursor out — and the table is followed here as it is there. */
 static uint8_t readable_register(const crtc_t *crtc) {
   uint8_t number = crtc->address_register;
+  if (crtc->type == 3 || crtc->type == 4) {
+    static const uint8_t taken_by_three_bits[8] = {16, 17, 10, 11, 12, 13, 14, 15};
+    uint8_t chosen = taken_by_three_bits[number & 7];
+    if (chosen == 10) {
+      return status_1(crtc);
+    }
+    if (chosen == 11) {
+      return status_2(crtc);
+    }
+    return crtc->registers[chosen];
+  }
   if (number >= 14 && number <= 17) {
     return crtc->registers[number];
   }
@@ -1362,7 +1466,14 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
          what a program reads there is a bus nobody drives: "my CPC CRTC 2
          always returns 255 ... my CPC CRTC 0 randomly returns 255 or 127"
          (ch. 21.3.2), so the pins pass through for the machine to answer.
-         Type 1 has one, and drives it (ch. 21.3.1, 21.3.3). */
+         Type 1 has one, and drives it (ch. 21.3.1, 21.3.3). Types 3 and 4
+         have none of their own either: that port "is a mirror of the read
+         port for CRTC's 3 and 4, which handle status differently" (ch.
+         21.3.1), the difference being the two status bytes the read port's
+         own table carries (ch. 21.2.3, 28.1.8). */
+      if (crtc->type == 3 || crtc->type == 4) {
+        return crtc_set_data(pins, readable_register(crtc));
+      }
       if (crtc->type != 1) {
         return pins;
       }

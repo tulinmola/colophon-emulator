@@ -267,6 +267,310 @@ static void each_type_answers_the_read_port_its_own_way(void) {
   }
 }
 
+/* The two ASICs read through a table of eight rather than by register number.
+   "For CRTC's 3 and 4, only the 3 least significant bits of the selected
+   register number are considered to read a register", so "reading register 4
+   therefore also means reading register 12 (8+4) or 20 (16+4)", and "since bit
+   3 of the register number is forced to 1, reading registers R2 and R3 is
+   equivalent to reading R10 and R11" (ch. 21.2.3, 21.3.4). Those last two are
+   the ASIC's status bytes and not registers at all. Both ports answer alike:
+   "the port at &BE00 behaves like the one at &BF00" (ch. 28.1.8).
+
+   This is what lets a program name these two chips, which Shaker does before
+   it chooses what to run: reading the display start back is what parts them
+   from a type 2, and until they answered it the disc named both of them a
+   type 2 and ran a type 2's tests on them (ch. 28.1.9). */
+static void the_two_asics_read_a_table_of_eight(void) {
+  static const uint8_t asics[] = {3, 4};
+  for (unsigned index = 0; index < sizeof asics / sizeof *asics; index++) {
+    crtc_init(&crtc, asics[index]);
+    write_register(12, 0x30);
+    write_register(13, 0x18);
+    write_register(14, 0x2A);
+    write_register(15, 0x55);
+    /* The two slots the table fills with the light pen are the two a reader
+       could mistake for R8 and R9, which share their bottom three bits. Both
+       are written here so that the empty answers below say which pair the
+       table holds. */
+    write_register(8, 0x33);
+    write_register(9, 0x07);
+    /* Each register and the two numbers that name it through those 3 bits. */
+    static const struct {
+      uint8_t number;
+      uint8_t expected;
+    } reads[] = {{12, 0x30}, {4, 0x30}, {20, 0x30}, {13, 0x18}, {5, 0x18},  {14, 0x2A}, {6, 0x2A},
+                 {15, 0x55}, {7, 0x55}, {16, 0x00}, {0, 0x00},  {17, 0x00}, {1, 0x00}};
+    for (unsigned read = 0; read < sizeof reads / sizeof *reads; read++) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, reads[read].number));
+      TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), reads[read].expected);
+      /* And the status port answers whatever the read port answers. */
+      TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RW)), reads[read].expected);
+    }
+    /* A number past the table's own eight still lands in it, which is what
+       says this reading is reached before the one every other type takes:
+       31 names the eighth row, where a type 1 would answer its phantom
+       register and a type 2 a zero. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 31));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x55);
+    /* R2 and R3 reach the two status bytes, as R10 and R11 do. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 10));
+    uint8_t status_1 = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 2));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), status_1);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+    uint8_t status_2 = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 3));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), status_2);
+    /* The bits those two chapters wire rather than trace. */
+    TEST_EQUAL(status_1 & 0x40, 0x40); /* status 1 bit 6, "Always 1" */
+    TEST_EQUAL(status_2 & 0x10, 0x10); /* status 2 bit 4, "Always 1" */
+    TEST_EQUAL(status_2 & 0x40, 0x00); /* status 2 bit 6, "Always 0" */
+  }
+  /* No other type reads a display start back, which is what the naming turns
+     on: a type 2 answers 0 there and a type 1 answers 0 everywhere but the
+     cursor (ch. 21.2.2). */
+  for (uint8_t type = 0; type <= 2; type++) {
+    crtc_init(&crtc, type);
+    write_register(12, 0x30);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 4));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x00);
+  }
+}
+
+/* Every bit of those two bytes but the wired ones traces something, so across
+   a frame each must be caught at both values, and the wired ones at neither.
+   Ch. 4.3's own view of the registers is what says which is which: on these
+   two chips R10 reads "s 1 s s s s s s" and R11 "s 0 s 1 s s s s", one fixed
+   bit in the first and two in the second.
+
+   This is the shape of failure the bit-by-bit tables cannot show on their own.
+   Status 1's seventh bit was idled at 0 here, so it could never rise and the
+   whole video-pointer rule written under it was dead code that no reading
+   could reach. A bit that never moves is not a status bit. */
+static void the_asic_status_bytes_trace_rather_than_stand(void) {
+  static const uint8_t asics[] = {3, 4};
+  for (unsigned index = 0; index < sizeof asics / sizeof *asics; index++) {
+    crtc_init(&crtc, asics[index]);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 3);
+    write_register(6, 2);
+    write_register(7, 1);
+    write_register(9, 7);
+    uint8_t ones[2] = {0, 0};  /* bits caught set, a byte each */
+    uint8_t zeros[2] = {0, 0}; /* and bits caught clear */
+    /* And where the three "last character of a kind" bits fall: each names a
+       row, and each should name it once in a frame and no more. */
+    unsigned times_clear[3] = {0, 0, 0};
+    uint8_t row_when_clear[3] = {0xFF, 0xFF, 0xFF};
+    unsigned characters_bit_7_stood = 0;
+    /* Into the machine, then to the head of a frame, then one whole frame of
+       it: a chip fresh from power-on stands at that head already. */
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
+      crtc_tick(&crtc);
+    }
+    /* Each character is read where the counters name it, then the chip is
+       stepped off it; the frame closes when the head comes round again. */
+    for (;;) {
+      for (unsigned byte = 0; byte < 2; byte++) {
+        crtc_access(&crtc, CRTC_CS | crtc_set_data(0, (uint8_t)(10 + byte)));
+        uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+        ones[byte] |= status;
+        zeros[byte] |= (uint8_t)~status;
+        if (byte == 1) {
+          for (unsigned bit = 0; bit < 3; bit++) {
+            if ((status & (1u << bit)) == 0) {
+              times_clear[bit]++;
+              row_when_clear[bit] = crtc.c4;
+            }
+          }
+          characters_bit_7_stood += (status & 0x80) != 0 ? 1 : 0;
+        }
+      }
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+    uint8_t traced[2] = {(uint8_t)(ones[0] & zeros[0]), (uint8_t)(ones[1] & zeros[1])};
+    /* Status 1: every bit but the sixth, which is wired, and the fifth, which
+       this chip leaves standing and the head of crtc.c says why. */
+    TEST_EQUAL(traced[0], 0x9F);
+    TEST_EQUAL(ones[0] & 0x40, 0x40);  /* "Always 1" */
+    TEST_EQUAL(zeros[0] & 0x40, 0x00); /* and never otherwise */
+    /* Status 2: every bit but the fourth and sixth, which are wired, and the
+       third, which counts whole frames and cannot turn inside one. */
+    TEST_EQUAL(traced[1], 0xA7);
+    TEST_EQUAL(ones[1] & 0x10, 0x10);  /* "Always 1" */
+    TEST_EQUAL(zeros[1] & 0x40, 0x40); /* "Always 0" */
+    TEST_EQUAL(ones[1] & 0x40, 0x00);
+    /* "C4=R4 ... : Last char of screen", "C4=R6-1 ... : Last char displayed",
+       "C4=R7-1 ... : Last char before Vsync" — one character each to a frame,
+       on the row each names and on no other. */
+    for (unsigned bit = 0; bit < 3; bit++) {
+      TEST_EQUAL(times_clear[bit], 1u);
+    }
+    TEST_EQUAL(row_when_clear[0], 3); /* R4 */
+    TEST_EQUAL(row_when_clear[1], 1); /* R6-1 */
+    TEST_EQUAL(row_when_clear[2], 0); /* R7-1 */
+    /* And bit 7 stands for a row's first line bar its last character, plus
+       the one character that ends the row: "(C9=R9 and C0=R0) or (C9=0 and
+       C0=0 to R0-1)", which over four rows of this frame is four of each. */
+    TEST_EQUAL(characters_bit_7_stood, 4u * (63u + 1u));
+  }
+}
+
+/* The fifth bit of the second byte stands for a whole line at a time — "C9=R9
+   : C0=0 to R0" (ch. 21.3.4.2) — so over a frame it falls for one line's worth
+   of characters in every row and no others, whatever the row's height. That
+   relation holds in the interlace video mode too, where this chip keeps the
+   row's end in a count and a parity rather than in C9 itself, so the bare
+   comparison the chapter writes names a different line from the one the row
+   actually ends on (crtc.c, row_is_on_its_last_scanline). */
+static void the_asic_row_end_bit_stands_for_the_line_the_row_ends_on(void) {
+  static const uint8_t modes[] = {0, 3}; /* the mode left alone, then asked for */
+  for (unsigned index = 0; index < sizeof modes / sizeof *modes; index++) {
+    crtc_init(&crtc, 3);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 3);
+    write_register(6, 2);
+    write_register(7, 1);
+    write_register(9, 7);
+    write_register(8, modes[index]);
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
+      crtc_tick(&crtc);
+    }
+    unsigned characters_the_bit_fell_for = 0;
+    unsigned rows = 0;
+    /* The three that name a frame's last character of a kind fall on the same
+       line this one stands for, so they too must fall once and once only. */
+    unsigned times_clear[3] = {0, 0, 0};
+    uint8_t row = crtc.c4;
+    for (;;) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      if ((status & 0x20) == 0) {
+        characters_the_bit_fell_for++;
+      }
+      for (unsigned bit = 0; bit < 3; bit++) {
+        times_clear[bit] += (status & (1u << bit)) == 0 ? 1 : 0;
+      }
+      crtc_tick(&crtc);
+      if (crtc.c4 != row) {
+        rows++;
+        row = crtc.c4;
+      }
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+    TEST_EQUAL(characters_the_bit_fell_for, rows * 64u);
+    for (unsigned bit = 0; bit < 3; bit++) {
+      TEST_EQUAL(times_clear[bit], 1u);
+    }
+  }
+}
+
+/* And the one bit that counts frames rather than characters: "bit 3 of status
+   2 toggles from 1 to 0 and vice versa over the entire frame every 16 frames"
+   (ch. 21.3.4.2). Both halves are asserted — that it holds for a whole frame,
+   and that it turns on the sixteenth. */
+static void the_asic_frame_timer_turns_every_sixteenth_frame(void) {
+  crtc_init(&crtc, 4);
+  write_register(0, 7);
+  write_register(4, 1);
+  write_register(9, 1);
+  bool per_frame[48];
+  unsigned frames = 0;
+  bool held_all_frame = true;
+  while (frames < sizeof per_frame / sizeof *per_frame) {
+    /* To a frame's head, then across the whole of that frame. */
+    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
+      crtc_tick(&crtc);
+    }
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+    bool at_the_head = (crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)) & 0x08) != 0;
+    per_frame[frames++] = at_the_head;
+    for (;;) {
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break; /* the tick that ends a frame has already counted the next */
+      }
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      if (((crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)) & 0x08) != 0) !=
+          at_the_head) {
+        held_all_frame = false;
+      }
+    }
+  }
+  TEST_CHECK(held_all_frame);
+  /* And every run of like frames is sixteen long, the first and last apart:
+     those two are however much of a run this reading began and ended inside. */
+  unsigned run = 1;
+  unsigned runs_seen = 0;
+  bool runs_of_sixteen = true;
+  for (unsigned frame = 1; frame < frames; frame++) {
+    if (per_frame[frame] == per_frame[frame - 1]) {
+      run++;
+      continue;
+    }
+    if (runs_seen > 0 && run != 16) {
+      runs_of_sixteen = false; /* the first run began before this reading did */
+    }
+    runs_seen++;
+    run = 1;
+  }
+  TEST_CHECK(runs_of_sixteen);
+  TEST_CHECK(runs_seen >= 2);
+  /* Sixteen apart in either direction is the turn itself. */
+  bool turned = false;
+  for (unsigned frame = 16; frame < frames; frame++) {
+    if (per_frame[frame] != per_frame[frame - 16]) {
+      turned = true;
+    }
+  }
+  TEST_CHECK(turned);
+}
+
+/* And the first bit of the first status byte is the one the Compendium states
+   outright, which is what pins how the rest of that table is read: "bit 0 of
+   status 1 which is worth 1 when C0=R0 (0 otherwise)" (ch. 28.1.10). Every
+   other bit in the two tables names the value it takes while its event holds,
+   so all of them but this one idle at 1 and fall to 0 on their character. */
+static void the_first_status_bit_follows_the_character_counter(void) {
+  static const uint8_t asics[] = {3, 4};
+  for (unsigned index = 0; index < sizeof asics / sizeof *asics; index++) {
+    crtc_init(&crtc, asics[index]);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, 7);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 10));
+    bool followed_the_counter = true;
+    unsigned characters_at_the_end_of_a_line = 0;
+    for (long tick = 0; tick < 4L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+      bool set = (crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)) & 1) != 0;
+      if (set != (crtc.c0 == crtc.registers[0])) {
+        followed_the_counter = false;
+      }
+      characters_at_the_end_of_a_line += set ? 1 : 0;
+    }
+    TEST_CHECK(followed_the_counter);
+    TEST_EQUAL(characters_at_the_end_of_a_line, 4u); /* one a line, and no more */
+  }
+}
+
 /* Ch. 21.3.2: types 0 and 2 "do not have a status register", so &BE00 is a
    bus nobody drives and the machine reads back whatever it put there. Type
    1 has one, and its unused bits — 0 to 4 and 7 — read 0 (ch. 21.3.3). */
@@ -4917,6 +5221,11 @@ int main(void) {
   TEST_RUN(select_wears_five_bits);
   TEST_RUN(writes_wear_the_documented_widths);
   TEST_RUN(each_type_answers_the_read_port_its_own_way);
+  TEST_RUN(the_two_asics_read_a_table_of_eight);
+  TEST_RUN(the_first_status_bit_follows_the_character_counter);
+  TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);
+  TEST_RUN(the_asic_row_end_bit_stands_for_the_line_the_row_ends_on);
+  TEST_RUN(the_asic_frame_timer_turns_every_sixteenth_frame);
   TEST_RUN(each_type_keeps_its_own_vsync_length);
   TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
   TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);

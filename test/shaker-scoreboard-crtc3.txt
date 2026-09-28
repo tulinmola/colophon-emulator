@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 61 groups run, 25 left to another CRTC type.
-8 of them printed self-graded lines, 35 in all: 19 agree with Longshot's
-silicon and 16 do not. That is 54% of what this reader can score, and no
+8 of them printed self-graded lines, 35 in all: 20 agree with Longshot's
+silicon and 15 do not. That is 57% of what this reader can score, and no
 measure at all of the other 53 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -65,9 +65,9 @@ A (1)       UPDATE VRAM VS CRTC (79 TST)                                        
 A (2)       SKEW DISP ON R0 RUPTURE (4 TST)                                                  recorded, ungraded
 A (3)       CRTC 2 RVMB (22 TST)                                                             another CRTC type's
 A (4)       UPDATE CRTC R0 TIMING (17 TST)                                                   recorded, ungraded
-A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      showed only the menu
-A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      showed only the menu
-A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      showed only the menu
+A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded
+A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded, cut off at the cap
+A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded
 A (8)       GATE ARRAY PIXELISATION                                                          recorded, ungraded
 A (9)       GATE ARRAY INKERISATION (3 TST)                                                  recorded, ungraded
 A (E)       GATE ARRAY MODERISATION                                                          recorded, ungraded
@@ -82,8 +82,8 @@ A (I)       VSYNC CONDITIONS (413 TST)                                          
 A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded
 A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded
 A (COPY)    CRTC 2 OFFSET                                                                    another CRTC type's
-B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (07)              recorded, ungraded
-B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                               recorded, ungraded, cut off at the cap
+B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (06)              recorded, ungraded
+B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                               showed only the menu
 B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
 B (4)       CRTC 2 FIND C0 MIN                                                               another CRTC type's
 B (5)       CRTC 2 RLAL                                                                      another CRTC type's
@@ -115,31 +115,24 @@ C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                   
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
 C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded
-C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              3 graded, 0 wrong
+C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              7 graded, 2 wrong
+      FROM LAST LINE, R5=1 ON C0=0, CPU TO C4=0 IS #0D (#0D Expected)
+      FROM LAST LINE, R5=2 ON C0=0, CPU TO C4=0 IS #14 (#14 Expected)
+      FROM LAST LINE, R5=3 ON C0=0, CPU TO C4=0 IS #1C (#1C Expected)
+      FROM LAST LINE, R5=6 ON C0=0, CPU TO C4=0 IS #31 (#31 Expected)
       R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
-      R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
-      R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
-C (P)       ALL      : ADD LINE R8                                                           4 graded, 3 wrong
-    ! R5=3/ON 2ND ADD LINE,R5=1,R8=3/ CPU TO NEW FRAME:#0082 (#0084 expected)
-    ! R8=3 ON LAST LINE/ CPU TO C4=0:#0005 (#0007 expected)
-    ! R8=3 ON LAST LINE/ CPU TO C4=1:#0019 (#0027 expected)
-      CANCEL IVM ON LAST LINE/ CPU TO C4=0:#0004 (#0004 expected)
+    ! R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0004 expected)
+    ! R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0004 expected)
+C (P)       ALL      : ADD LINE R8                                                           showed only the menu
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           1 graded, 1 wrong
-    ! RESULT:#2CE0 WRONG (EXP:#4E80)
-C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             10 graded, 10 wrong
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=3 FROM C4=2, CPU=#0460 WRONG (EXP:#0620)
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=6 FROM C4=2, CPU=#0720 WRONG (EXP:#0C20)
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=0 FROM C4=2, CPU=#0820 WRONG (EXP:#0E20)
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=1 FROM C4=2, CPU=#0980 WRONG (EXP:#1020)
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=3 FROM C4=2, CPU=#0460 WRONG (EXP:#0620)
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=6 FROM C4=2, CPU=#0720 WRONG (EXP:#0C20)
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=0 FROM C4=2, CPU=#0820 WRONG (EXP:#0E40)
-    ! FROM C4=2, CPU=#0460 WRONG (EXP:#0620)               (NEXT FRAME +1=#0BC0, +2=#1
-    ! FROM C4=2, CPU=#0720 WRONG (EXP:#0C20)               (NEXT FRAME +1=#0F00, +2=#1
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=1 FROM C4=2, CPU=#0980 WRONG (EXP:#1040)
-C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
+    ! RESULT:#2A40 WRONG (EXP:#4E00)
+C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             3 graded, 3 wrong
+    ! R9=6,R4=6, R6=9, PARITY=E, R7=3 FROM C4=2, CPU=#5F20 WRONG (EXP:#0320)
+    ! R9=6,R4=6, R6=9, PARITY=E, R7=6 FROM C4=2, CPU=#6220 WRONG (EXP:#0620)
+    ! R9=6,R4=6, R6=9, PARITY=E, R7=0 FROM C4=2, CPU=#0740 WRONG (EXP:#0760)
+C (Y)       ALL      : CRTC 3/4 PARITY                                                       recorded, ungraded
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  another CRTC type's
-D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         showed only the menu
+D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         recorded, ungraded
 D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               3 graded, 1 wrong
     ! TEST INT ON INST DEC DE   :#59 (CRTC 3+4:#58/ OTHERS:#59)
       Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)
@@ -154,7 +147,7 @@ D (R)       VSYNC TORTURE (LOCK MECHANISM)                                      
 D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded
 D (H)       HSYNC GATE ARRAY                                                                 recorded, ungraded
 D (1)       CSYNC4 VS 2xCSYNC2                                                               recorded, ungraded
-D (2)       R2.JIT >> NO CSYNC UPD                                                           recorded, ungraded
+D (2)       R2.JIT >> NO CSYNC UPD                                                           showed only the menu
 D (3)       2xCSYNC RELATIVE                                                                 recorded, ungraded
 D (4)       CSYNC MULTIPLES                                                                  recorded, ungraded
 D (5)       WIP (SOME R3.JIT)                                                                recorded, ungraded
@@ -168,7 +161,7 @@ D (P)       CRTC 2 : VMA' BUG                                                   
 D (S)       SPLITBORDER POS                                                                  recorded, ungraded
 D (COPY)    RESET CPC                                                                        recorded, ungraded
 E (1)       R5 STORIES 2ND ROUND                                                             7 graded, 0 wrong
-      R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0004 (exp:#0004)
+      R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0005 (exp:#0005)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#01, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#02, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#03, R5=0, CPU TO C4=0:#0004 (exp:#0004)
@@ -177,7 +170,14 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   another CRTC type's
-E (4)       CRTC 3/4 : C4 OVERFLOW                                                           showed only the menu
+E (4)       CRTC 3/4 : C4 OVERFLOW                                                           7 graded, 7 wrong
+    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
+    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
+    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
+    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
+    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
+    ! C0=#38 > C4 OVF=00 (OVF IF 00) WRONG
+    ! C0=#38 > C4 OVF=00 (OVF IF 00) WRONG
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
 E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        another CRTC type's
 E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   another CRTC type's

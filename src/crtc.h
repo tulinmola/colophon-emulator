@@ -9,12 +9,25 @@
  * chip regardless of CCLK.
  *
  * Type 0 is the type implemented, and eight things are not its alone. The
- * first is what a machine can read of the chip: the registers each type hands
- * back on the read port, and the status register type 1 alone has, are
- * answered for types 0, 1 and 2 (ch. 21.2, 21.3), which is what a program
- * names the chip by (ch. 28.1.8, 28.1.9) — what a program probing for a type
- * 2 would make of it being a reading of those chapters and no evidence we did
- * not write. The second is the VSYNC. Types 1 and 2 cannot program its
+ * first is what a machine can read of the chip, which is what a program names
+ * it by (ch. 28.1.8, 28.1.9). Every type answers: types 0, 1 and 2 from ch.
+ * 21.2's table, with the status register type 1 alone has, and the two ASICs
+ * from the table of eight ch. 21.2.3 prints, taken by the low three bits of
+ * the number — R16, R17, R10, R11, R12, R13, R14, R15 — whose R10 and R11
+ * rows hold no register but "Asic CRTC Status 1" and "Asic CRTC Status 2",
+ * and whose status port "is a mirror of the read port" (ch. 21.3.1). A
+ * program names the chip by this and nothing else. One bit of those two bytes
+ * is left standing at its idle, status 1's fifth: the chapter gives it two
+ * rows that cannot share an idle value and settles neither the character its
+ * count begins at nor why one spans fifteen lines where a width of nothing
+ * runs sixteen. What a CRTC=3 machine is here is worth saying too, because
+ * the chip does not decide it. Ch. 29.1 tells the two ASICs apart by the
+ * computer around them — a CPC PLUS answers an unlock sequence and carries a
+ * PPI its ASIC emulates badly, a CPC LOWCOST has neither — and ch. 28.1.10
+ * believes one bit of status 2 differs between them as well, "subject to
+ * additional tests", without saying how. This repository has no PLUS, so a
+ * machine built as a type 3 is a chip in a computer that was never sold, and
+ * what reads it finds the one that was. The second is the VSYNC. Types 1 and 2 cannot program its
  * length, so it "is fixed at 16" whatever R3h holds (ch. 16), and a pulse
  * either of them is made to begin by a write to R7 is counted "as if the
  * VSYNC had started when C0=0" and spends a line fewer than a type 0's (ch.
@@ -509,6 +522,11 @@ typedef struct crtc_t {
                   read it as 16 (ch. 14.1, 14.5) */
   uint8_t c3h; /* VSYNC scanline counter, 4 bits: R3 high nibble, 0 counts 16,
                   and types 1 and 2 never read that nibble at all (ch. 16) */
+  /* Frames since power-on, kept for the one status bit that counts them:
+     "bit 3 of status 2 toggles from 1 to 0 and vice versa over the entire
+     frame every 16 frames" on types 3 and 4 (ch. 21.3.4.2). It is ours
+     rather than the Compendium's, which names no counter behind that bit. */
+  uint8_t frames_counted;
 
   /* This line ends the frame. Decided while C0 is 0 or 1 and held for the
      rest of the line, so a register written afterwards cannot take it back;
