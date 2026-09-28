@@ -43,16 +43,24 @@
  * C0vs=1 ... we are in a BLOCKED VSYNC" is ch. 16.4.1.1's, that type's own
  * chapter, and ch. 16.4.2 answers for a type 1 with no exception at all: "if
  * R7 is modified with the value of C4, then VSYNC is triggered immediately".
- * The other three are blocked because their own answers are absent rather
- * than because their chapters ask for it — ch. 16.4.3 gives a type 2 a pulse
- * outside its HSYNC and a GHOST VSYNC inside it, and ch. 16.4.4 gives types 3
- * and 4 a condition of their own, "VSYNC starts when C4=R7 and C9=C0=0 ... if
+ * A type 2 is blocked because its own answer is absent rather than because
+ * its chapter asks for it: ch. 16.4.3 gives it a pulse outside its HSYNC and
+ * a GHOST VSYNC inside it, and neither is here. The two ASICs are refused by
+ * a rule of their own instead. "VSYNC starts when C4=R7 and C9=C0=0", and "if
  * R7 is modified with the value of C4 while C0>0 and/or C9>0, it will not
- * trigger CRTC VSYNC" — and what keeps the stand-in for those last two is B
- * (6)'s own program rather than any record: the group draws nothing at all on
- * them, its menu line giving it to a type 1, but the table it picks its
- * expectations from wants of those two what it wants of a type 0. Lifting the
- * block for a type 1 was what let the eighth below reach that line. The third
+ * trigger CRTC VSYNC" (ch. 16.4.4), which ch. 19.7.1 draws as the exception
+ * to every other type — "VSYNC occurs when C4 is equal to R7 on any position
+ * of C0 (except on CRTC's 3 and 4, which dictate that C4=C9=C0=0)" — so an
+ * equality made by hand anywhere but a frame's corner is spent on them and
+ * the pulse waits for the corner after. A MID-VSYNC is the one thing that
+ * moves the character and the delay of ch. 19.7.1's other exception the one
+ * thing that moves the line. What that chapter denies them beside it is not
+ * here: "there is no VSYNC reentrancy protection mechanism on these
+ * circuits", where this one blocks a second pulse on every type. No line of
+ * any record moves on either half — the group that watches this pin to catch
+ * a row counter overrunning grades six on each of those two and neither the
+ * rule nor the reentrancy touches one of them. Lifting the block for a type 1
+ * was what let the eighth below reach that line. The third
  * is how a type 1 reads R9 in the interlace video mode, and the disc grades
  * it too: its odd-lined rows come of an even R9 where a type 0's come of an
  * odd one (ch. 19.5.3, 19.8.2), and it reads the limit down to that parity

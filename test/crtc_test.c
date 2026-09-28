@@ -361,6 +361,71 @@ static void an_r5_under_the_count_ends_the_padding_on_the_asics(void) {
   }
 }
 
+/* The two ASICs raise a frame sync only at a frame's own corner. "VSYNC starts
+   when C4=R7 and C9=C0=0", and "if R7 is modified with the value of C4 while
+   C0>0 and/or C9>0, it will not trigger CRTC VSYNC" (ch. 16.4.4) — which ch.
+   19.7.1 gives as the exception to every other type: "VSYNC occurs when C4 is
+   equal to R7 on any position of C0 (except on CRTC's 3 and 4, which dictate
+   that C4=C9=C0=0)". So an equality a program makes by hand in the middle of a
+   row is spent on those two, and the sync it asked for waits for the corner of
+   the frame after.
+
+   Nothing on any record grades it: the group that detects a row counter's
+   overflow does so by watching this very pin, and neither this rule nor the
+   reentrancy its chapter denies these chips moves one of its lines. What
+   stands behind it is those two sentences. */
+static void the_two_asics_raise_a_sync_only_at_a_frames_corner(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t c9;         /* the line the equality is made on */
+    bool at_the_corner; /* or on the character it was made */
+  } cases[] = {
+      /* In the middle of a row, which only the line of the corner refuses. */
+      {0, 3, false},
+      {1, 3, false},
+      {2, 3, false},
+      {3, 3, true},
+      {4, 3, true},
+      /* And on a row's own first line, where only the character refuses it. */
+      {0, 0, false},
+      {1, 0, false},
+      {2, 0, false},
+      {3, 0, true},
+      {4, 0, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    /* Away from the corner: the middle of a line, on the row's chosen one. */
+    TICK_UNTIL(crtc.c0 == 20 && crtc.c9 == cases[index].c9 && crtc.c4 == 10);
+    bool was = crtc.vsync;
+    write_register(7, crtc.c4);
+    long waited = 0;
+    bool rose_at_a_corner = false;
+    for (long tick = 0; tick < 2L * FRAME_TICKS; tick++) {
+      crtc_tick(&crtc);
+      waited++;
+      if (crtc.vsync && !was) {
+        rose_at_a_corner = crtc.c0 == 0 && crtc.c9 == 0;
+        break;
+      }
+      was = crtc.vsync;
+    }
+    TEST_EQUAL(rose_at_a_corner, cases[index].at_the_corner);
+    /* Three types take it on the character the write landed on; the two that
+       wait for a corner cannot do so inside the line, or the row. */
+    TEST_CHECK(cases[index].at_the_corner ? waited > SCANLINE : waited <= 2);
+  }
+}
+
 /* A run opened with the row counter already past R4 is the neighbouring case
    to the one above, and it is where the comparison could most easily have been
    let loose: on the two ASICs that run's count is never zeroed at its opening,
@@ -5457,6 +5522,7 @@ int main(void) {
   TEST_RUN(the_two_asics_leave_the_pointer_alone_through_the_padding);
   TEST_RUN(an_r5_under_the_count_ends_the_padding_on_the_asics);
   TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_every_type);
+  TEST_RUN(the_two_asics_raise_a_sync_only_at_a_frames_corner);
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
   TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);

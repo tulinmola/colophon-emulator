@@ -1022,8 +1022,24 @@ static void begin_the_vsync(crtc_t *crtc) {
   bool delays_a_whole_line = crtc->type != 1 && crtc->type != 2;
   bool late_vsync = delays_a_whole_line && crtc->interlace_video_mode && (r[9] & 1) != 0 &&
                     (crtc->c4 & 1) != 0 && crtc->parity_frame;
-  if (c4_stands_on_r7(crtc) && !crtc->vsync && !crtc->vsync_blocked &&
-      (!mid_vsync || crtc->c0 == r[0] / 2) && (!late_vsync || crtc->c9 == 1)) {
+  /* The two ASICs start one only at a frame's own corner: "VSYNC starts when
+     C4=R7 and C9=C0=0" (ch. 16.4.4), which ch. 19.7.1 draws as the exception
+     to every other type — "VSYNC occurs when C4 is equal to R7 on any position
+     of C0 (except on CRTC's 3 and 4, which dictate that C4=C9=C0=0)". A
+     MID-VSYNC is the one thing that moves the character, its own chapter
+     keeping the line and giving up C0: "the VSYNC will start when C0 reaches
+     R0/2" (ch. 19.7.3). */
+  bool starts_at_a_frames_corner = crtc->type == 3 || crtc->type == 4;
+  /* The line it starts on: a row's first, except where the exception above
+     holds it back to the second. */
+  bool at_the_line_it_starts_on =
+      late_vsync ? crtc->c9 == 1 : !starts_at_a_frames_corner || crtc->c9 == 0;
+  /* And the character: a line's first on those two, except where a MID-VSYNC
+     gives up C0 for half a line instead. */
+  bool at_the_character_it_starts_on =
+      mid_vsync ? crtc->c0 == r[0] / 2 : !starts_at_a_frames_corner || crtc->c0 == 0;
+  if (c4_stands_on_r7(crtc) && !crtc->vsync && !crtc->vsync_blocked && at_the_line_it_starts_on &&
+      at_the_character_it_starts_on) {
     crtc->vsync = true;
     crtc->vsync_blocked = true;
     crtc->c3h = 0;
