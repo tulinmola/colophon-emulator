@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 62 groups run, 24 left to another CRTC type.
-8 of them printed self-graded lines, 38 in all: 24 agree with Longshot's
-silicon and 14 do not. That is 63% of what this reader can score, and no
+8 of them printed self-graded lines, 37 in all: 26 agree with Longshot's
+silicon and 11 do not. That is 70% of what this reader can score, and no
 measure at all of the other 54 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -66,7 +66,7 @@ A (2)       SKEW DISP ON R0 RUPTURE (4 TST)                                     
 A (3)       CRTC 2 RVMB (22 TST)                                                             another CRTC type's
 A (4)       UPDATE CRTC R0 TIMING (17 TST)                                                   recorded, ungraded
 A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded, cut off at the cap
-A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded, cut off at the cap
+A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded
 A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded
 A (8)       GATE ARRAY PIXELISATION                                                          recorded, ungraded
 A (9)       GATE ARRAY INKERISATION (3 TST)                                                  recorded, ungraded
@@ -120,14 +120,14 @@ C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                   
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
 C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded
-C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              7 graded, 2 wrong
+C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              7 graded, 0 wrong
       FROM LAST LINE, R5=1 ON C0=0, CPU TO C4=0 IS #0D (#0D Expected)
       FROM LAST LINE, R5=2 ON C0=0, CPU TO C4=0 IS #14 (#14 Expected)
       FROM LAST LINE, R5=3 ON C0=0, CPU TO C4=0 IS #1C (#1C Expected)
       FROM LAST LINE, R5=6 ON C0=0, CPU TO C4=0 IS #31 (#31 Expected)
       R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
-    ! R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0004 expected)
-    ! R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0004 expected)
+      R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0004 (#0004 expected)
+      R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
 C (P)       ALL      : ADD LINE R8                                                           showed only the menu
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           1 graded, 1 wrong
     ! RESULT:#4E20 WRONG (EXP:#4E00)
@@ -173,8 +173,7 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   another CRTC type's
-E (4)       CRTC 3/4 : C4 OVERFLOW                                                           7 graded, 7 wrong
-    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
+E (4)       CRTC 3/4 : C4 OVERFLOW                                                           6 graded, 6 wrong
     ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
     ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
     ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG

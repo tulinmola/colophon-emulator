@@ -152,10 +152,16 @@
  * taken again on the comparison that activates it, finds the R5 the program
  * cancelled, and is not taken, so the run ends where C5 next comes round to
  * it (ch. 11.3.2). Ch. 11.3.1 is headed "CRTC's 0, 2" and gives its two the
- * plain overflow of the counter, so neither of them takes the state. One
- * thing that counter carries is not here: a line too narrow to reach the
- * disarm gives types 1 and 2 no additional line where it gives the other
- * three one, ch. 13.2's window being a type 0's. Every other behaviour
+ * plain overflow of the counter, so neither of them takes the state. Types 3
+ * and 4 read R5 as they read R9, reached or passed rather than equal — "if R5
+ * is modified with a value below C9+1, then the line is considered the last",
+ * and "whether with R5 or R9, it is impossible to overflow C9" (ch. 11.3.3) —
+ * so an R5 dropped under the count ends that padding where it stands, where
+ * the other three spend the counter's whole round getting back to it. The
+ * disc's C (E) came right in all three of its readings on that. One thing
+ * that counter carries is not here: a line too narrow to reach the disarm
+ * gives types 1 and 2 no additional line where it gives the other three one,
+ * ch. 13.2's window being a type 0's. Every other behaviour
  * below is type 0's whatever the type is set to, and a number naming none of
  * the five is neither refused nor corrected. One of those is worth naming
  * because the disc grades it: a type 1 takes R4 written with the value C4

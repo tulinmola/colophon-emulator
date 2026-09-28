@@ -284,6 +284,131 @@ static void each_type_answers_the_read_port_its_own_way(void) {
   }
 }
 
+/* An R5 written under a frame's padding ends that padding at once on the two
+   ASICs. "If R5 is modified with a value below C9+1, then the line is
+   considered the last and additional management ends", and "whether with R5 or
+   R9, it is impossible to overflow C9" (ch. 11.3.3) — the same comparison
+   their row's own limit takes.
+
+   The other three answer it three ways and none of them is this one. Types 0
+   and 2 test for equality, so an R5 under the count is never met and the
+   counter spends its whole five-bit round getting back to it. A type 1 does
+   not come back at all on an R5 of nothing: it latches a state the register
+   cannot clear and holds the frame open while C4 walks its seven bits round
+   (ch. 11.3.2), which is the longest answer in the table below by a factor of
+   fifteen. An R5 raised rather than dropped is the same on every type, the
+   count meeting the new value where it always would.
+
+   Shaker's C (E) grades three of these: an R5 that lands on the count ends the
+   run wherever it is read, and the two that land under it were what parted
+   this chip from silicon. */
+static void an_r5_under_the_count_ends_the_padding_on_the_asics(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r5;        /* the padding asked for */
+    uint8_t rewritten; /* what R5 is rewritten to, on that line */
+    unsigned on_line;  /* which line of the padding carries the write */
+    long microseconds; /* and how long from it to the frame after */
+  } cases[] = {
+      /* Landing on the count ends the run where it is read, on every type. */
+      {0, 2, 1, 0, 64},
+      {1, 2, 1, 0, 64},
+      {2, 2, 1, 0, 64},
+      {3, 2, 1, 0, 64},
+      {4, 2, 1, 0, 64},
+      /* Landing under it ends the run on the two ASICs and on no other. */
+      {3, 1, 0, 0, 64},
+      {4, 1, 0, 0, 64},
+      {3, 3, 1, 1, 64},
+      {4, 3, 1, 1, 64},
+      /* Where types 0 and 2 walk the five bits round to meet it again. */
+      {0, 1, 0, 0, 2048},
+      {2, 1, 0, 0, 2048},
+      /* And a type 1 holds the frame open until C4 has walked seven. */
+      {1, 1, 0, 0, 29952},
+      /* Raised rather than dropped, the count meets it as it always would. */
+      {0, 2, 4, 0, 256},
+      {3, 2, 4, 0, 256},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 10);
+    write_register(5, cases[index].r5);
+    write_register(6, 25);
+    write_register(9, 3);
+    for (long tick = 0; tick < 200L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TICK_UNTIL(crtc.vertical_adjustment_in_progress);
+    TICK_UNTIL(crtc.c0 == 0);
+    for (unsigned line = 0; line < cases[index].on_line; line++) {
+      TICK_UNTIL(crtc.c0 == 63);
+      TICK_UNTIL(crtc.c0 == 0);
+    }
+    write_register(5, cases[index].rewritten);
+    long microseconds = 0;
+    for (long tick = 0; tick < 4L * FRAME_TICKS; tick++) {
+      crtc_tick(&crtc);
+      microseconds++;
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+    TEST_EQUAL(microseconds, cases[index].microseconds);
+  }
+}
+
+/* A run opened with the row counter already past R4 is the neighbouring case
+   to the one above, and it is where the comparison could most easily have been
+   let loose: on the two ASICs that run's count is never zeroed at its opening,
+   so a limit read as reached-or-passed could end it a line in where it should
+   spend R5. It does not — the padding comes out the same length on every type
+   as it did before that reading was given them — and this is what says so.
+
+   "C4 standing past R4 does not disqualify the line: the overflow rule is
+   written 'excluding vertical adjustment', and an adjustment that finishes
+   returns C4 to 0 from wherever it had climbed" (ch. 11.2.2, 12.1, 12.2). The
+   two that count their padding on C5 spend all of R5 there; the three that
+   count it on C9 have the counter already above the limit and spend what is
+   left of it. */
+static void a_run_opened_past_r4_is_the_same_length_on_every_type(void) {
+  static const struct {
+    uint8_t type;
+    unsigned padding_lines;
+  } cases[] = {{0, 2}, {1, 6}, {2, 6}, {3, 2}, {4, 2}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 10);
+    write_register(5, 6);
+    write_register(6, 25);
+    write_register(9, 3);
+    for (long tick = 0; tick < 200L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 4 && crtc.c9 == 0);
+    write_register(4, 2); /* the counter is now past R4, where it stands */
+    unsigned padding_lines = 0;
+    bool opened = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS; tick++) {
+      crtc_tick(&crtc);
+      if (crtc.vertical_adjustment_in_progress && crtc.c0 == 0) {
+        padding_lines++;
+        opened = true;
+      }
+      if (opened && !crtc.vertical_adjustment_in_progress) {
+        break;
+      }
+    }
+    TEST_CHECK(opened);
+    TEST_EQUAL(padding_lines, cases[index].padding_lines);
+  }
+}
+
 /* And the pointer a row hands the next one is left alone through a frame's
    padding on the two ASICs, where every other type moves it on the first of
    those lines. "The video pointer is updated before the start of the
@@ -300,7 +425,7 @@ static void each_type_answers_the_read_port_its_own_way(void) {
    Types 1 and 2 leave it four times, which is neither of those rules but their
    own: they count the padding on C5 and the row goes on counting beside it,
    "regardless of the value of R4 each time C9=R9, as long as C5 has not
-   reached R5" (ch. 11.3.1), so a row of four lines ends four times in sixteen
+   reached R5" (ch. 11.1), so a row of four lines ends four times in sixteen
    and hands the pointer on at each. */
 static void the_two_asics_leave_the_pointer_alone_through_the_padding(void) {
   static const struct {
@@ -5330,6 +5455,8 @@ int main(void) {
   TEST_RUN(each_type_answers_the_read_port_its_own_way);
   TEST_RUN(a_counter_above_its_limit_comes_home_on_the_asics);
   TEST_RUN(the_two_asics_leave_the_pointer_alone_through_the_padding);
+  TEST_RUN(an_r5_under_the_count_ends_the_padding_on_the_asics);
+  TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_every_type);
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
   TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);

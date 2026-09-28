@@ -208,9 +208,7 @@ static uint8_t c9_vma(const crtc_t *crtc) {
    R5's lines reconciles that comparison too — and the count it is measured
    against while the mode stands is the count and not the address, where ch.
    11.3.3 asks for "the number of the next additional line (C9+1)" with C9
-   the address. That, and an equality where the same chapter wants "if R5 is
-   modified with a value below C9+1, then the line is considered the last",
-   are older than this and are not here. */
+   the address. That reading is older than this work and is not here. */
 static uint8_t c9_the_count_goes_on_from(const crtc_t *crtc) {
   bool asked = interlace_video_asked(crtc);
   if (!holds_its_c9_parity(crtc) || crtc->interlace_video_mode == asked) {
@@ -523,7 +521,8 @@ static void enter_scanline(crtc_t *crtc) {
       }
     }
   } else if (crtc->vertical_adjustment_armed) {
-    /* This is the counting of the three that keep no C5 (ch. 11.1).
+    /* This is the counting of the three that keep no C5 (ch. 11.1), which
+       since ch. 11.3.3 entered below is no longer one counting for all three.
        R5 is a quantity of lines, and C9 is compared with R9 before its
        increment: the line the chip would move to becomes the adjustment's
        own unless that line has reached R5 (ch. 13.2.4). Once C4 has left R4
@@ -536,7 +535,16 @@ static void enter_scanline(crtc_t *crtc) {
     bool row_ended_on_r4 = row_is_on_its_last_scanline(crtc) && crtc->c4 == r[4];
     uint8_t next_c9 =
         row_ended_on_r4 ? 0 : (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
-    bool r5_lines_spent = next_c9 == r[5];
+    /* The two ASICs end the run wherever the count has reached or passed R5,
+       which is the comparison their row's own limit takes: "if R5 is modified
+       with a value below C9+1, then the line is considered the last and
+       additional management ends", and "whether with R5 or R9, it is
+       impossible to overflow C9" (ch. 11.3.3). The other three are left the
+       equality and spend the counter's whole round getting back to it. What
+       keeps this off an ordinary frame is the zeroing above: a frame's own
+       last line hands this a count of 0, which no R5 above it can meet. */
+    bool ends_on_the_count_reached = crtc->type == 3 || crtc->type == 4;
+    bool r5_lines_spent = ends_on_the_count_reached ? next_c9 >= r[5] : next_c9 == r[5];
     /* An adjustment a narrow line brought is entered before it is measured.
        Ch. 11.2.2 lists the ways one comes about with R5 at 0 — an R4 or R9
        moved at C0=1, "or if C0 can never reach 2 because R0 < 2" — and ch.
