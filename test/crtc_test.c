@@ -1127,6 +1127,327 @@ static void an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0(voi
   TEST_CHECK(crtc.vsync);
 }
 
+/* A type 2 counts a row's lines as any other chip does and displays from a
+   counter of its own. "In 'Interlace' mode, C9 is compared with R9 in a
+   conventional way to process C4. Another counter, C9.IVM, is used for
+   displaying and managing video pointer updating" (ch. 19.8.3), so where the
+   other four are programmed half a row in the interlace video mode this one
+   is programmed all of it: "when R9 = 7, we have C4 characters of 8 lines for
+   each frame with an update of video pointer every 4 lines" (ch. 19.4.3).
+
+   A row's height is a pair of rows' business on four of the five: where the
+   limit is read to a parity the rows run five lines then four — on an odd R9
+   for types 0, 3 and 4, on an even one for a type 1, which reads its limit down
+   (ch. 19.4.2, 19.8.2) — so what a type has to itself is the pair, not the row.
+
+   Shaker's C (O) is what grades the height: its lines are spaced a row apart
+   and want eight lines to a row, and this chip gave them four until the
+   counter was split in two. */
+static void a_type_2_keeps_its_row_whole_where_the_others_halve_theirs(void) {
+  static const struct {
+    uint8_t type;
+    unsigned lines; /* two rows' lines in the interlace video mode, R9=7 */
+  } cases[] = {{0, 9}, {1, 8}, {2, 16}, {3, 9}, {4, 9}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, 7);
+    write_register(8, 3);
+    /* Into a frame, then two whole rows counted from one boundary to the
+       next but one. */
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    uint8_t row = crtc.c4;
+    for (long tick = 0; tick < 64L * SCANLINE && crtc.c4 == row; tick++) {
+      crtc_tick(&crtc);
+    }
+    row = crtc.c4;
+    unsigned lines = 0;
+    unsigned rows = 0;
+    uint8_t previous_c0 = crtc.c0;
+    while (rows < 2) {
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && previous_c0 != 0) {
+        lines++;
+      }
+      previous_c0 = crtc.c0;
+      if (crtc.c4 != row) {
+        row = crtc.c4;
+        rows++;
+      }
+    }
+    TEST_EQUAL(lines, cases[index].lines);
+  }
+}
+
+/* And what a type 2 shows for those lines is the chapter's own two tables.
+   "C9.VMA=(C9.IVM*2) or Parity" (ch. 19.8.3), so an even frame's row of eight
+   runs 0, 2, 4, 6, 0, 2, 4, 6 and an odd frame's 1, 3, 5, 7, 1, 3, 5, 7,
+   which is the "Switching in IVM Mode on CRTC 2" diagram read down its two
+   columns; an R9 of 6 gives the same chapter's worked seven, "on even frames,
+   C9.VMA will be 0, 2, 4, 6, 0, 2, 4 (C9.IVM=0,1,2,3,0,1,2)". The row after
+   the first shows the same addresses and not the opposite parity, all eight of
+   those diagrams giving C4=1 what they gave C4=0: this chip's parity is the
+   frame's whatever the row, "parity is respected whatever the values of R9 and
+   C4" (ch. 19.5.4), where the balancing every other type does would alternate
+   them.
+
+   The pointer is left behind on the lines that counter is zeroed on, "in
+   order to update the VMA video pointer without C4 being incremented" (ch.
+   19.4.3) — twice to a row where R9 is odd, "the video address is updated 2
+   times for each value of C4", and once where it is even, the row ending a
+   line before the counter comes round: "if R9 is even, C9 reaches R9 before
+   C9.IVM reaches R9 (out of parity) and the VMA' video pointer is not
+   transferred into VMA" (ch. 19.8.3).
+
+   The frame's own first row is measured beside an interior one because a
+   counter the frame's head forgot to zero shows there and nowhere else: it
+   ran 6, 8, 10, 12, 0, 2, 4, 6 until that head zeroed it. */
+static void a_type_2_shows_its_rows_the_addresses_its_chapter_tabulates(void) {
+  static const uint8_t even_frame[] = {0, 2, 4, 6, 0, 2, 4, 6};
+  static const uint8_t odd_frame[] = {1, 3, 5, 7, 1, 3, 5, 7};
+  static const uint8_t even_frame_at_r9_of_6[] = {0, 2, 4, 6, 0, 2, 4};
+  static const uint8_t odd_frame_at_r9_of_6[] = {1, 3, 5, 7, 1, 3, 5};
+  static const struct {
+    uint8_t r9;
+    uint8_t row;          /* the row of the frame this reads */
+    bool parity;          /* and the frame parity it reads it on */
+    const uint8_t *shown; /* the addresses it shows, a line each */
+    unsigned lines;
+    unsigned captures; /* and the times it leaves the pointer behind */
+  } cases[] = {
+      {7, 0, false, even_frame, 8, 2},
+      {7, 1, false, even_frame, 8, 2}, /* and the row after it, the parity not turning with C4 */
+      {7, 0, true, odd_frame, 8, 2},   /* the diagram's other column */
+      {7, 1, true, odd_frame, 8, 2},
+      {6, 1, false, even_frame_at_r9_of_6, 7, 1},
+      {6, 1, true, odd_frame_at_r9_of_6, 7, 1},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, cases[index].r9);
+    write_register(8, 3);
+    /* Two frames in, so that the frame being read is one this chip built
+       rather than the one it powered on into, and at its head. */
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+             crtc.parity_frame == cases[index].parity)) {
+      crtc_tick(&crtc);
+    }
+    while (crtc.c4 != cases[index].row) {
+      crtc_tick(&crtc);
+    }
+    uint8_t row = crtc.c4;
+    unsigned lines = 0;
+    unsigned captures = 0;
+    uint16_t pointer = crtc.vma_;
+    bool shown_as_tabulated = true;
+    while (crtc.c4 == row) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c4 != row) {
+        break; /* the boundary character belongs to the row after this one */
+      }
+      if (crtc.vma_ != pointer) {
+        captures++;
+        pointer = crtc.vma_;
+      }
+      if (crtc.c0 != 1) {
+        continue; /* one reading a line, taken away from either edge of it */
+      }
+      if (lines >= cases[index].lines || crtc_ra(pins) != cases[index].shown[lines]) {
+        shown_as_tabulated = false;
+      }
+      lines++;
+    }
+    TEST_CHECK(shown_as_tabulated);
+    TEST_EQUAL(lines, cases[index].lines);
+    TEST_EQUAL(captures, cases[index].captures);
+  }
+}
+
+/* And how far that leaves the pointer walking in a row is the plainest reading
+   of the rule there is. "When R9 = 7, we have C4 characters of 8 lines for each
+   frame with an update of video pointer every 4 lines" (ch. 19.4.3), so a row
+   of a type 2's covers two rows' worth of memory and the pointer steps R1
+   twice over it. Outside the mode it steps R1 once, and inside it at an even R9
+   once as well, the row ending a line before the counter comes round: "if R9 is
+   even, C9 reaches R9 before C9.IVM reaches R9 (out of parity) and the VMA'
+   video pointer is not transferred into VMA" (ch. 19.8.3). No other type does
+   any of this — the rule is a type 2's, and this is what says so. */
+static void a_type_2_walks_its_pointer_two_rows_of_memory_to_a_row(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r9;
+    uint8_t r8;    /* 3 asks for the interlace video mode, 0 for none */
+    uint16_t step; /* what the pointer walks from one row's head to the next */
+  } cases[] = {
+      {2, 7, 3, 80}, /* two rows of memory: R1 twice */
+      {2, 7, 0, 40}, /* and out of the mode, the once every type takes */
+      {2, 6, 3, 40}, /* an even R9 loses the transfer at the row's end */
+      {0, 7, 3, 40},
+      {1, 7, 3, 40},
+      {3, 7, 3, 40},
+      {4, 7, 3, 40},
+      /* And at an R9 small enough that a halving type's row is a line or two,
+         its display counter comes round every line — so a rule let loose from
+         this type would leave the pointer on every one of them. */
+      {0, 1, 3, 40},
+      {0, 3, 3, 40},
+      {3, 1, 3, 40},
+      {4, 3, 3, 40},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, cases[index].r9);
+    write_register(8, cases[index].r8);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
+      crtc_tick(&crtc);
+    }
+    bool steps_as_the_chapter_says = true;
+    for (unsigned row = 0; row < 3; row++) {
+      uint16_t was = crtc.vma;
+      uint8_t here = crtc.c4;
+      while (crtc.c4 == here) {
+        crtc_tick(&crtc);
+      }
+      while (crtc.c0 != 0) {
+        crtc_tick(&crtc);
+      }
+      if ((uint16_t)(crtc.vma - was) != cases[index].step) {
+        steps_as_the_chapter_says = false;
+      }
+    }
+    TEST_CHECK(steps_as_the_chapter_says);
+  }
+}
+
+/* And a mode given in the middle of a row moves neither that row's end nor
+   the address of the line that asked. Ch. 19.8.3 draws this eight times over,
+   walking R8=3 down all eight lines of a row on both frames and printing the
+   address of every line: the row ends after C9=7 every time, "in 'Interlace'
+   mode, C9 is compared with R9 in a conventional way to process C4", and the
+   asking line keeps the address it already had, the doubling arriving with the
+   line after it ("the status ... will be performed on the next C0=0, after the
+   C9/R9 test of the line", ch. 19.8.1).
+
+   What the lines after it show is the display counter as it stood all along,
+   which is how those tables prove it was counting while the mode was off:
+   asked on C9=6 the last line shows 6, and a counter that had waited for the
+   mode would show 0. "This management of C9.IVM takes place all the time,
+   including when the IVM mode is not activated" (ch. 19.8.3).
+
+   The tables are read at a character early in each line, so they say nothing
+   about where inside the asking line the change lands — which is the immediacy
+   this chip does not have and crtc.h declares. */
+static void a_type_2_ends_its_row_where_r9_says_whenever_the_mode_arrives(void) {
+  /* Ch. 19.8.3's switching diagrams, even frame, C4=0: one row for each line
+     the mode is asked on, each holding that row's eight addresses. */
+  static const uint8_t asked_on_each_line[8][8] = {
+      {0, 2, 4, 6, 0, 2, 4, 6}, {0, 1, 4, 6, 0, 2, 4, 6}, {0, 1, 2, 6, 0, 2, 4, 6},
+      {0, 1, 2, 3, 0, 2, 4, 6}, {0, 1, 2, 3, 4, 2, 4, 6}, {0, 1, 2, 3, 4, 5, 4, 6},
+      {0, 1, 2, 3, 4, 5, 6, 6}, {0, 1, 2, 3, 4, 5, 6, 7},
+  };
+  for (uint8_t row = 0; row <= 1; row++) {
+    for (uint8_t line = 0; line <= 7; line++) {
+      crtc_init(&crtc, 2);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(4, 38);
+      write_register(6, 25);
+      write_register(9, 7);
+      for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+        crtc_tick(&crtc);
+      }
+      while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame)) {
+        crtc_tick(&crtc);
+      }
+      while (crtc.c4 != row) {
+        crtc_tick(&crtc);
+      }
+      unsigned lines = 0;
+      bool shown_as_tabulated = true;
+      while (crtc.c4 == row) {
+        if (crtc.c9 == line && crtc.c0 == 30) {
+          write_register(8, 3); /* the mode, asked for in the middle of a line */
+        }
+        uint64_t pins = crtc_tick(&crtc);
+        if (crtc.c4 != row) {
+          break; /* the boundary character belongs to the row after this one */
+        }
+        if (crtc.c0 != 1) {
+          continue; /* one reading a line, taken before the write lands */
+        }
+        if (lines >= 8 || crtc_ra(pins) != asked_on_each_line[line][lines]) {
+          shown_as_tabulated = false;
+        }
+        lines++;
+      }
+      TEST_CHECK(shown_as_tabulated);
+      TEST_EQUAL(lines, 8u);
+    }
+  }
+}
+
+/* The counter goes on counting through a frame's additional lines too, which
+   on this type are counted on C5 while "the row keeps its own count through
+   all of it" (ch. 11.2.3, 11.3.1). A row's end zeroes both counters, so the
+   padding opens on a fresh one and walks the same two-step: R5 of four gives
+   four lines showing 0, 2, 4 and 6. A counter left standing there would show
+   one address four times over. */
+static void a_type_2_counts_its_display_through_the_additional_lines(void) {
+  static const uint8_t shown[] = {0, 2, 4, 6};
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(4, 3);
+  write_register(5, 4);
+  write_register(6, 25);
+  write_register(9, 7);
+  write_register(8, 3);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame)) {
+    crtc_tick(&crtc);
+  }
+  /* One whole frame, a reading a line: the four rows R4 asks for at eight
+     lines each, and then the four R5 adds after them. */
+  uint8_t seen[64];
+  unsigned lines = 0;
+  for (long tick = 0; tick < 64L * SCANLINE && lines < sizeof seen; tick++) {
+    uint64_t pins = crtc_tick(&crtc);
+    if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+      break; /* the frame after this one has begun */
+    }
+    if (crtc.c0 == 1) {
+      seen[lines++] = crtc_ra(pins);
+    }
+  }
+  TEST_EQUAL(lines, 4u * 8u + 4u);
+  bool padded_as_the_counter_says = lines == 36;
+  for (unsigned line = 0; padded_as_the_counter_says && line < sizeof shown; line++) {
+    padded_as_the_counter_says = seen[32 + line] == shown[line];
+  }
+  TEST_CHECK(padded_as_the_counter_says);
+}
+
 /* A width of nothing puts the counter home wherever it stood when the write
    landed. The chapters put it only from a counter already there — "if R0=0,
    then C0 never reaches 1 (and therefore remains at 0)" (ch. 13.2.1), "when
@@ -4602,6 +4923,11 @@ int main(void) {
   TEST_RUN(an_r8_pulse_leaves_the_parities_the_diagrams_draw);
   TEST_RUN(a_write_on_the_character_clock_takes_a_line_end_back);
   TEST_RUN(a_width_of_nothing_puts_the_counter_at_nothing);
+  TEST_RUN(a_type_2_keeps_its_row_whole_where_the_others_halve_theirs);
+  TEST_RUN(a_type_2_shows_its_rows_the_addresses_its_chapter_tabulates);
+  TEST_RUN(a_type_2_walks_its_pointer_two_rows_of_memory_to_a_row);
+  TEST_RUN(a_type_2_ends_its_row_where_r9_says_whenever_the_mode_arrives);
+  TEST_RUN(a_type_2_counts_its_display_through_the_additional_lines);
   TEST_RUN(a_line_end_taken_back_is_the_one_just_taken);
   TEST_RUN(a_line_taken_back_is_a_line_that_never_ended);
   TEST_RUN(the_costs_a_taken_back_line_cannot_pay);

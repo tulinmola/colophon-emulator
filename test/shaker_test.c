@@ -2577,6 +2577,11 @@ int main(int argc, char **argv) {
   fprintf(file, "falls on a row boundary is believed, so a group can be recorded printing\n");
   fprintf(file, "the same line twice. Count a group's distinct lines before trusting its\n");
   fprintf(file, "standing.\n\n");
+  fprintf(file, "A group marked \"cut off at the cap\" was still drawing screens this reader\n");
+  fprintf(file, "had not seen when its budget of frames ran out, where the rest had gone\n");
+  fprintf(file, "quiet before theirs did. The mark follows what a group draws rather than\n");
+  fprintf(file, "what it grades, so a change to the machine can hand it to one group and\n");
+  fprintf(file, "take it from another; arriving or leaving, it is no verdict on either.\n\n");
   fprintf(file, "A group that names silicon's value only where it differs is worth\n");
   fprintf(file, "knowing about: it grades itself while the machine is wrong and prints its\n");
   fprintf(file, "measurement alone once it is right, so it leaves the tally above by being\n");

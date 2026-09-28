@@ -51,22 +51,52 @@
  * the parity ch. 19.8.2 fixes at the write is fixed there now, and the fourth
  * below says how. A type 2 shares none of the third: ch. 19.4.3 and 19.5.4
  * give it an interlace of its own, in which "parity is respected whatever the
- * values of R9 and C4", and it is answered here as a type 0 is. The fourth is
- * the frame parity itself. Types 1, 3 and 4 anticipate none of it:
- * ParityFrame "switch between each frame when C4 = C9 = C0 = 0" and does so
- * "whatever the value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type
- * 2 take the parity R6 anticipated and hold it for ever once C4 can no longer
- * reach R6 (ch. 19.5.2, 19.5.4) — so those three cannot be frozen, and cannot
- * be made to add the interlace line to every frame. That line follows each
- * type's own parity (ch. 19.6.1 to 19.6.4). A type 1 holds ParityC9 as a
- * state rather than a sum, and so do types 3 and 4 by a rule of their own —
- * bare, on the write that turns the video mode on, reversed on an odd R9
- * where a type 1 reverses on an even one, and leaving their own C9 where it
- * stands (ch. 19.5.5, 19.8.4) — because an R8 write sets it outright on all
- * three: "these updates are performed on the 3rd and 4th µseconds of the
- * OUT(C),C instruction", and toggling the mode "on and off on an even C9
- * line, regardless of the value of R9" sets the parity even, which is the
- * only means a program has of choosing a field on this type (ch. 19.5.3). The
+ * values of R9 and C4". Its row is not halved in the video mode as every
+ * other type's is — "in 'Interlace' mode, C9 is compared with R9 in a
+ * conventional way to process C4" (ch. 19.8.3), so "when R9 = 7, we have C4
+ * characters of 8 lines for each frame" (ch. 19.4.3) — and what steps by two
+ * is a display counter of its own, C9.IVM, the address being "(C9.IVM*2) or
+ * Parity". That counter is also where this chip leaves its video pointer, "in
+ * order to update the VMA video pointer without C4 being incremented": twice
+ * to a row where R9 is odd and once where it is even, the row's own end
+ * falling a line short of the counter there and losing the transfer
+ * altogether (ch. 19.4.3, 19.8.3). The parity that counter is paired with is
+ * the frame's own and nothing besides: ch. 19.5.4 lists the parities this
+ * chip keeps and ParityC9 is not among them, so "parity is respected whatever
+ * the values of R9 and C4" where the other four balance a pair of rows
+ * between two frames. Ch. 19.8.3's eight switching diagrams hold us to it —
+ * they give an even frame's C4=1 row the same eight addresses as its C4=0
+ * row, where a balanced parity alternates them. Two of that interlace's rules
+ * are not here, and neither is known to be what Shaker's C (O) still
+ * measures: that group put ten lines on this record, the split counter took
+ * six of them off, and the four it left all want the frame sync half a line
+ * later than this chip raises it — the counter and the parity both came right
+ * without moving one of the four. The mode is taken up at the next C0=0 as
+ * ch. 19.8.1 gives a type 0, where ch. 19.8.3 has this chip take it in the
+ * middle of the line that asks — "this translation between C9 and C9.VMA is
+ * immediately considered ... including during the line, from position C0
+ * where R8 is modified" — which its C (6) and B (2) are aimed at and neither
+ * grades yet. And a mode asked for on a frame's first line is an ordinary one
+ * here, where that interlace gives it two rules besides: C9 and C9.IVM "are
+ * cleared on the 2nd line" if "the parity was odd" (ch. 19.8.3), and on an
+ * odd frame "this line will become an additional line, and a new line 0 will
+ * follow the old line 0, which will extend the size of the frame with R0
+ * µsec" (ch. 19.5.4) — which is what its C (8) waits for. The fourth is the
+ * frame parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame
+ * "switch between each frame when C4 = C9 = C0 = 0" and does so "whatever the
+ * value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type 2 take the
+ * parity R6 anticipated and hold it for ever once C4 can no longer reach R6
+ * (ch. 19.5.2, 19.5.4) — so those three cannot be frozen, and cannot be made
+ * to add the interlace line to every frame. That line follows each type's own
+ * parity (ch. 19.6.1 to 19.6.4). A type 1 holds ParityC9 as a state rather
+ * than a sum, and so do types 3 and 4 by a rule of their own — bare, on the
+ * write that turns the video mode on, reversed on an odd R9 where a type 1
+ * reverses on an even one, and leaving their own C9 where it stands (ch.
+ * 19.5.5, 19.8.4) — because an R8 write sets it outright on all three: "these
+ * updates are performed on the 3rd and 4th µseconds of the OUT(C),C
+ * instruction", and toggling the mode "on and off on an even C9 line,
+ * regardless of the value of R9" sets the parity even, which is the only
+ * means a program has of choosing a field on this type (ch. 19.5.3). The
  * write settles C9's low bit with it, that bit being ParityC9 and not the
  * count's own while the mode stands ("C9 = ParityC9", ch. 19.8.2), and the
  * chapter names the cost: "deactivate the IVM mode can also modify C9, and
@@ -112,15 +142,15 @@
  * plain overflow of the counter, so neither of them takes the state. One
  * thing that counter carries is not here: a line too narrow to reach the
  * disarm gives types 1 and 2 no additional line where it gives the other
- * three one, ch. 13.2's window being a type 0's. Every other behaviour below
- * is type 0's whatever the type is set to, and a number naming none of the
- * five is neither refused nor corrected. One of those is worth naming because
- * the disc grades it: a type 1 takes R4 written with the value C4 already
- * holds as the frame's end wherever on the line it lands — "if we were on the
- * last line (C9=R9), then C9 goes to 0, C4=0" (ch. 12.3) — where a type 0
- * reads that comparison only while C0 is under 2, and it is a type 0's window
- * this chip keeps. The sixth is the border R6 asks for. Where R6 is 0 a
- * frame's first line is a conflict on types 0 and 2 and comes out an
+ * three one, ch. 13.2's window being a type 0's. Every other behaviour
+ * below is type 0's whatever the type is set to, and a number naming none of
+ * the five is neither refused nor corrected. One of those is worth naming
+ * because the disc grades it: a type 1 takes R4 written with the value C4
+ * already holds as the frame's end wherever on the line it lands — "if we
+ * were on the last line (C9=R9), then C9 goes to 0, C4=0" (ch. 12.3) — where
+ * a type 0 reads that comparison only while C0 is under 2, and it is a type
+ * 0's window this chip keeps. The sixth is the border R6 asks for. Where R6
+ * is 0 a frame's first line is a conflict on types 0 and 2 and comes out an
  * alternation of bordered and displayed bytes, cancellable until C0 meets R1
  * and definitive after it (ch. 18.3.2); a type 1 borders outright on an R6 of
  * 0 "without the condition C4=R6 being required" and gives the border up with
@@ -452,9 +482,22 @@ typedef struct crtc_t {
   /* The scanline within the character row. On a type 1 its low bit is not
      the count's alone: an R8 write settles it with ParityC9 (ch. 19.5.3),
      and where the interlace video mode stands the address is this doubled
-     with that parity filling the bit, which c9_vma answers and this does
-     not (ch. 19.8.1). */
+     with that parity filling the bit — a type 2 doubling c9_ivm in its place
+     — which c9_vma answers and this does not (ch. 19.8.1, 19.8.3). */
   uint8_t c9;
+  /* C9.IVM, a type 2's display counter, held in the five bits C9 has because
+     the Compendium gives this one no width of its own: that chip measures R9
+     against C9 "in a conventional way to process C4" and keeps this second
+     counter for "displaying and managing video pointer updating", the
+     address being "(C9.IVM*2) or Parity" (ch. 19.8.3). It is why "when R9 =
+     7, we have C4 characters of 8 lines for each frame with an update of
+     video pointer every 4 lines" (ch. 19.4.3): the row keeps the height R9
+     asks for, where the other four are programmed half of one, and it is
+     this counter rather than the row that halves. Only a type 2 reads it, and
+     only the paths a type 2 takes maintain it: the other four carry the field
+     and leave it standing through their frames' additional lines, where they
+     count on C9 and this chip counts on C5. */
+  uint8_t c9_ivm;
   uint8_t c4; /* character row counter, 7 bits */
   /* C5, the Vertical Total Adjust Counter, 5 bits: the counter types 1 and
      2 keep the frame's additional lines on, "used in conjunction with C9 to

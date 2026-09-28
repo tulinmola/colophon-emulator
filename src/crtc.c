@@ -28,16 +28,15 @@ void crtc_init(crtc_t *crtc, uint8_t type) {
   crtc->c9_processing_managed = true;
 }
 
-/* The types an R8 write hands ParityC9 outright, which is why they cannot
-   read it back off the row. A type 2 is not one of them and nothing here
-   could tell if it were: ch. 19.8.3 gives that chip "another counter,
-   C9.IVM ... used for displaying" and compares its own C9 "with R9 in a
-   conventional way", which is a second counter this chip does not keep, so
-   the two readings of its parity part company nowhere it is asked. A type 1 takes it either way the
-   mode is going and with C4's correction (ch. 19.5.3); types 3 and 4 take it only on the way in and
-   bare — "when R8 changes to 1 or 3, Parityc9=C9.0", and again in ch. 19.8.4: "when R8 goes from 0
-   to 3 (mode IVM on), ParityC9 state is immediately assigned with the parity of the current C9"
-   (ch. 19.5.5, 19.8.4). */
+/* The types an R8 write hands ParityC9 outright, which is why they cannot read it back off the row.
+   A type 2 is not one of them: ch. 19.5.4 lists every parity state that chip keeps and ParityC9 is
+   not among them — it names ParityFrame and ParityR6 and says only that "C9 parity is managed only
+   when R8 = 3 to update C9" — so there is no state for a write to set, and the parity is the
+   frame's own, which is what parity_c9 answers. A type 1 takes it either way the mode is going and
+   with C4's correction (ch. 19.5.3); types 3 and 4 take it only on the way in and bare — "when R8
+   changes to 1 or 3, Parityc9=C9.0", and again in ch. 19.8.4: "when R8 goes from 0 to 3 (mode IVM
+   on), ParityC9 state is immediately assigned with the parity of the current C9" (ch. 19.5.5,
+   19.8.4). */
 static bool holds_its_c9_parity(const crtc_t *crtc) {
   return crtc->type == 1 || crtc->type == 3 || crtc->type == 4;
 }
@@ -147,7 +146,20 @@ static bool parity_c9(const crtc_t *crtc) {
   if (holds_its_c9_parity(crtc)) {
     return crtc->parity_c9_held;
   }
-  /* Types 0 and 2 take it from the row: where a row is an odd number of
+  /* A type 2 takes the frame's parity and nothing besides. Its "C9
+     management has been carried out in a simple way, not without introducing
+     some constraints (R9 odd for example)", and so "parity is respected
+     whatever the values of R9 and C4", where "on the other CRTCs, R9 defines
+     a total number of lines to share between 2 frames, which is a problem
+     when this number of lines is odd, and requires some adjustments in order
+     to balance the lines between 2 frames" (ch. 19.5.4). Its own tables show
+     the difference: ch. 19.8.3's switching diagrams give an even frame's C4=1
+     row the same eight addresses as its C4=0 row, where the balancing below
+     would alternate them. */
+  if (crtc->type == 2) {
+    return crtc->parity_frame;
+  }
+  /* A type 0 takes it from the row instead: where a row is an odd number of
      lines the two frames must share them, so an odd C4 runs on the
      parity opposite the frame's. The three above never reach here — a
      type 1 reads the same rule off an even R9 rather than an odd one,
@@ -161,18 +173,23 @@ static bool parity_c9(const crtc_t *crtc) {
 }
 
 /* C9.VMA, the raster address (ch. 19.8.1). It is what leaves the chip on
-   RA, what R9 is measured against, and what the late VSYNC of an odd row is
-   timed by. In the interlace video mode a row covers two rows' worth of
-   memory and the two frames take alternate lines of it, while the counter
-   itself goes on counting by one — which is the half of this the
-   Compendium's own tables get wrong. The shift carries out of five bits
-   rather than widening, so a row entered off its parity comes round to its
-   limit instead of missing it: for an R9 of 6, at C9=19. */
+   RA and what the late VSYNC of an odd row is timed by, and on every type
+   but one it is also what R9 is measured against. In the interlace video
+   mode a row covers two rows' worth of memory and the two frames take
+   alternate lines of it, while the counter itself goes on counting by one —
+   which is the half of this the Compendium's own tables get wrong. The shift
+   carries out of five bits rather than widening, so a row entered off its
+   parity comes round to its limit instead of missing it: for an R9 of 6, at
+   C9=19, which is a comparison a type 2 does not make. */
 static uint8_t c9_vma(const crtc_t *crtc) {
   if (!crtc->interlace_video_mode) {
     return crtc->c9;
   }
-  return (uint8_t)((((unsigned)crtc->c9 << 1) | (parity_c9(crtc) ? 1u : 0u)) & C9_BITS);
+  /* "Another counter, C9.IVM, is used for displaying and managing video
+     pointer updating ... C9.VMA=(C9.IVM*2) or Parity" (ch. 19.8.3), and it is
+     a type 2's alone. */
+  unsigned count = crtc->type == 2 ? crtc->c9_ivm : crtc->c9;
+  return (uint8_t)(((count << 1) | (parity_c9(crtc) ? 1u : 0u)) & C9_BITS);
 }
 
 /* The line the count goes on from, where the doubling is about to start or
@@ -252,8 +269,21 @@ static uint8_t r9_with_parity(const crtc_t *crtc) {
    enters a mode does so either with an even R9 or at C9=0, where the
    comparison cannot bite — so the Compendium settles this nowhere.
    ParityC9 is the bit that will fill the address, and a limit of the other
-   parity is one no address of that row could ever meet. */
+   parity is one no address of that row could ever meet. All of this is the
+   four types that halve a row; the first lines below are the fifth. */
 static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
+  /* A type 2 measures the count and not the address: "in 'Interlace' mode, C9
+     is compared with R9 in a conventional way to process C4" (ch. 19.8.3), so
+     its row is R9+1 lines whatever the mode — "when R9 = 7, we have C4
+     characters of 8 lines for each frame" (ch. 19.4.3, a chapter about this
+     type). The other four ask their programmer for half of it instead, R9
+     holding a pair of frames' lines rather than one frame's: "value N-2" on a
+     type 0 and on types 3 and 4, which "shares this feature with CRTC 0", and
+     "the value N-1 in the 2 interlace modes" on a type 1 (ch. 19.4.1, 19.4.2,
+     19.4.4). */
+  if (crtc->type == 2) {
+    return crtc->c9 == crtc->registers[9];
+  }
   /* The limit keeps the parity for as long as the address carries it, and on
      types 3 and 4 that outlasts the register: ch. 19.8.4 ends their row on
      "C9 >= R9" with C9 the address, and its own exit diagrams give up the
@@ -277,6 +307,21 @@ static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
   return c9_vma(crtc) == (parity_in_the_limit ? r9_with_parity(crtc) : crtc->registers[9]);
 }
 
+/* C9.IVM goes on, which it does on every line of every row: "if (C9==R9/2)
+   then C9.IVM=0 ... else C9.IVM=C9.IVM+1", and a row's own end zeroes it
+   beside C9 — "C9=0 ; Management of C4 (C4++ or C4=0) ; C9.IVM=0". "This
+   management of C9.IVM takes place all the time, including when the IVM mode
+   is not activated" (ch. 19.8.3). The chapter gives the reset twice and not
+   in the same terms: the algorithm turns it on C9 reaching R9/2, ch. 19.4.3
+   on the counter itself reaching "the value of R9 'outside parity'". The two
+   name the same line of every row whose head has zeroed the counter, and part
+   only on a row entered out of phase with it, which is nowhere here. The
+   algorithm is what is taken. */
+static void c9_ivm_goes_on(crtc_t *crtc) {
+  crtc->c9_ivm =
+      crtc->c9 == (crtc->registers[9] >> 1) ? 0 : (uint8_t)((crtc->c9_ivm + 1) & C9_BITS);
+}
+
 /* A frame begins where the last one is done with, whatever the counters
    read on the way: C4 of 127 carries the interlace line itself to a C0, C4
    and C9 all zero, and a frame that read its own head off those would renew
@@ -289,6 +334,10 @@ static void begin_frame(crtc_t *crtc) {
   crtc->r4_moved_at_a_lines_end = false;
   crtc->adjustment_on_its_last_line = false;
   crtc->c9 = 0;
+  /* A frame ends on the branch that zeroes both, "C9=0 ; Management of C4
+     (C4++ or C4=0) ; C9.IVM=0" (ch. 19.8.3), and a counter carried into a row
+     would show it the four addresses of a row it is not on. */
+  crtc->c9_ivm = 0;
   crtc->c5 = 0;
   crtc->interlace_line_given = false;
   enter_character_row(crtc, 0);
@@ -382,7 +431,8 @@ static void enter_scanline(crtc_t *crtc) {
        frozen chip's address stands where it stood, so the count and the
        parity are handed back to each other here as they are at a running
        line's end, or the doubling would move an address the freeze is
-       holding still. */
+       holding still. C9.IVM stands with them, a counter going on under a
+       frozen line being another way to move that address. */
     crtc->c9 = c9_the_count_goes_on_from(crtc);
     crtc->interlace_video_mode = interlace_video_asked(crtc);
     return;
@@ -459,11 +509,14 @@ static void enter_scanline(crtc_t *crtc) {
            holds, which is ch. 11.3.1's overflow arriving late. */
         crtc->r5_opened_the_run = takes_the_r5_state(crtc);
         crtc->c9 = 0;
+        crtc->c9_ivm = 0;
         enter_character_row(crtc, 0);
       } else if (row_is_on_its_last_scanline(crtc)) {
         crtc->c9 = 0;
+        crtc->c9_ivm = 0;
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       } else {
+        c9_ivm_goes_on(crtc);
         crtc->c9 = (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
       }
     }
@@ -523,8 +576,10 @@ static void enter_scanline(crtc_t *crtc) {
     begin_frame(crtc);
   } else if (row_is_on_its_last_scanline(crtc)) {
     crtc->c9 = 0;
+    crtc->c9_ivm = 0;
     enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
   } else {
+    c9_ivm_goes_on(crtc);
     crtc->c9 = (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
   }
 
@@ -759,12 +814,42 @@ static bool offset_carries_into_the_adjustment(const crtc_t *crtc) {
          crtc->adjustment_opened_at_c4_of_zero && crtc->c4 == 1;
 }
 
+/* The scanline VMA' takes VMA on: a row's last, except that a type 2 in the
+   interlace video mode leaves the pointer wherever its display counter is
+   about to be zeroed instead. "The specific management of assignment of VMA'
+   with VMA when C0==R1 is only processed when R8 is equal to 3. When R8 is
+   equal to 0 or 2, this assignment takes place only when C9==R9" (ch.
+   19.8.3). The line it is processed on is the counter's own: ch. 19.4.3 has
+   that counter "initialized ... when it reaches the value of R9 'outside
+   parity', in order to update the VMA video pointer without C4 being
+   incremented", and the update "no longer takes place when C4 is inc[remented]
+   because it takes place only when C9.IVM = R9 (excluding parity)". An odd R9
+   meets that twice to a row, at the halfway line and again at the row's end,
+   which is the "update of video pointer every 4 lines" an R9 of 7 is described
+   by; an even R9 meets it once, the row ending a line before the counter comes
+   round, and ch. 19.8.3 says what that costs: "If R9 is even, C9 reaches R9
+   before C9.IVM reaches R9 (out of parity) and the VMA' video pointer is not
+   transferred into VMA".
+
+   The algorithm alone answers neither R9. It puts VMA'=VMA inside its
+   "If (C9==R9/2)" branch and names no transfer at the row's end, which gives an
+   odd R9 one update where the chapter's prose asks for two, and — kept beside
+   the ordinary row-end capture — gives an even R9 two where that prose says the
+   row's end loses it. The counter's own coming-round is the one reading that
+   satisfies both. */
+static bool the_pointer_is_left_on_this_scanline(const crtc_t *crtc) {
+  if (crtc->type == 2 && crtc->interlace_video_mode) {
+    return crtc->c9_ivm == (crtc->registers[9] >> 1);
+  }
+  return row_is_on_its_last_scanline(crtc);
+}
+
 /* VMA reloads from the VMA' latch where a scanline begins, and on the
    frame's first character both take R12/R13 — type 0 reloads when C4, C9
    and C0 stand at zero (ch. 20.3.1), where a type 1 reloads VMA alone and
    goes on doing it all through the row C4 spends at 0 (ch. 20.3.2, below). VMA' then captures VMA
-   where C0 reaches R1 on the row's last scanline, so the next row starts R1 characters further on
-   (ch. 20.3.3). */
+   where C0 reaches R1 on the scanline the predicate above names, so the next row starts R1
+   characters further on (ch. 20.3.3). */
 static void move_video_pointer(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   uint16_t offset = (uint16_t)(((r[12] << 8) | r[13]) & 0x3FFF);
@@ -796,7 +881,7 @@ static void move_video_pointer(crtc_t *crtc) {
       crtc->vma = offset;
     }
   }
-  if (crtc->c0 == r[1] && row_is_on_its_last_scanline(crtc)) {
+  if (crtc->c0 == r[1] && the_pointer_is_left_on_this_scanline(crtc)) {
     crtc->vma_ = crtc->vma;
   }
 }

@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-9 of them printed self-graded lines, 42 in all: 27 agree with Longshot's
-silicon and 15 do not. That is 64% of what this reader can score, and no
+9 of them printed self-graded lines, 36 in all: 28 agree with Longshot's
+silicon and 8 do not. That is 78% of what this reader can score, and no
 measure at all of the other 61 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -42,6 +42,12 @@ was being redrawn is spliced from the two halves, and a tear whose seam
 falls on a row boundary is believed, so a group can be recorded printing
 the same line twice. Count a group's distinct lines before trusting its
 standing.
+
+A group marked "cut off at the cap" was still drawing screens this reader
+had not seen when its budget of frames ran out, where the rest had gone
+quiet before theirs did. The mark follows what a group draws rather than
+what it grades, so a change to the machine can hand it to one group and
+take it from another; arriving or leaving, it is no verdict on either.
 
 A group that names silicon's value only where it differs is worth
 knowing about: it grades itself while the machine is wrong and prints its
@@ -77,7 +83,7 @@ A (O)       R1 STORIES (8 TST)                                                  
 A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded
 A (COPY)    CRTC 2 OFFSET                                                                    recorded, ungraded
 B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (07)              recorded, ungraded
-B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                               recorded, ungraded, cut off at the cap
+B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                               recorded, ungraded
 B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
 B (4)       CRTC 2 FIND C0 MIN                                                               recorded, ungraded
 B (5)       CRTC 2 RLAL                                                                      recorded, ungraded, cut off at the cap
@@ -111,7 +117,7 @@ C (4)       CRTC 1   : IVM ON/OFF                                               
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   recorded, ungraded
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         recorded, ungraded
 C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded
-C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                recorded, ungraded
+C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                recorded, ungraded, cut off at the cap
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 recorded, ungraded
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
 C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded
@@ -119,24 +125,18 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
       R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
       R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
       R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
-C (P)       ALL      : ADD LINE R8                                                           4 graded, 3 wrong
+C (P)       ALL      : ADD LINE R8                                                           4 graded, 2 wrong
     ! R5=3/ON 2ND ADD LINE,R5=1,R8=3/ CPU TO NEW FRAME:#0082 (#0084 expected)
       R8=3 ON LAST LINE/ CPU TO C4=0:#0007 (#0007 expected)
-    ! R8=3 ON LAST LINE/ CPU TO C4=1:#0019 (#0027 expected)
-    ! CANCEL IVM ON LAST LINE/ CPU TO C4=0:#0084 (#0004 expected)
+    ! R8=3 ON LAST LINE/ CPU TO C4=1:#0025 (#0027 expected)
+      CANCEL IVM ON LAST LINE/ CPU TO C4=0:#0004 (#0004 expected)
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           1 graded, 1 wrong
-    ! RESULT:#2D00 WRONG (EXP:#4E80)
-C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             10 graded, 10 wrong
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=3 FROM C4=2, CPU=#0460 WRONG (EXP:#0620)
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=6 FROM C4=2, CPU=#06E0 WRONG (EXP:#0C20)
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=0 FROM C4=2, CPU=#0800 WRONG (EXP:#0E20)
-    ! R9=7,R4=6, R6=9, PARITY=E, R7=1 FROM C4=2, CPU=#0960 WRONG (EXP:#1020)
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=3 FROM C4=2, CPU=#0460 WRONG (EXP:#0620)
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=6 FROM C4=2, CPU=#06C0 WRONG (EXP:#0C20)
-    ! FROM C4=2, CPU=#0460 WRONG (EXP:#0620)               (NEXT FRAME +1=#0B80, +2=#1
-    ! FROM C4=2, CPU=#06C0 WRONG (EXP:#0C20)               (NEXT FRAME +1=#0EA0, +2=#1
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=0 FROM C4=2, CPU=#07E0 WRONG (EXP:#0E40)
-    ! R9=7,R4=6, R6=5, PARITY=E, R7=1 FROM C4=2, CPU=#0920 WRONG (EXP:#1040)
+    ! RESULT:#4E40 WRONG (EXP:#4E80)
+C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             4 graded, 4 wrong
+    ! R9=7,R4=6, R6=9, PARITY=E, R7=6 FROM C4=2, CPU=#0C00 WRONG (EXP:#0C20)
+    ! R9=7,R4=6, R6=5, PARITY=E, R7=3 FROM C4=2, CPU=#0600 WRONG (EXP:#0620)
+    ! R9=7,R4=6, R6=5, PARITY=E, R7=0 FROM C4=2, CPU=#0E20 WRONG (EXP:#0E40)
+    ! R9=7,R4=6, R6=5, PARITY=E, R7=1 FROM C4=2, CPU=#1020 WRONG (EXP:#1040)
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  another CRTC type's
 D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         another CRTC type's
