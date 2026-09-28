@@ -284,26 +284,27 @@ static bool row_is_on_its_last_scanline(const crtc_t *crtc) {
   if (crtc->type == 2) {
     return crtc->c9 == crtc->registers[9];
   }
-  /* The limit keeps the parity for as long as the address carries it, and on
-     types 3 and 4 that outlasts the register: ch. 19.8.4 ends their row on
-     "C9 >= R9" with C9 the address, and its own exit diagrams give up the
-     mode on a row's last line and end the row there all the same. Read
-     against the bare register that line misses its limit by one and the row
-     walks C9 to 31 before coming round. The equality is kept rather than the
-     chapter's inequality, and on these two types that is a divergence rather
-     than a reading: ch. 10.3.4.1 says "it is impossible to 'overflow' C9 on
-     these CRTC's. It is not a simple equality test which takes place, but a
-     'more complex' comparison performed by the ASIC: If current-C9 > R9 then
-     next-C9=0", and ch. 11.3.3 says it again of R5 and R9 both. So a row
-     whose address passes its limit walks C9 to 31 here where silicon would
-     zero it. The equality is shared machinery — ch. 10.3.1.1 gives a type 0
-     that walk outright, "it will count to its maximum value (31) before
-     looping back to 0" — and moving it is larger than this work. A type 0's
-     limit loses the parity the moment the register does, which is the
-     counting its own chapter describes, and a type 1's row ends on ch.
-     19.8.2's comparison with the parity left out. */
-  bool parity_in_the_limit = interlace_video_asked(crtc) ||
-                             (crtc->interlace_video_mode && (crtc->type == 3 || crtc->type == 4));
+  /* The two ASICs end a row wherever the address has reached or passed R9 —
+     ch. 19.8.4's "C9 >= R9" — and a counter sent beyond it comes home rather
+     than walking the five bits round: "if R9 is changed with a value less than
+     or equal to C9, then C9 changes to 0 on the next line, and C4 goes to 0
+     (if C4=R4) otherwise C4=C4+1 ... it is impossible to 'overflow' C9 on
+     these CRTC's" (ch. 10.3.4.1), which ch. 11.3.3 says of R5 and R9 both.
+     The register is compared bare because the address carries ParityC9 in its
+     low bit: the first address at or past R9 is R9 read up to that parity, so
+     the comparison finds the parity limit without being given it. */
+  if (crtc->type == 3 || crtc->type == 4) {
+    return c9_vma(crtc) >= crtc->registers[9];
+  }
+  /* The other three end a row on an equality, which is their own counting: ch.
+     10.3.1.1 gives a type 0 the walk outright, "it will count to its maximum
+     value (31) before looping back to 0". The limit keeps the parity only for
+     as long as the register asks for the mode — read against the bare register
+     the line a mode is left on misses its limit by one — and a type 0's limit
+     loses that parity the moment the register does, which is the counting its
+     own chapter describes. A type 1's row ends on ch. 19.8.2's comparison with
+     the parity left out. */
+  bool parity_in_the_limit = interlace_video_asked(crtc);
   return c9_vma(crtc) == (parity_in_the_limit ? r9_with_parity(crtc) : crtc->registers[9]);
 }
 
@@ -841,6 +842,19 @@ static bool offset_carries_into_the_adjustment(const crtc_t *crtc) {
 static bool the_pointer_is_left_on_this_scanline(const crtc_t *crtc) {
   if (crtc->type == 2 && crtc->interlace_video_mode) {
     return crtc->c9_ivm == (crtc->registers[9] >> 1);
+  }
+  /* The two ASICs leave the pointer once before a frame's padding and on none
+     of the padding itself: "the video pointer is updated before the start of
+     the additional lines (VMA'=VMA) when C0=R1. Additional management just
+     set's C9 to 0 and compare's C9 with R5 to deactivate this management,
+     without updating the video pointer" (ch. 11.2.6). A type 0 does capture
+     through its padding, which is ch. 11.2.2's own table walking its pointer a
+     row's worth at each of those lines, and the predicate below is that
+     chapter's. Their row ending wherever C9 has reached or passed R9 is what
+     makes the two part: every padding line meets that, and would leave the
+     pointer a row further on for each one of them. */
+  if ((crtc->type == 3 || crtc->type == 4) && crtc->vertical_adjustment_in_progress) {
+    return false;
   }
   return row_is_on_its_last_scanline(crtc);
 }

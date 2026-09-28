@@ -615,13 +615,15 @@ typedef struct crtc_t {
      No line on any record reaches the two ASICs' share of
      this: what stands behind it is ch. 19.8.4's algorithm, the two frames it
      works by hand, two of the twenty-two counting cases it draws beside
-     them, and tests of ours. Two rules of theirs are not here either: the
-     line an interlaced frame adds leaves their C4 where it is and carries no
-     parity of its own — "C9 will always be 0, even if the other lines are
-     odd on C4=R4" (ch. 19.6.4) — and a row whose counter is sent past its
-     limit walks to 31 here where ch. 10.3.4.1 says those two zero it. Both
-     carry graded failures on those two records now: the added line in the
-     disc's C (P) and the counter in its A (U). */
+     them, and tests of ours. A row of theirs whose counter is sent past its
+     limit now comes home rather than walking to 31, which is ch. 10.3.4.1's
+     "more complex" comparison and ch. 19.8.4's "C9 >= R9": the disc's A (U)
+     came right on it and two of C (O)'s three lines with it. One rule of
+     theirs is still not here — the line an interlaced frame adds leaves
+     their C4 where it is and carries no parity of its own, "C9 will always
+     be 0, even if the other lines are odd on C4=R4" (ch. 19.6.4) — and
+     nothing on either record grades it now, the group that did having
+     drawn nothing past its menu since the machine began naming itself. */
   bool parity_c9_held;
   /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a
      microsecond before the line it decides could begin. */

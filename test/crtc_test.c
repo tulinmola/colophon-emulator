@@ -17,6 +17,23 @@ static crtc_t crtc;
 #define FRAME_TICKS 19968
 #define SCANLINE 64
 
+/* Tick until the counters stand where a test wants them, and fail rather than
+   spin if they never do. A change that stops a frame ever ending would
+   otherwise hang the suite instead of failing it, which reads as a slow test
+   and costs a measurement: an unbounded wait cannot tell a wrong answer from
+   no answer. Four frames is past any arrangement here. */
+#define TICK_UNTIL(standing)                                                                       \
+  do {                                                                                             \
+    long waited = 0;                                                                               \
+    while (!(standing)) {                                                                          \
+      crtc_tick(&crtc);                                                                            \
+      if (++waited > 4L * FRAME_TICKS) {                                                           \
+        TEST_FAIL("the chip never stood at %s", #standing);                                        \
+        break;                                                                                     \
+      }                                                                                            \
+    }                                                                                              \
+  } while (0)
+
 static void write_register(int reg, uint8_t value) {
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, (uint8_t)reg));
   crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, value));
@@ -267,6 +284,104 @@ static void each_type_answers_the_read_port_its_own_way(void) {
   }
 }
 
+/* And the pointer a row hands the next one is left alone through a frame's
+   padding on the two ASICs, where every other type moves it on the first of
+   those lines. "The video pointer is updated before the start of the
+   additional lines (VMA'=VMA) when C0=R1. Additional management just set's C9
+   to 0 and compare's C9 with R5 to deactivate this management, without
+   updating the video pointer" (ch. 11.2.6), against ch. 11.2.2's own table for
+   a type 0, which walks its pointer a row's worth at that line.
+
+   The two part only because these two end a row wherever C9 has reached or
+   passed R9: every one of the padding lines meets that, so a predicate reading
+   the row's end alone would leave the pointer a row further on for each of the
+   sixteen. The registers below are ch. 11.2.2's own.
+
+   Types 1 and 2 leave it four times, which is neither of those rules but their
+   own: they count the padding on C5 and the row goes on counting beside it,
+   "regardless of the value of R4 each time C9=R9, as long as C5 has not
+   reached R5" (ch. 11.3.1), so a row of four lines ends four times in sixteen
+   and hands the pointer on at each. */
+static void the_two_asics_leave_the_pointer_alone_through_the_padding(void) {
+  static const struct {
+    uint8_t type;
+    unsigned captures; /* times the pointer is left behind inside the padding */
+  } cases[] = {{0, 1}, {1, 4}, {2, 4}, {3, 0}, {4, 0}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 10);
+    write_register(5, 16);
+    write_register(6, 25);
+    write_register(9, 3);
+    for (long tick = 0; tick < 200L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    unsigned captures = 0;
+    unsigned padding_lines = 0;
+    uint16_t pointer = crtc.vma_;
+    for (long waited = 0; waited <= 4L * FRAME_TICKS; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+      if (crtc.vertical_adjustment_in_progress) {
+        captures += crtc.vma_ != pointer ? 1 : 0;
+        padding_lines += crtc.c0 == 0 ? 1 : 0;
+      }
+      pointer = crtc.vma_;
+    }
+    TEST_EQUAL(padding_lines, 16u); /* R5 of them, and the run reached its end */
+    TEST_EQUAL(captures, cases[index].captures);
+  }
+}
+
+/* A counter the two ASICs find above its limit comes home; on the other three
+   it walks the five bits round. "It is impossible to 'overflow' C9 on these
+   CRTC's. It is not a simple equality test which takes place, but a 'more
+   complex' comparison performed by the ASIC: If current-C9 > R9 then
+   next-C9=0" (ch. 10.3.4.1), where a type 0 "will count to its maximum value
+   (31) before looping back to 0" (ch. 10.3.1.1). The chapter works the case:
+   "if C9 was 4, and R9 is changed with 1 (whereas it was 7 before), then C9
+   will go to 0 (and C4=C4+1 or 0 depending on the value of C4 and R4)".
+
+   Shaker's A (U) is what grades it, and it came right on both ASIC records
+   when the comparison stopped being an equality; two of C (O)'s lines came
+   with it. */
+static void a_counter_above_its_limit_comes_home_on_the_asics(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t c9_on_the_next_line; /* where the row stands a line after the write */
+    bool the_row_advanced;       /* and whether the row went with it */
+  } cases[] = {{0, 5, false}, {1, 5, false}, {2, 5, false}, {3, 0, true}, {4, 0, true}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, 7);
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    /* To the fifth line of a row, which is the chapter's own C9 of 4. The
+       character is any of them: R9 is read at a line's end and this row is
+       nowhere near R4, so no window the earlier characters open can reach it. */
+    TICK_UNTIL(crtc.c9 == 4 && crtc.c0 == 10);
+    uint8_t row = crtc.c4;
+    write_register(9, 1);
+    /* And on to the next line's head. */
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, cases[index].c9_on_the_next_line);
+    /* "and C4=C4+1 or 0 depending on the value of C4 and R4" — this row is
+       neither R4 nor the frame's last, so the chapter's first case is the one
+       that applies and the counter moves on. */
+    TEST_EQUAL(crtc.c4 != row, cases[index].the_row_advanced);
+  }
+}
+
 /* The two ASICs read through a table of eight rather than by register number.
    "For CRTC's 3 and 4, only the 3 least significant bits of the selected
    register number are considered to read a register", so "reading register 4
@@ -371,12 +486,14 @@ static void the_asic_status_bytes_trace_rather_than_stand(void) {
     for (long tick = 0; tick < 100L * SCANLINE; tick++) {
       crtc_tick(&crtc);
     }
-    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
-      crtc_tick(&crtc);
-    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
     /* Each character is read where the counters name it, then the chip is
        stepped off it; the frame closes when the head comes round again. */
-    for (;;) {
+    for (long waited = 0;; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      if (waited >= 4L * FRAME_TICKS) {
+        break;
+      }
       for (unsigned byte = 0; byte < 2; byte++) {
         crtc_access(&crtc, CRTC_CS | crtc_set_data(0, (uint8_t)(10 + byte)));
         uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
@@ -446,16 +563,18 @@ static void the_asic_row_end_bit_stands_for_the_line_the_row_ends_on(void) {
     for (long tick = 0; tick < 100L * SCANLINE; tick++) {
       crtc_tick(&crtc);
     }
-    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
-      crtc_tick(&crtc);
-    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
     unsigned characters_the_bit_fell_for = 0;
     unsigned rows = 0;
     /* The three that name a frame's last character of a kind fall on the same
        line this one stands for, so they too must fall once and once only. */
     unsigned times_clear[3] = {0, 0, 0};
     uint8_t row = crtc.c4;
-    for (;;) {
+    for (long waited = 0;; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      if (waited >= 4L * FRAME_TICKS) {
+        break;
+      }
       crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
       uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
       if ((status & 0x20) == 0) {
@@ -494,13 +613,15 @@ static void the_asic_frame_timer_turns_every_sixteenth_frame(void) {
   bool held_all_frame = true;
   while (frames < sizeof per_frame / sizeof *per_frame) {
     /* To a frame's head, then across the whole of that frame. */
-    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
-      crtc_tick(&crtc);
-    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
     crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
     bool at_the_head = (crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)) & 0x08) != 0;
     per_frame[frames++] = at_the_head;
-    for (;;) {
+    for (long waited = 0;; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      if (waited >= 4L * FRAME_TICKS) {
+        break;
+      }
       crtc_tick(&crtc);
       if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
         break; /* the tick that ends a frame has already counted the next */
@@ -1544,13 +1665,9 @@ static void a_type_2_shows_its_rows_the_addresses_its_chapter_tabulates(void) {
     for (long tick = 0; tick < 400L * SCANLINE; tick++) {
       crtc_tick(&crtc);
     }
-    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
-             crtc.parity_frame == cases[index].parity)) {
-      crtc_tick(&crtc);
-    }
-    while (crtc.c4 != cases[index].row) {
-      crtc_tick(&crtc);
-    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+               crtc.parity_frame == cases[index].parity);
+    TICK_UNTIL(crtc.c4 == cases[index].row);
     uint8_t row = crtc.c4;
     unsigned lines = 0;
     unsigned captures = 0;
@@ -1621,9 +1738,7 @@ static void a_type_2_walks_its_pointer_two_rows_of_memory_to_a_row(void) {
     for (long tick = 0; tick < 400L * SCANLINE; tick++) {
       crtc_tick(&crtc);
     }
-    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0)) {
-      crtc_tick(&crtc);
-    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
     bool steps_as_the_chapter_says = true;
     for (unsigned row = 0; row < 3; row++) {
       uint16_t was = crtc.vma;
@@ -1631,9 +1746,7 @@ static void a_type_2_walks_its_pointer_two_rows_of_memory_to_a_row(void) {
       while (crtc.c4 == here) {
         crtc_tick(&crtc);
       }
-      while (crtc.c0 != 0) {
-        crtc_tick(&crtc);
-      }
+      TICK_UNTIL(crtc.c0 == 0);
       if ((uint16_t)(crtc.vma - was) != cases[index].step) {
         steps_as_the_chapter_says = false;
       }
@@ -1679,12 +1792,8 @@ static void a_type_2_ends_its_row_where_r9_says_whenever_the_mode_arrives(void) 
       for (long tick = 0; tick < 400L * SCANLINE; tick++) {
         crtc_tick(&crtc);
       }
-      while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame)) {
-        crtc_tick(&crtc);
-      }
-      while (crtc.c4 != row) {
-        crtc_tick(&crtc);
-      }
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame);
+      TICK_UNTIL(crtc.c4 == row);
       unsigned lines = 0;
       bool shown_as_tabulated = true;
       while (crtc.c4 == row) {
@@ -1728,9 +1837,7 @@ static void a_type_2_counts_its_display_through_the_additional_lines(void) {
   for (long tick = 0; tick < 400L * SCANLINE; tick++) {
     crtc_tick(&crtc);
   }
-  while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame)) {
-    crtc_tick(&crtc);
-  }
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame);
   /* One whole frame, a reading a line: the four rows R4 asks for at eight
      lines each, and then the four R5 adds after them. */
   uint8_t seen[64];
@@ -2121,8 +2228,8 @@ static void types_3_and_4_count_the_interlace_as_their_chapter_gives_it(void) {
     /* And the mode given up on a row's own last line, which ch. 19.8.4's
        exit diagrams draw ending the row there: the address has reached the
        limit, so the row ends whatever R8 now asks, and the next line is the
-       next character's first. Read against the bare register instead, that
-       line misses its limit and the row walks C9 to 31. */
+       next character's first. These two reach that limit rather than matching
+       it, so no reading of R8 can carry the row past it. */
     crtc_init(&crtc, type);
     write_register(0, 63);
     write_register(4, 38);
@@ -5221,6 +5328,8 @@ int main(void) {
   TEST_RUN(select_wears_five_bits);
   TEST_RUN(writes_wear_the_documented_widths);
   TEST_RUN(each_type_answers_the_read_port_its_own_way);
+  TEST_RUN(a_counter_above_its_limit_comes_home_on_the_asics);
+  TEST_RUN(the_two_asics_leave_the_pointer_alone_through_the_padding);
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
   TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);
