@@ -2049,6 +2049,150 @@ static void a_type_2_counts_its_display_through_the_additional_lines(void) {
   TEST_CHECK(padded_as_the_counter_says);
 }
 
+/* Ticks until the VSYNC is up, counted; four frames and it gives up. */
+static long ticks_to_the_vsync(void) {
+  long ticks = 0;
+  while (!crtc.vsync && ticks < 4L * FRAME_TICKS) {
+    crtc_tick(&crtc);
+    ticks++;
+  }
+  return ticks;
+}
+
+/* A type 2 begins a frame again where the interlace video mode is switched on
+   during its first line under an odd frame. "If the IVM mode is activated on
+   the first line of an odd frame, then this line will become an additional
+   line, and a new line 0 will follow the old line 0, which will extend the
+   size of the frame by R0 µsec. This is true whatever the value of C0 (0 to
+   R0) on which the IVM mode is activated" (ch. 19.6.3), and "if the IVM mode
+   is activated on the first line of a frame (When C4=C9=0) while the parity
+   was odd, then C9 and C9.IVM are cleared on the 2nd line" (ch. 19.8.3). Both
+   chapters are a type 2's, and no other type is given the rule.
+
+   So the line after the first is read at its head on all five, and on a type
+   2 the frame is timed from its head to its VSYNC against the same frame given
+   the mode a line later, which is where the one line the chapter names shows.
+   That is asserted as a whole line, R0+1 characters, where the chapter says
+   "R0 µsec": "a new line 0" is a whole line, and ch. 16.2.2 speaks of a line
+   the same way, each further line of a sync on these chips "increases the
+   duration of the signal by R0 µsec". Shaker's C (S) grades the whole frame, wanting
+   a line more of a type 2 than of types 0 and 1, and the routine that settles
+   the parity before its C (O), C (P), C (S) and C (8) reads this very line to
+   learn which frame it is on. */
+static void a_type_2_begins_an_odd_frame_again_where_its_first_line_takes_the_mode(void) {
+  static const uint8_t characters[] = {0, 20, 63};
+  for (uint8_t type = 0; type < 5; type++) {
+    for (int odd = 0; odd < 2; odd++) {
+      for (unsigned index = 0; index < sizeof characters; index++) {
+        long to_the_vsync[2] = {0, 0};
+        for (uint8_t line = 0; line < 2; line++) {
+          crtc_init(&crtc, type);
+          write_register(0, 63);
+          write_register(1, 40);
+          write_register(4, 38);
+          write_register(6, 25);
+          write_register(7, 30);
+          write_register(9, 7);
+          for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+            crtc_tick(&crtc);
+          }
+          TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame == odd);
+          long ticks = 0;
+          while (!(crtc.c9 == line && crtc.c0 == characters[index]) && ticks < FRAME_TICKS) {
+            crtc_tick(&crtc);
+            ticks++;
+          }
+          TEST_CHECK(ticks < FRAME_TICKS);
+          write_register(8, 3);
+          if (line == 0) {
+            do {
+              crtc_tick(&crtc);
+              ticks++;
+            } while (crtc.c0 != 0 && ticks < FRAME_TICKS);
+            TEST_CHECK(ticks < FRAME_TICKS);
+            bool begun_again = crtc.c4 == 0 && crtc.c9 == 0 && (type != 2 || crtc.c9_ivm == 0);
+            TEST_EQUAL(begun_again, type == 2 && odd);
+          }
+          to_the_vsync[line] = ticks + ticks_to_the_vsync();
+          TEST_CHECK(crtc.vsync);
+        }
+        if (type == 2) {
+          TEST_EQUAL(to_the_vsync[0] - to_the_vsync[1], odd ? SCANLINE : 0);
+        }
+      }
+    }
+  }
+}
+
+/* Nor where the mode was never activated on that line: only written again, a
+   frame's head having found it standing, or asked for without the video half
+   of it, R8 of 1 being the sync mode alone. The chapters' condition is the
+   IVM mode "activated". Nor on the first line of any row but the frame's own,
+   which ch. 19.8.3 names by its counters, "When C4=C9=0". Nor where it is
+   given up again inside the line. The chapter says that of the additional
+   line a frame's end adds — "if the IVM mode is disabled during the
+   additional line (C4 being then greater than R4), then C4 will not be
+   automatically reset to 0 on the next line. C9 will count until it reaches
+   R9" (ch. 19.6.3) — and that it reaches this line too, which the same
+   chapter calls an additional line, is our reading, and nothing we can run
+   grades it. */
+static void a_type_2_first_line_goes_on_counting_where_the_mode_did_not_arrive(void) {
+  static const struct {
+    uint8_t standing;     /* R8 as the frame's head finds it */
+    uint8_t row;          /* the row whose first line the two writes are made on */
+    uint8_t first_write;  /* R8, at C0=10 */
+    uint8_t second_write; /* R8, at C0=30 */
+  } cases[] = {{3, 0, 3, 3}, {0, 0, 1, 1}, {0, 5, 3, 3}, {0, 0, 3, 0}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, cases[index].standing);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 10 && crtc.c4 == cases[index].row && crtc.c9 == 0 && crtc.parity_frame);
+    write_register(8, cases[index].first_write);
+    TICK_UNTIL(crtc.c0 == 30);
+    write_register(8, cases[index].second_write);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].row);
+    TEST_EQUAL(crtc.c9, 1);
+  }
+}
+
+/* And not once C4 has moved off the frame's first line under it, which only a
+   line of one character can do: it lands the C4 increment the line before
+   armed without ever reaching the character that manages the rest (ch.
+   13.2.4). The mode switched on there does not begin the frame again from the
+   row after. No Z80 can arrange it, the two writes landing in one microsecond;
+   it is here so that the state cannot outlive the line it names. */
+static void a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(4, 38);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 0);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame);
+  write_register(0, 0);
+  write_register(8, 3);
+  crtc_tick(&crtc);
+  TEST_EQUAL(crtc.c4, 1);
+  write_register(0, 63);
+  TICK_UNTIL(crtc.c0 == 1);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 2);
+}
+
 /* A width of nothing puts the counter home wherever it stood when the write
    landed. The chapters put it only from a counter already there — "if R0=0,
    then C0 never reaches 1 (and therefore remains at 0)" (ch. 13.2.1), "when
@@ -4281,6 +4425,57 @@ static void the_parity_settles_before_an_r7_of_zero_is_read(void) {
   TEST_EQUAL(seen.character, 31);
 }
 
+/* The two ASICs take the same character the other way round: "in the
+   particular case where R7=0, the management of the VSYNC coincides with the
+   start of the frame. In this case, the management of the VSYNC has priority
+   over the assignment of ParityFrame ... If ParityFrame was odd, then there
+   will be no MID-VSYNC, and VSYNC will start on C4=C9=C0=0, although
+   ParityFrame has change to Even. Conversely, if ParityFrame was even, then
+   there will be a MID-VSYNC, and the VSYNC will start when C0 reaches R0/2
+   and even though ParityFrame has become odd" (ch. 19.7.3), where of the
+   other three "MID-VSYNC therefore always takes place when ParityFrame is
+   even, including when R7=0" (ch. 19.7.2). So on those two the half line
+   falls on the odd frames, and only where R7 is 0: "MID-VSYNC therefore always
+   takes place when ParityFrame is even, except when R7=0" (ch. 19.7.3), which
+   the R7 of 30 holds them to. Shaker grades it on both ASIC records, in C (S)
+   and in the one line of C (O) that asks for an R7 of 0. */
+static void an_r7_of_zero_is_read_before_the_parity_turns_on_the_asics(void) {
+  static const uint8_t r7s[] = {0, 30};
+  for (unsigned which = 0; which < sizeof r7s; which++) {
+    for (uint8_t type = 0; type < 5; type++) {
+      crtc_init(&crtc, type);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(3, 0x8E);
+      write_register(4, 38);
+      write_register(6, 25);
+      write_register(7, 30);
+      write_register(9, 7);
+      for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+        crtc_tick(&crtc);
+      }
+      /* R7 is written where C4 stands on neither value, so the equality is
+         left for the frame to walk into rather than made by hand (ch.
+         16.4.1.1, 16.4.4). */
+      TICK_UNTIL(crtc.c0 == 2 && crtc.c4 == 1);
+      write_register(7, r7s[which]);
+      write_register(8, 1);
+      bool read_first = r7s[which] == 0 && (type == 3 || type == 4);
+      int odd_frames = 0;
+      for (int frame = 0; frame < 4; frame++) {
+        vsync_seen seen = {0};
+        TEST_CHECK(next_vsync(&seen));
+        odd_frames += seen.odd_frame ? 1 : 0;
+        bool half_line = read_first ? seen.odd_frame : !seen.odd_frame;
+        TEST_EQUAL(seen.character, half_line ? 31 : 0);
+      }
+      /* Both parities, so a chip that stopped turning cannot pass by never
+         meeting the other. */
+      TEST_EQUAL(odd_frames, 2);
+    }
+  }
+}
+
 /* Ch. 19.8.1's counting tables for R9=6, transcribed. From the line after
    the one R8 is given 3 on, the raster address is C9 doubled with parity in
    bit 0, and the row ends where that address reaches R9 read up to the same
@@ -5539,6 +5734,9 @@ int main(void) {
   TEST_RUN(a_type_2_walks_its_pointer_two_rows_of_memory_to_a_row);
   TEST_RUN(a_type_2_ends_its_row_where_r9_says_whenever_the_mode_arrives);
   TEST_RUN(a_type_2_counts_its_display_through_the_additional_lines);
+  TEST_RUN(a_type_2_begins_an_odd_frame_again_where_its_first_line_takes_the_mode);
+  TEST_RUN(a_type_2_first_line_goes_on_counting_where_the_mode_did_not_arrive);
+  TEST_RUN(a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again);
   TEST_RUN(a_line_end_taken_back_is_the_one_just_taken);
   TEST_RUN(a_line_taken_back_is_a_line_that_never_ended);
   TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
@@ -5605,6 +5803,7 @@ int main(void) {
   TEST_RUN(an_r7_written_at_a_lines_head_blocks_instead_of_triggering);
   TEST_RUN(an_r7_written_on_an_unarmed_line_still_triggers);
   TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
+  TEST_RUN(an_r7_of_zero_is_read_before_the_parity_turns_on_the_asics);
   TEST_RUN(the_video_mode_doubles_the_raster_address);
   TEST_RUN(a_video_mode_entered_late_overflows_c9);
   TEST_RUN(leaving_the_video_mode_drops_the_parity_from_the_limit);

@@ -54,13 +54,29 @@
  * equality made by hand anywhere but a frame's corner is spent on them and
  * the pulse waits for the corner after. A MID-VSYNC is the one thing that
  * moves the character and the delay of ch. 19.7.1's other exception the one
- * thing that moves the line. What that chapter denies them beside it is not
- * here: "there is no VSYNC reentrancy protection mechanism on these
- * circuits", where this one blocks a second pulse on every type. No line of
- * any record moves on either half — the group that watches this pin to catch
- * a row counter overrunning grades six on each of those two and neither the
- * rule nor the reentrancy touches one of them. Lifting the block for a type 1
- * was what let the eighth below reach that line. The third
+ * thing that moves the line. An R7 of 0 puts the equality on the character
+ * the frame's parity turns on, and these two read it first: "the management
+ * of the VSYNC has priority over the assignment of ParityFrame", so "if
+ * ParityFrame was odd, then there will be no MID-VSYNC ... although
+ * ParityFrame has change to Even" (ch. 19.7.3), where the other three turn
+ * the parity and read after it (ch. 19.7.2). Shaker's C (S) and the one line
+ * of its C (O) at an R7 of 0 come right on both records by it. The chapter
+ * makes the comparison at the corner and only delays the start, where this
+ * chip makes it where the start falls — R0/2 for a MID-VSYNC, the row's
+ * second line for ch. 19.7.1's delay — so an equality made or unmade between
+ * the two is read here and not on silicon. An R7 written onto C4 inside a
+ * row's first line, from C0=2 up to that start, raises the pulse here where
+ * ch. 16.4.4 says it "will not trigger"; and an equality standing at the
+ * corner and undone before the start — R7 rewritten, or R8 given up, which
+ * leaves that frame no VSYNC at all — loses one silicon raises. Nothing
+ * grades any of it. What ch.
+ * 16.4.4 denies them beside the corner is not here: "there is no VSYNC
+ * reentrancy protection mechanism on these circuits", where this one blocks a
+ * second pulse on every type. No line of any record moves on the corner or on
+ * the reentrancy — the group that watches this pin to catch a row counter
+ * overrunning grades six on each of those two and neither touches one of
+ * them. Lifting the block for a type 1 was what let the eighth below reach
+ * that line. The third
  * is how a type 1 reads R9 in the interlace video mode, and the disc grades
  * it too: its odd-lined rows come of an even R9 where a type 0's come of an
  * odd one (ch. 19.5.3, 19.8.2), and it reads the limit down to that parity
@@ -87,22 +103,34 @@
  * the values of R9 and C4" where the other four balance a pair of rows
  * between two frames. Ch. 19.8.3's eight switching diagrams hold us to it —
  * they give an even frame's C4=1 row the same eight addresses as its C4=0
- * row, where a balanced parity alternates them. Two of that interlace's rules
- * are not here, and neither is known to be what Shaker's C (O) still
- * measures: that group put ten lines on this record, the split counter took
- * six of them off, and the four it left all want the frame sync half a line
- * later than this chip raises it — the counter and the parity both came right
- * without moving one of the four. The mode is taken up at the next C0=0 as
- * ch. 19.8.1 gives a type 0, where ch. 19.8.3 has this chip take it in the
- * middle of the line that asks — "this translation between C9 and C9.VMA is
- * immediately considered ... including during the line, from position C0
- * where R8 is modified" — which its C (6) and B (2) are aimed at and neither
- * grades yet. And a mode asked for on a frame's first line is an ordinary one
- * here, where that interlace gives it two rules besides: C9 and C9.IVM "are
- * cleared on the 2nd line" if "the parity was odd" (ch. 19.8.3), and on an
- * odd frame "this line will become an additional line, and a new line 0 will
- * follow the old line 0, which will extend the size of the frame with R0
- * µsec" (ch. 19.5.4) — which is what its C (8) waits for. The fourth is the
+ * row, where a balanced parity alternates them. One of that interlace's
+ * rules is not here. The mode is taken up at the next C0=0 as ch. 19.8.1
+ * gives a type 0, where ch. 19.8.3 has this chip take it in the middle of the
+ * line that asks — "this translation between C9 and C9.VMA is immediately
+ * considered ... including during the line, from position C0 where R8 is
+ * modified" — which Shaker's C (6) and B (2) are aimed at and neither grades
+ * yet. The other is here: a mode switched on during a frame's first line
+ * under an odd frame makes that line "an additional line, and a new line 0
+ * will follow the old line 0, which will extend the size of the frame by R0
+ * µsec" (ch. 19.6.3, and ch. 19.5.4 in nearly the same words), C9 and C9.IVM
+ * being "cleared on the 2nd line" (ch. 19.8.3). The first of ch. 19.8.3's
+ * switching diagrams draws no such line; three passages of prose are taken
+ * against it, and so is the disc. Ch. 19.5.4 gives a program that line to
+ * "determine parity", and the routine Shaker runs to settle the parity before
+ * its C (O), C (P), C (S) and C (8) reads it there and turns the parity once
+ * where it is not the one wanted. Without the line the routine read the same
+ * answer on either parity, so those groups were graded on whichever this chip
+ * woke on; with it C (S) and all four of C (O)'s wrong lines come right, C (P)
+ * agrees in all four of its own, C (8), which says its piece in a picture,
+ * holds that picture still where it had rolled, and the scoreboard stands the
+ * same whichever parity the chip wakes on. Ch. 19.6.3's converse is here only
+ * for that first line: "if the IVM mode is disabled during the additional
+ * line ... then C4 will not be automatically reset to 0 on the next line. C9
+ * will count until it reaches R9", which leaves a first line given the mode
+ * and back counting on as it would have, and that the paragraph reaches that
+ * line at all is our reading. Of the line a frame's end adds, whose C4 above
+ * R4 the sentence names, it is not here: that line sends C4 home whatever R8
+ * has become. The fourth is the
  * frame parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame
  * "switch between each frame when C4 = C9 = C0 = 0" and does so "whatever the
  * value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type 2 take the
@@ -126,8 +154,10 @@
  * and the frame runs a line longer than its neighbour. The disc grades the
  * divergence: Shaker's C (S) and C (O) both came right and fell silent on the
  * type 1 record, and C (3) grades nothing at all now, where six of its
- * thirteen lines were wrong; on the three records below it those two stand
- * wrong throughout, which is the work rather than a fault. The write is
+ * thirteen lines were wrong. On the three records below it those two stood
+ * wrong until those types were given rules of their own — the type 2 the
+ * first line its mode can lengthen a frame by, above, and the two ASICs the
+ * order in which they read an R7 of 0, in the second. The write is
  * skipped while the doubling stands, because the C9 those rules move is ch.
  * 19.8.2's — the one counter a type 1 keeps, which is the address — and this
  * chip keeps a count and a parity instead, ch. 19.8.1's arrangement for a
@@ -649,6 +679,12 @@ typedef struct crtc_t {
      R8 holds it: the mode a write asks for is taken up at the next C0=0,
      after that line's own R9 test (ch. 19.8.1). */
   bool interlace_video_mode;
+  /* Whether the interlace video mode was switched on during a type 2's
+     first line under an odd frame, so that the frame begins again after that
+     line unless the mode is given up first: "this line will become an
+     additional line, and a new line 0 will follow the old line 0, which will
+     extend the size of the frame by R0 µsec" (ch. 19.6.3). */
+  bool frame_begins_again;
   /* A chip that has drawn nothing has no character to leave behind, so the
      first tick draws one instead of advancing past one. Zero is the
      power-on state, which is what leaves the first tick drawing a line's

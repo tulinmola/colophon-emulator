@@ -54,6 +54,10 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
   uint8_t next = row & C4_BITS;
   if (next != crtc->c4) {
     crtc->vsync_blocked = false;
+    /* And a line that was to begin a type 2's frame again is no longer the
+       frame's first, which ch. 19.8.3 names "When C4=C9=0". Only a line of one
+       character landing an armed C4 increment can move C4 under it. */
+    crtc->frame_begins_again = false;
     /* "ParityC9 is reversed with each C4 increasing when R9 is peer", which
        on a type 1 is an even R9 (ch. 19.5.3); types 3 and 4 reverse it on an
        odd one — "if R9 is odd, C9's parity switches each time C4 changes"
@@ -465,6 +469,11 @@ static void enter_scanline(crtc_t *crtc) {
     }
   }
 
+  /* The first line a type 2 turned into an additional line ends as that line
+     ends a frame, and a new line 0 follows it. An adjustment armed on that
+     same line comes first, which is our ordering and nothing grades. */
+  bool frame_begins_again = crtc->frame_begins_again;
+  crtc->frame_begins_again = false;
   if (crtc->vertical_adjustment_armed && counts_the_adjustment_on_c5(crtc)) {
     /* The row keeps its own count through all of it — "C9 is zeroed when
        C9=R9 and C4 is incremented" (ch. 11.2.3) — and C5 alone counts the
@@ -582,7 +591,7 @@ static void enter_scanline(crtc_t *crtc) {
         enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       }
     }
-  } else if (crtc->last_line) {
+  } else if (crtc->last_line || frame_begins_again) {
     begin_frame(crtc);
   } else if (row_is_on_its_last_scanline(crtc)) {
     crtc->c9 = 0;
@@ -788,9 +797,10 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      is kept because the line it decides cannot begin until the next
      character. A frame that would have ended here is held open for it, and
      one already held open by R5 needs no holding. Shaker points its C (P)
-     group at this and states its verdict in a picture, so nothing we can
-     run grades the deadline: it stands on the chapter's own sentence and
-     on our tests. */
+     group at this, and every line it grades in words on the type 0 and type
+     2 records agrees, but none of them has been tied to the character the
+     deadline names: it stands on the chapter's own sentence and on our
+     tests. */
   if (crtc->c0 == r[0]) {
     crtc->interlace_line_owed = interlace_line_asked_for(crtc);
     if (crtc->interlace_line_owed && crtc->last_line) {
@@ -988,11 +998,30 @@ static bool blocks_a_vsync_made_at_a_lines_head(const crtc_t *crtc) { return crt
    character a write lands on as well, which crtc_access says so. */
 static void begin_the_vsync(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
+  /* The two ASICs start one only at a frame's own corner: "VSYNC starts when
+     C4=R7 and C9=C0=0" (ch. 16.4.4), which ch. 19.7.1 draws as the exception
+     to every other type — "VSYNC occurs when C4 is equal to R7 on any position
+     of C0 (except on CRTC's 3 and 4, which dictate that C4=C9=C0=0)". A
+     MID-VSYNC is the one thing that moves the character, its own chapter
+     keeping the line and giving up C0: "the VSYNC will start when C0 reaches
+     R0/2" (ch. 19.7.3). */
+  bool starts_at_a_frames_corner = crtc->type == 3 || crtc->type == 4;
   /* On an even frame in either interlace mode the VSYNC is a MID-VSYNC:
      the C4/R7 equality does not start it where it falls, but where C0
      reaches R0/2, which is the half line the second field is raised by
-     (ch. 19.7.2). */
-  bool mid_vsync = interlace_asked(crtc) && !crtc->parity_frame;
+     (ch. 19.7.2). Where an R7 of 0 puts the equality on the character the
+     frame's parity turns on, the two ASICs read it first: "the management of
+     the VSYNC has priority over the assignment of ParityFrame ... If
+     ParityFrame was odd, then there will be no MID-VSYNC, and VSYNC will
+     start on C4=C9=C0=0, although ParityFrame has change to Even" (ch.
+     19.7.3), where the other three turn the parity first, "ParityFrame
+     management takes priority over VSYNC management" (ch. 19.7.2). Their
+     parity turns over at every frame's head whatever R8 holds (ch. 19.5.5),
+     so the one an R7 of 0 is read under is the opposite of the one the frame
+     stands on. */
+  bool read_before_the_parity_turns = starts_at_a_frames_corner && r[7] == 0;
+  bool parity_read = read_before_the_parity_turns ? !crtc->parity_frame : crtc->parity_frame;
+  bool mid_vsync = interlace_asked(crtc) && !parity_read;
   /* And where the video mode gives a row an odd number of lines, an odd C4
      of an odd frame starts its VSYNC a line late, on the row's second line
      rather than its first: the two frames' rows are of unequal length there,
@@ -1009,10 +1038,11 @@ static void begin_the_vsync(crtc_t *crtc) {
      back round to 2: a sync fifteen lines late answers neither reading, and
      no chapter draws the row that would ask for it. Read as the literal address, such a frame
      raises no VSYNC whatsoever; read as the second line, it takes one on 3, a line late, as the
-     chapter asks. The delay never meets a MID-VSYNC, which happens only on an even frame:
-     "MID-VSYNC is not cumulative with this line because it cannot occur on an odd frame with an odd
-     C4" (ch. 19.7.1). A row of one line has no second line and so raises no VSYNC at all, which an
-     R9 of 31 makes of every even-parity row; the Compendium describes that case nowhere. */
+     chapter asks. The delay never meets a MID-VSYNC, which happens only on an even frame
+     or, on the two ASICs, on an odd one at an R7 of 0, whose C4 is even: "MID-VSYNC is not
+     cumulative with this line because it cannot occur on an odd frame with an odd C4" (ch. 19.7.1).
+     A row of one line has no second line and so raises no VSYNC at all, which an R9 of 31 makes of
+     every even-parity row; the Compendium describes that case nowhere. */
   /* Three of the five take that delay at all: "there is also an exception
      on CRTC's 0, 3 and 4 when the line count of a C4 character is odd on an
      odd frame and an odd C4" (ch. 19.7.1), and of a type 1 ch. 19.5.3 says
@@ -1022,20 +1052,12 @@ static void begin_the_vsync(crtc_t *crtc) {
   bool delays_a_whole_line = crtc->type != 1 && crtc->type != 2;
   bool late_vsync = delays_a_whole_line && crtc->interlace_video_mode && (r[9] & 1) != 0 &&
                     (crtc->c4 & 1) != 0 && crtc->parity_frame;
-  /* The two ASICs start one only at a frame's own corner: "VSYNC starts when
-     C4=R7 and C9=C0=0" (ch. 16.4.4), which ch. 19.7.1 draws as the exception
-     to every other type — "VSYNC occurs when C4 is equal to R7 on any position
-     of C0 (except on CRTC's 3 and 4, which dictate that C4=C9=C0=0)". A
-     MID-VSYNC is the one thing that moves the character, its own chapter
-     keeping the line and giving up C0: "the VSYNC will start when C0 reaches
-     R0/2" (ch. 19.7.3). */
-  bool starts_at_a_frames_corner = crtc->type == 3 || crtc->type == 4;
   /* The line it starts on: a row's first, except where the exception above
      holds it back to the second. */
   bool at_the_line_it_starts_on =
       late_vsync ? crtc->c9 == 1 : !starts_at_a_frames_corner || crtc->c9 == 0;
-  /* And the character: a line's first on those two, except where a MID-VSYNC
-     gives up C0 for half a line instead. */
+  /* And the character: a line's first on the two ASICs, except where a
+     MID-VSYNC gives up C0 for half a line instead. */
   bool at_the_character_it_starts_on =
       mid_vsync ? crtc->c0 == r[0] / 2 : !starts_at_a_frames_corner || crtc->c0 == 0;
   if (c4_stands_on_r7(crtc) && !crtc->vsync && !crtc->vsync_blocked && at_the_line_it_starts_on &&
@@ -1494,6 +1516,49 @@ static void take_up_r8_parity(crtc_t *crtc, bool was_video_mode) {
   }
 }
 
+/* What a type 2's chapters call "a noticeable bug on the management of the
+   additional line": "if the IVM mode is activated on the first line of an odd
+   frame, then this line will become an additional line, and a new line 0 will
+   follow the old line 0, which will extend the size of the frame by R0 µsec.
+   This is true whatever the value of C0 (0 to R0) on which the IVM mode is
+   activated" (ch. 19.6.3, and ch. 19.5.4 in nearly the same words). Ch. 19.8.3
+   names that line by its counters, "When C4=C9=0", and says what follows it:
+   "C9 and C9.IVM are cleared on the 2nd line". Ch. 19.5.4 says what a program
+   has it for: "it is possible to test the existence of the additional line to
+   determine parity".
+
+   The first of ch. 19.8.3's own switching diagrams draws the other answer: its
+   odd frame, given the mode on C4=0 and C9=0, runs on to C9=1 with no new line
+   0. The prose is taken, in three places against one table, and Shaker takes
+   it too: the routine settling the parity before its C (O), C (P), C (S)
+   and C (8) reads this line to learn which frame it is on, and the three of
+   those that grade themselves agree with silicon only where it is here. What
+   ch. 19.6.3 says the line shows meanwhile — "the C9 displayed as soon as R8=3
+   on this line will be odd (i.e. C9=1)" — is not here: this chip takes the mode
+   up at the next C0=0, which the head of crtc.h declares, and the line keeps
+   its address to its end. The table cannot say which, every one of its rows
+   that carries a write showing the address from before it.
+
+   The mode given up again inside that line takes the line back: "if the IVM
+   mode is disabled during the additional line (C4 being then greater than R4),
+   then C4 will not be automatically reset to 0 on the next line. C9 will count
+   until it reaches R9" (ch. 19.6.3), which on a frame's first line is the count
+   going on as it always does. That the paragraph reaches this line as well as
+   the one a frame's end adds, whose C4 it names, is our reading, and nothing we
+   can run grades it.
+
+   The line after is a frame's head by its counters, and ParityFrame takes
+   ParityR6 there as at any other (ch. 19.5.4). Where R6 is 0, C4 has already
+   turned ParityR6 on the first line, so the frame goes on even; nothing says
+   whether silicon's does, and nothing grades it. */
+static void take_up_r8_on_a_frames_first_line(crtc_t *crtc, bool was_video_mode) {
+  if (crtc->type != 2 || was_video_mode == interlace_video_asked(crtc)) {
+    return;
+  }
+  crtc->frame_begins_again =
+      !was_video_mode && crtc->c4 == 0 && crtc->c9 == 0 && crtc->parity_frame;
+}
+
 uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
   if (!(pins & CRTC_CS)) {
     return pins;
@@ -1619,6 +1684,7 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
       }
       if (crtc->address_register == 8) {
         take_up_r8_parity(crtc, was_video_mode);
+        take_up_r8_on_a_frames_first_line(crtc, was_video_mode);
       }
       if (crtc->address_register == 3) {
         crtc->r3_written_for_this_character = true;

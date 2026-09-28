@@ -58,7 +58,7 @@ cpc_connect_monitor(&cpc, framebuffer);
 cpc_set_links(&cpc, true, CPC_MANUFACTURER_AMSTRAD);
 ```
 
-A CPC's last argument is which of the five CRTCs the machine is built with. Type 0 is the only one whose behaviour the chip implements; what a program can read of the chip — the registers it hands back, and the status register one of the five has — follows the number given, as does the length of its frame sync, whether an interlaced frame's sync is held back a whole line, how a row is divided between an interlaced picture's two fields, the parity those fields alternate in, whether a write of the interlace register can fix that parity, which counter the lines that pad a frame out are counted on, where within a row the video pointer is left behind for the row after it, and whether opening that padding latches a state a cancelled register cannot clear; nothing else does.
+A CPC's last argument is which of the five CRTCs the machine is built with. Only type 0 behaves as itself. What a program can read of the chip follows the number given, and so does each of the other exceptions the video section of [the machine page](machine.en.md) sets out; in everything else the chip is a type 0 whatever it is built as.
 
 A Spectrum wants one ROM and has no links at all:
 
