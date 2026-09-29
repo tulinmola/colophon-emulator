@@ -24,6 +24,12 @@
  * instruction after it; at an acknowledge, the address the interrupt came in
  * front of, which is where it will return to.
  *
+ * A write is given where the processor makes it. A machine built with one of
+ * the two ASICs takes an OUT (C),r's write a character later than that, the
+ * board holding it for the next character clock (cpc.c), so the counters
+ * beside such a line are the ones the write was made under, not the ones it
+ * lands on.
+ *
  *   SHAKER_TRACE_FRAMES=from:to   only those frames of each group
  *   SHAKER_TRACE_PC=low:high      only what the processor does with its PC in
  *                                 that range, in hexadecimal; the interrupt

@@ -74,18 +74,19 @@
  * reentrancy protection mechanism on these circuits", where this one blocks a
  * second pulse on every type. No line of any record moves on the corner or on
  * the reentrancy — the group that watches this pin to catch a row counter
- * overrunning grades six on each of those two and neither touches one of
- * them. Lifting the block for a type 1 was what let the eighth below reach
- * that line. The third
- * is how a type 1 reads R9 in the interlace video mode, and the disc grades
- * it too: its odd-lined rows come of an even R9 where a type 0's come of an
- * odd one (ch. 19.5.3, 19.8.2), and it reads the limit down to that parity
- * where a type 0 reads it up — a character of N lines wanting "the value N-1"
- * of it where a type 0 asks "value N-2" (ch. 19.4.1, 19.4.2), which is why a
- * type 0 and a type 1 want R9 "programmed respectively with 6 and 7" for rows
- * of the same four lines (ch. 28.1.7). Entering that mode in the middle of a
- * row still takes the doubling up a line later, as ch. 19.8.1 gives a type 0;
- * the parity ch. 19.8.2 fixes at the write is fixed there now, and the fourth
+ * overrunning came right on both by the frame's end these two take where a line
+ * ends, below, and the board's microsecond, and neither the corner nor the
+ * reentrancy touched one of its lines. Lifting the block for a type 1 was what
+ * let the eighth below reach the line of the disc that grades it. The third is
+ * how a type 1 reads R9 in the interlace video mode, and the disc grades it
+ * too: its odd-lined rows come of an even R9 where a type 0's come of an odd
+ * one (ch. 19.5.3, 19.8.2), and it reads the limit down to that parity where a
+ * type 0 reads it up — a character of N lines wanting "the value N-1" of it
+ * where a type 0 asks "value N-2" (ch. 19.4.1, 19.4.2), which is why a type 0
+ * and a type 1 want R9 "programmed respectively with 6 and 7" for rows of the
+ * same four lines (ch. 28.1.7). Entering that mode in the middle of a row still
+ * takes the doubling up a line later, as ch. 19.8.1 gives a type 0; the parity
+ * ch. 19.8.2 fixes at the write is fixed there now, and the fourth
  * below says how. A type 2 shares none of the third: ch. 19.4.3 and 19.5.4
  * give it an interlace of its own, in which "parity is respected whatever the
  * values of R9 and C4". Its row is not halved in the video mode as every
@@ -198,28 +199,52 @@
  * the other three spend the counter's whole round getting back to it. The
  * disc's C (E) came right in all three of its readings on that. One thing
  * that counter carries is not here: a line too narrow to reach the disarm
- * gives types 1 and 2 no additional line where it gives the other three one,
- * ch. 13.2's window being a type 0's. Every other behaviour
- * below is type 0's whatever the type is set to, and a number naming none of
- * the five is neither refused nor corrected. One of those is worth naming
- * because the disc grades it: a type 1 takes R4 written with the value C4
- * already holds as the frame's end wherever on the line it lands — "if we
- * were on the last line (C9=R9), then C9 goes to 0, C4=0" (ch. 12.3) — where
- * a type 0 reads that comparison only while C0 is under 2, and it is a type
- * 0's window this chip keeps. The sixth is the border R6 asks for. Where R6
- * is 0 a frame's first line is a conflict on types 0 and 2 and comes out an
- * alternation of bordered and displayed bytes, cancellable until C0 meets R1
- * and definitive after it (ch. 18.3.2); a type 1 borders outright on an R6 of
- * 0 "without the condition C4=R6 being required" and gives the border up with
- * the register, except where the write was made while C4 stood at 0, which
- * keeps it for the frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no
- * conflict and test R6 where a line begins rather than through it (ch.
- * 18.2.4, 18.3.4). No line the disc grades moves on any of the three — what
- * grades them is those chapters and tests of our own, and Shaker says its
- * piece there in pictures. The seventh is where a type 1 reads its offset:
- * R12/R13 reach VMA itself, and reach it at the head of every line the
- * frame's first character row spends with C4 at 0, where the other four load
- * both pointers once and only where C4, C9 and C0 stand together at 0 (ch.
+ * gives types 1 and 2 no additional line where it gives type 0 one, ch.
+ * 13.2's window being a type 0's. Types 3 and 4 do decide the frame's end,
+ * and the padding after it, where the line ends, from R4, R9 and R5 as they
+ * then stand and from the interlace line as C0=R0 answered it. "The
+ * modification of register 4 is considered immediately at the end of the
+ * line", so "if R4 is updated with a value less than C4, then there is
+ * overflow of the C4 counter", and R4 written with the value of C4 on a row's
+ * last line ends the frame (ch. 12.5); R9 does the same, ch. 10.3.4.1's table
+ * giving the next line 0 in both C9 and C4 whatever line of a frame's last
+ * row an R9 of 0 is written on; and "R5 management is considered on each C0
+ * position" (ch. 11.4.1). A type 0's own exceptions — a last line unmade at
+ * C0=1 spent on an adjustment, and R5's deadline (ch. 10.3.1.2, 12.2, 13.2) —
+ * are not theirs: a line of two characters, too narrow for a type 0's disarm,
+ * takes no padding for its narrowness on these two, whose R0 "accepts all
+ * values without causing any problems for other counters" (ch. 13.5). A line of
+ * one character still freezes them, as it freezes every type here, and the C4
+ * increment it lands on a last line opens a type 0's adjustment on them too
+ * (ch. 13.2.6); and R5 admitting a row whose C4 has passed R4 is a type 0's
+ * rule (ch. 11.2.2), carried over. Shaker's E (4) came right on both records on
+ * the frame's end taken where the line ends, all twelve of the readings its
+ * program makes on each — the record holds none of them, the group printing
+ * only where it disagrees — with the microsecond the board gives these two an
+ * OUT (cpc.c, ch. 4.4.4), the later of its two writes otherwise arriving on the
+ * line's last character, where it overflows, rather than on the next line's
+ * first, where silicon has it too late. The exception ch. 12.5 gives a type 3
+ * alone is not here: an R4 of 0 written on C0=0 is taken before C4 goes to 0
+ * "if the I/O on the CRTC is performed at the same time as a ROM selection",
+ * which "is active during the I/O if bit 5 of the Z80A B register is 0", and
+ * nothing here tells the chip what else an access selects. The disc names both ASICs a type 4, and
+ * asks for the exception of neither. Every other behaviour below is type 0's whatever the type is
+ * set to, and a number naming none of the five is neither refused nor corrected. One of those is
+ * worth naming because the disc grades it: a type 1 takes R4 written with the value C4 already
+ * holds as the frame's end wherever on the line it lands — "if we were on the last line (C9=R9),
+ * then C9 goes to 0, C4=0" (ch. 12.3) — where a type 0 reads that comparison only while C0 is under
+ * 2, and it is a type 0's window this chip keeps; types 1 and 2 are also left a type 0's R5
+ * deadline, ch. 11.4.1 notwithstanding. The sixth is the border R6 asks for. Where R6 is 0 a
+ * frame's first line is a conflict on types 0 and 2 and comes out an alternation of bordered and
+ * displayed bytes, cancellable until C0 meets R1 and definitive after it (ch. 18.3.2); a type 1
+ * borders outright on an R6 of 0 "without the condition C4=R6 being required" and gives the border
+ * up with the register, except where the write was made while C4 stood at 0, which keeps it for the
+ * frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict and test R6 where a line begins
+ * rather than through it (ch. 18.2.4, 18.3.4). No line the disc grades moves on any of the three —
+ * what grades them is those chapters and tests of our own, and Shaker says its piece there in
+ * pictures. The seventh is where a type 1 reads its offset: R12/R13 reach VMA itself, and reach it
+ * at the head of every line the frame's first character row spends with C4 at 0, where the other
+ * four load both pointers once and only where C4, C9 and C0 stand together at 0 (ch.
  * 17.4.2, 20.3.2). C4 at 0 is that chip's plainest case and not its rule. Ch.
  * 11.2.4 keeps the same update through the C4 of 1 a run of additional lines
  * gives it, where the run opened with C4 at 0 — "if C4=0 before the
@@ -252,19 +277,24 @@
  * Two things about the width are ours rather than the chapters', and both are
  * one microsecond of the same thing. Measured against ch. 13.6, every
  * placement this chip accepts sits one character later than the chronograms
- * draw it: ch. 13.6.1's and ch. 13.6.3's last OUTI row, and ch. 13.6.2's
- * fifth, all draw wrapping the placement this chip lets run on. What the
+ * draw it: ch. 13.6.1's last OUTI row, ch. 13.6.3's third and ch. 13.6.2's
+ * fifth all draw wrapping the placement this chip lets run on. What the
  * chronograms are about survives that shift, because both sides of it move
  * together — a type 1's OUTI reaches one placement beyond every other chip's
  * here as it does there — but the shift itself is unexplained, and the window
  * is what carries it. The second thing follows from the first: the window is
  * reached only by a write the board reports finishing on the character clock,
- * which the OUTI's I/O does and the OUT's does not, so the two instructions
- * stand one microsecond apart here where ch. 13.3 sets them two "in
- * principle". Both readings follow a recording from silicon against a
- * diagram, and both are what carry B (6)'s three R0.JIT lines on the three
- * records that group is graded on, while leaving every frame of the demo
- * records where it stood. The *Not yet* list below carries what the shift leaves unsettled.
+ * which behind a Gate Array the OUTI's I/O does and the OUT's does not, so the
+ * two instructions stand one microsecond apart there where ch. 13.3 sets them
+ * two "in principle". Both readings follow a recording from silicon against a
+ * diagram, and both are what carry B (6)'s three R0.JIT lines on the type 0,
+ * type 1 and type 2 records, while leaving every frame of the demo records
+ * where it stood; the type 4 record grades them too, and one of the three is
+ * wrong there. Behind the two ASICs the board takes the OUT's write in the
+ * microsecond ch. 4.4.4 names, and on the next character clock by its own
+ * choice (cpc.c), so both instructions reach the window there, and their last
+ * placements in time stand the one microsecond apart ch. 13.6.3 draws for
+ * those two. The *Not yet* list below carries what the shift leaves unsettled.
  * A character was drawn in that second microsecond and it counts: the counter
  * goes on from what was drawn and not from the ending, or the line comes out
  * a microsecond too long.
@@ -314,8 +344,11 @@
  * above says what that costs, a width of nothing putting the counter at nothing
  * (the chapters put that only from a counter already home — "when R0 is 0 and
  * C0=0, then C0 remains at 0", ch. 13.2.6 — so the reach past C0=0 is ours on
- * Shaker's B (6) alone, which grades it on three of the five types and of
- * those three still wants a microsecond less from the type 1; it is not the overflow a width
+ * Shaker's B (6) alone, which grades it on four of the five types, agrees on
+ * the type 0 and type 2 records, still wants a microsecond less from the type
+ * 1, and on the type 4 record, where the board's microsecond moves the
+ * program's R0=0 write onto the clock a line wraps on, finds the counter
+ * overflowed; it is not the overflow a width
  * narrowed under a running counter gives), its register widths, its VMA/VMA'
  * reload rules, the counter widths a program can overrun, the last line decided
  * while C0 is 0 or 1 and made at C0=2 by a write that lands there, the vertical
@@ -419,29 +452,27 @@
  * changes R3l on that character, seen here by the comparison that ends the sync
  * as well, where the chip's is not; the R0 of ch. 13.7.2 enlarged on the
  * character C0 names 1, where the old value ends the line and the new one counts
- * C0 on; the microsecond an ASIC adds to an OUT(C),R8, "on the 3rd NOP for a
- * CRTC equipped with a GATE ARRAY, and on the 4th NOP for an ASIC that emulates
- * a CRTC" (ch. 4.4.4), this chip being given a GATE ARRAY's entry whatever it is
- * built as; whatever would place this chip's line endings where ch. 13.6 draws
- * them — ch. 13.6.1's and ch. 13.6.3's last OUTI row and ch. 13.6.2's fifth all
- * draw wrapping a placement this chip lets run on, and Shaker's B (6) says it
+ * C0 on; whatever would place this chip's line endings where ch. 13.6 draws
+ * them — ch. 13.6.1's last OUTI row, ch. 13.6.3's third and ch. 13.6.2's fifth
+ * all draw wrapping a placement this chip lets run on, and Shaker's B (6) says it
  * runs on, so the disc is followed and every placement here sits one character
  * late against all three chronograms, a shift the window above compensates and
  * nothing yet explains, and the reason the two microseconds ch. 13.3 sets "in
- * principle" between an OUT(C),R8 and an OUTI stand at one here, the OUT never
- * being rescued where the OUTI is; what the chronograms are about, a type 1's
- * OUTI one placement beyond the rest, survives it; the first of ch. 16.3's two
- * protections against one C4/R7 equality raising two pulses, "it is not possible
- * to trigger or inhibit a VSYNC during a VSYNC. Thus, modifying the value of R7
- * with a value of C4 reached during the VSYNC does not cause a new VSYNC", where
- * an R7 write here brings the comparison round again whenever it is made, a
- * pulse standing or not, and only the second protection — the equality having to
- * change — is kept; the freeze ch. 13.2.1 puts on a line too narrow to reach
- * C0=1, kept here for every type where the chapters give it to type 0 alone —
- * "R0 accepts all values without causing any problem for other counters" (ch.
- * 13.3, 13.4; ch. 13.5 says "problems"), and for three of them in as many words,
- * "if R0 is 0, then C9 and R4 continue to be managed normally" (ch. 13.3, 13.5)
- * — the plain absence of it being measured and refused, a type 1 demo losing 866
+ * principle" between an OUT(C),R8 and an OUTI stand at one here behind a Gate
+ * Array, the OUT never being rescued there where the OUTI is; what the
+ * chronograms are about, a type 1's OUTI one placement beyond the rest,
+ * survives it; the first of ch. 16.3's two protections against one C4/R7
+ * equality raising two pulses, "it is not possible to trigger or inhibit a
+ * VSYNC during a VSYNC. Thus, modifying the value of R7 with a value of C4
+ * reached during the VSYNC does not cause a new VSYNC", where an R7 write here
+ * brings the comparison round again whenever it is made, a pulse standing or
+ * not, and only the second protection — the equality having to change — is
+ * kept; the freeze ch. 13.2.1 puts on a line too narrow to reach C0=1, kept
+ * here for every type where the chapters give it to type 0 alone — "R0 accepts
+ * all values without causing any problem for other counters" (ch. 13.3, 13.4;
+ * ch. 13.5 says "problems"), and for three of them in as many words, "if R0 is
+ * 0, then C9 and R4 continue to be managed normally" (ch. 13.3, 13.5) — the
+ * plain absence of it being measured and refused, a type 1 demo losing 866
  * frames to it and a disc group that stabilizes an R0=0 line stabilizing no
  * longer, so what those four want in its place is not simply nothing; the rest
  * of what ch. 13.2.1 gives a line's first three microseconds — the counter
@@ -575,7 +606,9 @@ typedef struct crtc_t {
   /* This line ends the frame. Decided while C0 is 0 or 1 and held for the
      rest of the line, so a register written afterwards cannot take it back;
      and once more at C0=2 where it is not yet true, which is where a write
-     made at C0=1 lands (ch. 10.3.1.2, 12.2). */
+     made at C0=1 lands (ch. 10.3.1.2, 12.2). The two ASICs decide it again
+     where the line ends, and that is the answer the frame ends on (ch.
+     12.5). */
   bool last_line;
   bool vertical_adjustment_armed;
   /* Whether an adjustment has actually begun, as against being armed for

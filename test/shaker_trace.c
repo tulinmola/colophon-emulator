@@ -173,7 +173,8 @@ static void trace_the_processor(const cpc_t *cpc, uint64_t pins) {
       emit(cpc, what);
     }
     if ((address & 0x4000) == 0 && (address & 0x0300) == 0x0000) {
-      snprintf(what, sizeof what, "select R%u", cpc->crtc.address_register);
+      /* Read off the bus, the chip being free to take it later than this. */
+      snprintf(what, sizeof what, "select R%u", z80_data(pins) & 0x1F);
       emit(cpc, what);
     } else if ((address & 0x4000) == 0 && (address & 0x0300) == 0x0100) {
       snprintf(what, sizeof what, "R%u <- %02X", cpc->crtc.address_register, z80_data(pins));

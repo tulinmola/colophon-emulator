@@ -283,22 +283,26 @@ static void check(const timing *entries, size_t count, measurement how) {
    A NOP is a microsecond is a character here: the Gate Array "gives a 1 MHz
    rate for the AY-3-8912, the CRTC, and clocks the Z80A at 4 MHz" (ch.
    4.4.4), which is why the third NOP is two characters after the first.
-
-   The ASIC's extra microsecond is not here: cpc.c wires a Gate Array
-   whatever the chip is built as, and the head of crtc.h leaves the per-type
-   divergences of this timing out of what it claims. */
+   The two ASICs take the OUT's write a character later, on its 4th
+   microsecond, and the OUTI's on its 5th as the rest do. */
 static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
   static const struct {
     const char *mnemonic;
+    uint8_t type;
     uint8_t opcodes[2];
     uint8_t b; /* OUTI puts B on the bus already decremented, so both address &BD00 */
     uint8_t characters_after_the_fetch;
   } cases[] = {
-      {"OUT (C),C", {0xED, 0x49}, 0xBD, 2}, /* the 3rd microsecond */
-      {"OUTI", {0xED, 0xA3}, 0xBE, 4},      /* and the 5th */
+      {"OUT (C),C", 0, {0xED, 0x49}, 0xBD, 2}, /* the 3rd microsecond */
+      {"OUTI", 0, {0xED, 0xA3}, 0xBE, 4},      /* and the 5th */
+      {"OUT (C),C", 3, {0xED, 0x49}, 0xBD, 3}, /* the 4th, behind an ASIC */
+      {"OUTI", 3, {0xED, 0xA3}, 0xBE, 4},      /* and still the 5th */
+      {"OUT (C),C", 4, {0xED, 0x49}, 0xBD, 3}, {"OUTI", 4, {0xED, 0xA3}, 0xBE, 4},
   };
   for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
-    power_on();
+    memset(ram, 0, sizeof ram);
+    memset(lower_rom, 0, sizeof lower_rom);
+    cpc_init(&cpc, ram, sizeof ram, lower_rom, cases[index].type);
     /* A line wide enough for the characters to be told apart, and then a
        register clear of R0 for the instruction to land in. */
     crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
@@ -329,8 +333,9 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
       continue;
     }
     if (landed - fetch != cases[index].characters_after_the_fetch) {
-      TEST_FAIL("%s reached the CRTC %d characters after its fetch, the Compendium says %d",
-                cases[index].mnemonic, landed - fetch, cases[index].characters_after_the_fetch);
+      TEST_FAIL("%s reached a type %u CRTC %d characters after its fetch, the Compendium says %d",
+                cases[index].mnemonic, cases[index].type, landed - fetch,
+                cases[index].characters_after_the_fetch);
     }
   }
 }
@@ -357,16 +362,17 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
    change of instruction lengths. What comes out is not the chapter's two
    microseconds, though, and the reason is worth having in one place: the
    chip offers a window in which a write can still cancel a line's ending,
-   the board reports a write finishing on the character clock, and only the
-   OUTI's entry lands on that clock — the OUT's falls a quarter later. So
-   the OUT is never rescued where the OUTI is, and the two stand one
-   microsecond apart here on the types that keep one character of window
-   and level on the type that keeps two. Which instruction reaches the
+   the board reports a write finishing on the character clock, and behind a
+   Gate Array only the OUTI's entry lands on that clock — the OUT's falls a
+   quarter later. So there the OUT is never rescued where the OUTI is, and
+   the two stand one microsecond apart on the types that keep one character
+   of window and level on the type that keeps two. Which instruction reaches the
    window is a Z80 and Gate Array fact; the window itself is the chip's.
 
    What still holds of the chapter is the distance between the
-   instructions' own entries, the OUT's on its 3rd microsecond and the
-   OUTI's on its 5th, which the test above this one pins where they fall.
+   instructions' own entries, the OUT's on its 3rd microsecond, its 4th
+   behind an ASIC, and the OUTI's on its 5th, which the test above this one
+   pins where they fall.
    And the relation ch. 13.6 is really about survives whole: a type 1's
    OUTI reaches one placement beyond every other chip's, which is the
    difference the two cross-type assertions below measure.
@@ -379,14 +385,19 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
    at all. This one could not, for as long as it existed, and reported a
    type 1's window as one character wide while the chip gave it two.
 
-   Types 3 and 4 are not walked. Ch. 4.4.4 puts their OUT's entry a
-   microsecond later than the other three's — "an output entry with an
-   OUT(C),R8 occurs on the 3rd NOP for a CRTC equipped with a GATE ARRAY,
-   and on the 4th NOP for an ASIC that emulates a CRTC" — and that
-   microsecond is not here, cpc.c wiring a Gate Array whatever the chip is
-   built as. Rows for them would come out the same as a type 0's and for a
-   reason that is not theirs, so crtc.h's list of what is missing carries
-   it instead.
+   Types 3 and 4 are walked against ch. 13.6.3, whose chronogram takes both
+   instructions' writes on the line's last character: an OUT started at #3C,
+   its write on its 4th microsecond, and an OUTI at #3B, on its 5th. So the
+   two stand one microsecond apart there as they do here, and an OUTI keeps
+   the placement it has on a type 0. What does not come out is the OUT a
+   microsecond earlier than a type 0's, which that chapter beside ch. 13.6.1
+   draws; it is the type 0 OUT's own microsecond above, the one ch. 13.6.1
+   sets at two where this chip stands at one, and it is not asserted here.
+   Nor can the walk see the ASIC's microsecond itself: an OUT taken inside the
+   last character's microsecond and one taken on the next clock, where the
+   line has just wrapped, are both rescued, the second by the take-back
+   window, so the edge comes out the same either way. The test before this
+   comment and the one after it are what pin that microsecond.
 
    The leads are counted in microseconds from the start of the code under
    test and straddle the end of a 64-character line, which falls within
@@ -398,17 +409,25 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
    quarter the board calls the character clock and an OUT (C),r's does not.
    That is a Z80 and Gate Array fact — where each instruction's I/O cycle
    begins against the released WAIT — and it is what decides which of the two
-   can reach the window a chip holds a line's ending open in. */
-static void an_outi_enters_on_the_character_clock_and_an_out_does_not(void) {
+   can reach the window a chip holds a line's ending open in. Behind an ASIC
+   both enter on it, and that is the board's own choice rather than the
+   documentation's: ch. 13.6.3 fixes only the microsecond each lands in, the
+   last OUT in time starting at #3C and the last OUTI at #3B, and taking both
+   on the clock is what gives its one microsecond between them through the
+   window. Ch. 4.4.4's diagram C draws the ASIC's sampling window straddling
+   each edge and names no instant inside it. */
+static void an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic(void) {
   static const struct {
+    uint8_t type;
     uint8_t opcode; /* after the ED prefix */
     uint8_t b;      /* so both reach &BD00 */
     bool on_the_clock;
-  } instructions[] = {{0x49, 0xBD, false}, {0xA3, 0xBE, true}};
+  } instructions[] = {{0, 0x49, 0xBD, false}, {0, 0xA3, 0xBE, true}, {3, 0x49, 0xBD, true},
+                      {3, 0xA3, 0xBE, true},  {4, 0x49, 0xBD, true}, {4, 0xA3, 0xBE, true}};
   for (unsigned index = 0; index < sizeof instructions / sizeof *instructions; index++) {
     memset(ram, 0, sizeof ram);
     memset(lower_rom, 0, sizeof lower_rom);
-    cpc_init(&cpc, ram, sizeof ram, lower_rom, 0);
+    cpc_init(&cpc, ram, sizeof ram, lower_rom, instructions[index].type);
     crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0 selected */
     lower_rom[UNDER_TEST] = 0xED;
     lower_rom[UNDER_TEST + 1] = instructions[index].opcode;
@@ -437,9 +456,9 @@ static const int earliest_placement = 54;
 static const int latest_placement = 70;
 
 static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
-  static const uint8_t types[] = {0, 1, 2};
-  int outi_edge[3] = {-1, -1, -1};
-  int out_edge[3] = {-1, -1, -1};
+  static const uint8_t types[] = {0, 1, 2, 3, 4};
+  int outi_edge[5] = {-1, -1, -1, -1, -1};
+  int out_edge[5] = {-1, -1, -1, -1, -1};
   for (size_t index = 0; index < sizeof types / sizeof types[0]; index++) {
     uint8_t type = types[index];
     int edges[2] = {-1, -1};
@@ -506,9 +525,10 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
     /* One microsecond, not the chapter's two: the chip offers the window and
        the Z80 decides which instruction reaches it, the OUTI's entry landing
        on the character clock the board reports and the OUT's a quarter
-       later, so the OUT is never rescued where the OUTI is. The distance
-       between the instructions' own entries is untouched and the test above
-       this one pins it. */
+       later, so behind a Gate Array the OUT is never rescued where the OUTI
+       is. The distance between the instructions' own entries is untouched
+       and the test above this one pins it. Behind an ASIC one microsecond is the chapter's own
+       (ch. 13.6.3), both entries reaching the clock there. */
     TEST_EQUAL(edges[0] - edges[1], type == 1 ? 0 : 1);
     out_edge[index] = edges[0];
     outi_edge[index] = edges[1];
@@ -522,6 +542,11 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
   TEST_EQUAL(out_edge[1], out_edge[0]);
   TEST_EQUAL(outi_edge[2], outi_edge[0]);
   TEST_EQUAL(out_edge[2], out_edge[0]);
+  /* And ch. 13.6.3 beside ch. 13.6.1: behind an ASIC the OUTI's placements
+     are a type 0's. */
+  TEST_EQUAL(outi_edge[3], outi_edge[0]);
+  TEST_EQUAL(outi_edge[4], outi_edge[0]);
+  TEST_EQUAL(out_edge[4], out_edge[3]);
 }
 
 /* How long an interrupt costs, which no duration in the tables above covers.
@@ -662,7 +687,7 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
   TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
-  TEST_RUN(an_outi_enters_on_the_character_clock_and_an_out_does_not);
+  TEST_RUN(an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic);
   TEST_RUN(an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);

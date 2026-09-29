@@ -113,6 +113,31 @@ static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
   return crtc_access(&cpc->crtc, pins);
 }
 
+/* Whether the CRTC takes a write on the first character clock its I/O cycle
+   spans rather than where the cycle begins, which is how the two ASICs that
+   emulate one are clocked: "an output entry with an 'OUT(C),R8' occurs on the
+   3rd NOP for a CRTC equipped with a GATE ARRAY, and on the 4th NOP for an
+   ASIC that emulates a CRTC (CRTC's 3 and 4)", the ASICs not clocking the
+   chip "exactly like the GATE ARRAY", while "the update of a CRTC register
+   takes place on the 5th µsec of the OUTI instruction, regardless of the type
+   of CRTC" (Compendium ch. 4.4.4). An OUT(C),r holds its I/O cycle across the
+   next character clock and is taken there, a microsecond later; an OUTI's
+   cycle begins on a character clock and is taken where it begins, as it is on
+   a Gate Array. The chronograms fix the microsecond each lands in: ch. 13.6.3
+   has the last OUT in time start at #3C and the last OUTI at #3B, one
+   microsecond apart, both writing on the line's last character, and ch.
+   13.6.1 puts a type 0's OUTI at #3B as well. They draw at the grain of a
+   microsecond and say nothing finer. Taking both writes on the clock is the
+   board's own choice, and it agrees with those two placements through the
+   window this chip keeps a line's end in. Ch. 4.4.4's diagram C draws the
+   ASIC's sampling window straddling each edge and names no instant inside
+   it. A read of one of the CRTC's write ports, which writes it (io_read), is
+   taken where it falls, as behind a Gate Array: the chapter speaks of OUTs,
+   and nothing grades it. */
+static bool crtc_takes_writes_on_its_clock(const cpc_t *cpc) {
+  return cpc->crtc.type == 3 || cpc->crtc.type == 4;
+}
+
 /* Devices decode single address bits, so one access can reach several at
    once; every test in the two functions below is independent, and their
    order is the address lines' and carries no meaning — "I/O port
@@ -130,7 +155,11 @@ static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
     }
   }
   if ((address & 0x4000) == 0) {
-    crtc_bus(cpc, address, data);
+    if (crtc_takes_writes_on_its_clock(cpc)) {
+      cpc->crtc_write_awaits_the_clock = true;
+    } else {
+      crtc_bus(cpc, address, data);
+    }
   }
   if ((address & 0x2000) == 0) {
     cpc->upper_rom_number = data;
@@ -338,9 +367,21 @@ uint64_t cpc_tick(cpc_t *cpc) {
     if ((before & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
       io_write(cpc, z80_address(pins), z80_data(pins));
     }
+    if (cpc->crtc_write_awaits_the_clock && gate_array_character_clock(&cpc->gate_array)) {
+      cpc->crtc_write_awaits_the_clock = false;
+      crtc_bus(cpc, z80_address(pins), z80_data(pins));
+    }
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
     bool first_tick = (before & (Z80_IORQ | Z80_RD)) != (Z80_IORQ | Z80_RD);
     pins = z80_set_data(pins, io_read(cpc, z80_address(pins), first_tick));
+  }
+  /* A write whose cycle ended before any clock met it is never taken. The Gate
+     Array's WAIT stretches every I/O cycle across one, so only a processor
+     reset under it ends one early — a snapshot loaded mid-instruction — and
+     the write it leaves waiting must not be handed to whatever the next I/O
+     cycle addresses. */
+  if ((pins & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
+    cpc->crtc_write_awaits_the_clock = false;
   }
   /* The Gate Array hears the acknowledge where M1 ends, and drops INT and
      kills R52's bit 5 there: "the end of the M1 signal during an interrupt

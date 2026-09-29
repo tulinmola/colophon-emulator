@@ -392,6 +392,23 @@ static uint8_t vsync_lines(const crtc_t *crtc) {
   return (uint8_t)(crtc->registers[3] >> 4);
 }
 
+/* Whether this type decides the frame's end, and the padding after it, where
+   the line ends rather than at its head. The two ASICs do: "the modification
+   of register 4 is considered immediately at the end of the line", so that
+   "if R4 is updated with a value less than C4, then there is overflow of the
+   C4 counter" (ch. 12.5), and an R9 written at or under C9 on a frame's last
+   row ends the frame on the next line, ch. 10.3.4.1's table giving the next
+   line 0 in both C9 and C4 whatever C9 the write found. The padding follows
+   from the same moment: "R5 management is considered on each C0 position" on
+   types 1 to 4 (ch. 11.4.1). Type 0 decides both while C0 is 0 or 1 and holds
+   them, turns a last line unmade at C0=1 into an adjustment, and gives R5 a
+   deadline of its own (ch. 10.3.1.2, 12.2, 13.2) — its own chapters'
+   exceptions, which the ASICs' do not share. Types 1 and 2 are left a type
+   0's, ch. 11.4.1 notwithstanding. */
+static bool takes_the_frame_end_where_the_line_ends(const crtc_t *crtc) {
+  return crtc->type == 3 || crtc->type == 4;
+}
+
 /* A line that never reaches C0=1 leaves C9's management disabled, and then
    "all of the CRTC counters are frozen as long as R0=0" (ch. 13.2.1) — the
    VSYNC's line counter with them, which is why a VSYNC begun there "is not
@@ -469,6 +486,17 @@ static void enter_scanline(crtc_t *crtc) {
     }
   }
 
+  if (takes_the_frame_end_where_the_line_ends(crtc) && !crtc->vertical_adjustment_in_progress) {
+    bool row_ends = row_is_on_its_last_scanline(crtc);
+    crtc->last_line = crtc->c4 == r[4] && row_ends;
+    /* The padding the head of the line armed by default is asked again of R5
+       as it now stands, and of the interlace line as C0=R0 answered it, which
+       is where ch. 11.9 puts that question on every type. R5 admitting a row
+       whose C4 has gone past R4 is a type 0's rule (ch. 11.2.2), carried
+       over, the ASICs' chapters saying nothing of it. */
+    crtc->vertical_adjustment_armed = row_ends && ((crtc->last_line && crtc->interlace_line_owed) ||
+                                                   (r[5] != 0 && crtc->c4 >= r[4]));
+  }
   /* The first line a type 2 turned into an additional line ends as that line
      ends a frame, and a new line 0 follows it. An adjustment armed on that
      same line comes first, which is our ordering and nothing grades. */
@@ -742,7 +770,7 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      and the Compendium does not say whether the chip does: it names this
      comparison only where a row ends and where VMA' is captured, and one
      comparator makes it so everywhere. */
-  if (crtc->c0 == 2 && crtc->last_line &&
+  if (crtc->c0 == 2 && crtc->last_line && !takes_the_frame_end_where_the_line_ends(crtc) &&
       (crtc->c4 != r[4] || !row_is_on_its_last_scanline(crtc))) {
     /* "The current line becomes the 'first' adjustment line" (ch. 10.3.1.2),
        and a line already begun is past the disarm below (ch. 13.2.6). The
@@ -1609,14 +1637,17 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            that stands behind it: its "OUTI ON C0=0,R0=0" writes the width
            seven microseconds before the OUTI's write lands, and reads that
            write landing on C0=0, which a counter spending those microseconds
-           climbing cannot do. The disc grades a type 0 and a type 1: the
-           type 0's line came right on this and the type 1's is still a
-           microsecond over, which is the one line that record has left. The
-           other three take it with nothing outside this repository to say
-           so. Where a line's end is standing, the take-back below outranks
-           this: it restores the character the ending was taken on and the
-           counter goes on from there, the premature comparison of ch. 13.3's
-           third note being made against a width of nothing like any other. */
+           climbing cannot do. The disc grades it on the type 0, 1, 2 and 4
+           records: the type 0's and type 2's lines came right on this, the
+           type 1's is still a microsecond over, which is the one line that
+           record has left, and the type 4's is wrong by a counter overflowed
+           in the take-back below, the board's microsecond moving its R0=0
+           write onto the clock a line wraps on. The type 3's
+           record never grades it, that group not naming the machine there.
+           Where a line's end is standing, the take-back below outranks this:
+           it restores the character the ending was taken on and the counter
+           goes on from there, the premature comparison of ch. 13.3's third
+           note being made against a width of nothing like any other. */
         crtc->c0 = 0;
       }
       if (crtc->address_register == 0 && crtc->a_line_end_is_kept &&

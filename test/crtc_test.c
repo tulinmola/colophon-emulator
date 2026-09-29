@@ -426,6 +426,150 @@ static void the_two_asics_raise_a_sync_only_at_a_frames_corner(void) {
   }
 }
 
+/* The two ASICs decide a frame's end where the line ends, from R4 and R9 as
+   they then stand. "The modification of register 4 is considered immediately
+   at the end of the line": "if R4 is updated with a value less than C4, then
+   there is overflow of the C4 counter", and "if R4 is updated with the value
+   of C4 ... if we were on the last line (C9=R9), then C9 goes to 0, C4=0"
+   (ch. 12.5). R9 goes the same way, ch. 10.3.4.1's table giving the next
+   line 0 in both C9 and C4 for an R9 of 0 written on any line of a frame's
+   last row.
+   A type 0 decides while C0 is 0 or 1 and holds it: "if R4 and/or R9 are
+   modified mid-line when C0 > 1 while the last line state is true ... this
+   does not change C4 and C9, which will remain at 0" (ch. 12.2), and the same
+   table gives it "C9=C9+1 (4), unmodified" for the R9 case. The writes land
+   at C0=40, past a type 0's decision and inside the line, but for one at C0=1:
+   a type 0 spends a last line unmade there on an adjustment, which is its own
+   chapters' exception (ch. 10.3.1.2, 12.2), and an ASIC takes the overflow
+   ch. 12.5 gives it.
+
+   Shaker's E (4) grades the first case twelve times on each ASIC record, and
+   the program behind it was read to learn what it grades: the VSYNC an R7 of
+   2 asks for, on the line after the write, which only a C4 gone on to 2 can
+   raise. */
+static void the_two_asics_take_the_frames_end_where_the_line_ends(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t character;        /* C0 the write is made on */
+    uint8_t r4;               /* R4 as the row finds it */
+    uint8_t row;              /* C4 where the write is made */
+    uint8_t line;             /* and C9 */
+    uint8_t register_written; /* R4 or R9 */
+    uint8_t value;            /* and what with */
+    uint8_t next_c4;          /* where the line after stands */
+    uint8_t next_c9;
+    bool row_ends_the_frame; /* and, where given, where the row's end goes */
+  } cases[] = {
+      /* R4 under C4 on the frame's last line: overflow, or the frame held. */
+      {3, 40, 1, 1, 7, 4, 0, 2, 0, false},
+      {4, 40, 1, 1, 7, 4, 0, 2, 0, false},
+      {0, 40, 1, 1, 7, 4, 0, 0, 0, false},
+      /* The same write at C0=1, which a type 0 would spend on an adjustment. */
+      {3, 1, 1, 1, 7, 4, 0, 2, 0, false},
+      /* R4 given C4's value on a row's last line: the frame ends there. */
+      {3, 40, 10, 5, 7, 4, 5, 0, 0, false},
+      {4, 40, 10, 5, 7, 4, 5, 0, 0, false},
+      {0, 40, 10, 5, 7, 4, 5, 6, 0, false},
+      /* And on a line before it: "C9=C9+1, C4 will go to 0 when C9 will
+         return to 0". */
+      {3, 40, 10, 5, 3, 4, 5, 5, 4, true},
+      /* R9 of 0 on line 3 of the frame's last row, ch. 10.3.4.1's case 4. */
+      {3, 40, 5, 5, 3, 9, 0, 0, 0, false},
+      {4, 40, 5, 5, 3, 9, 0, 0, 0, false},
+      {0, 40, 5, 5, 3, 9, 0, 5, 4, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, cases[index].r4);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == cases[index].row &&
+               crtc.c9 == cases[index].line);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, cases[index].next_c9);
+    if (cases[index].row_ends_the_frame) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c9 == 0 && crtc.c4 != cases[index].row);
+      TEST_EQUAL(crtc.c4, 0);
+    }
+  }
+}
+
+/* And the padding after it: an R5 asked for late in a frame's last line is
+   taken on the two ASICs and not on a type 0. "R5 management is considered on
+   each C0 position" on types 1 to 4 (ch. 11.4.1), where of a type 0 "the R5>0
+   update after position C0>2 on the last line of the frame is not considered
+   because its evaluation is completed" (ch. 11.4.2). Three lines asked for at
+   C0=40: the ASICs pad the frame by three, a type 0 begins the next. */
+static void the_two_asics_take_r5_on_any_character_of_a_last_line(void) {
+  static const struct {
+    uint8_t type;
+    unsigned lines_before_the_next_frame;
+  } cases[] = {{0, 0}, {3, 3}, {4, 3}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 10);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 40 && crtc.c4 == 10 && crtc.c9 == 7);
+    write_register(5, 3);
+    unsigned lines = 0;
+    TICK_UNTIL(crtc.c0 == 0);
+    while (!(crtc.c4 == 0 && crtc.c9 == 0) && lines < 40) {
+      lines++;
+      TICK_UNTIL(crtc.c0 == 1);
+      TICK_UNTIL(crtc.c0 == 0);
+    }
+    TEST_EQUAL(lines, cases[index].lines_before_the_next_frame);
+  }
+}
+
+/* The interlace line is padding too, and the two ASICs still add it when the
+   line's end asks whether padding follows: "the additional line is added at the end of
+   the frame (after the R5 lines if necessary) if one of the two 'Interlace'
+   modes is activated (R8=3 or 1) and if ParityFrame is even" (ch. 19.6.4).
+   With the sync mode alone, so that no row is halved, a frame of 39 rows of
+   eight comes out 313 lines on its even field and 312 on its odd one. */
+static void the_two_asics_still_add_the_interlace_line_to_an_even_frame(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 1);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    for (int frame = 0; frame < 4; frame++) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+      bool even = !crtc.parity_frame;
+      long lines = 0;
+      do {
+        TICK_UNTIL(crtc.c0 == 1);
+        TICK_UNTIL(crtc.c0 == 0);
+        lines++;
+      } while (!(crtc.c4 == 0 && crtc.c9 == 0) && lines < 400);
+      TEST_EQUAL(lines, even ? 313 : 312);
+    }
+  }
+}
+
 /* A run opened with the row counter already past R4 is the neighbouring case
    to the one above, and it is where the comparison could most easily have been
    let loose: on the two ASICs that run's count is never zeroed at its opening,
@@ -2200,10 +2344,11 @@ static void a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again(void) {
    C0=0 is this chip's own and Shaker's B (6) is all that stands behind it:
    its "OUTI ON C0=0,R0=0" writes the width seven microseconds before the
    OUTI's write lands, and reads that write landing on C0=0, which a counter
-   spending those microseconds climbing cannot do. The disc grades a type 0
-   and a type 1 — the type 0's line came right on this and the type 1's is
-   still a microsecond over — and the other three are walked here on nothing
-   but that.
+   spending those microseconds climbing cannot do. The disc grades it on the
+   type 0, 1, 2 and 4 records — right on the first and third, a microsecond
+   over on the type 1's, and overflowed on the type 4's, the board's
+   microsecond moving its R0=0 write onto the clock a line wraps on — and the
+   type 3 is walked here on nothing but that.
 
    What it must not become is the plain overrun of a counter that can no
    longer meet its width, which leaves it climbing the eight bits it has and
@@ -4128,6 +4273,32 @@ static void a_narrow_line_draws_the_adjustment_it_cannot_disarm(void) {
   }
 }
 
+/* Which is a type 0's and not the two ASICs': of those "R0 accepts all values
+   without causing any problems for other counters" (ch. 13.5), and they ask
+   for padding where a line ends, which a line of two characters reaches like
+   any other. So where a type 0 alternates a frame's line with a line of
+   padding above, these two give a frame of one line after another, C4 never
+   leaving 0. */
+static void the_two_asics_take_no_padding_from_a_narrow_line(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 1);
+    write_register(1, 40);
+    write_register(3, 0x8E);
+    write_register(4, 0);
+    write_register(5, 0);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 0);
+    crtc_tick(&crtc); /* the priming tick draws no character */
+    for (int line = 0; line < 6; line++) {
+      run_characters(2);
+      TEST_EQUAL(crtc.c4, 0);
+      TEST_EQUAL(crtc.c9, 0);
+    }
+  }
+}
+
 /* And the ceasing after one line belongs to the R0=1 case alone. Ch. 13.2.6
    gives a line of one character the other ending: the run "will remain so
    when C0 can once again exceed 1. It is then R5 which controls the end of
@@ -5718,6 +5889,9 @@ int main(void) {
   TEST_RUN(an_r5_under_the_count_ends_the_padding_on_the_asics);
   TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_every_type);
   TEST_RUN(the_two_asics_raise_a_sync_only_at_a_frames_corner);
+  TEST_RUN(the_two_asics_take_the_frames_end_where_the_line_ends);
+  TEST_RUN(the_two_asics_take_r5_on_any_character_of_a_last_line);
+  TEST_RUN(the_two_asics_still_add_the_interlace_line_to_an_even_frame);
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
   TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);
@@ -5790,6 +5964,7 @@ int main(void) {
   TEST_RUN(a_line_of_three_characters_still_reaches_its_disarm);
   TEST_RUN(a_freeze_on_a_last_line_begins_an_adjustment);
   TEST_RUN(a_narrow_line_draws_the_adjustment_it_cannot_disarm);
+  TEST_RUN(the_two_asics_take_no_padding_from_a_narrow_line);
   TEST_RUN(a_run_begun_under_a_stopped_picture_ends_on_r5);
   TEST_RUN(two_hsyncs_cannot_be_contiguous);
   TEST_RUN(an_r3_written_in_time_carries_the_hsync_on);

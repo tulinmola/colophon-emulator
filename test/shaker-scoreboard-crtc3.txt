@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 61 groups run, 25 left to another CRTC type.
-5 of them printed self-graded lines, 29 in all: 22 agree with Longshot's
-silicon and 7 do not. That is 76% of what this reader can score, and no
-measure at all of the other 56 groups.
+4 of them printed self-graded lines, 23 in all: 22 agree with Longshot's
+silicon and 1 do not. That is 96% of what this reader can score, and no
+measure at all of the other 57 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -65,7 +65,7 @@ A (1)       UPDATE VRAM VS CRTC (79 TST)                                        
 A (2)       SKEW DISP ON R0 RUPTURE (4 TST)                                                  recorded, ungraded
 A (3)       CRTC 2 RVMB (22 TST)                                                             another CRTC type's
 A (4)       UPDATE CRTC R0 TIMING (17 TST)                                                   recorded, ungraded
-A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded, cut off at the cap
+A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded
 A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded
 A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded
 A (8)       GATE ARRAY PIXELISATION                                                          recorded, ungraded
@@ -91,9 +91,9 @@ B (7)       CRTC 0 BUG OVF C4                                                   
 B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded
 B (O)       CRTC 1-A OR 1-B?                                                                 another CRTC type's
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded
-B (F0)      BOUNGA!                                                                          recorded, ungraded
+B (F0)      BOUNGA!                                                                          recorded, ungraded, cut off at the cap
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
-B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, cut off at the cap
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
 B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
 B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
@@ -165,13 +165,7 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   another CRTC type's
-E (4)       CRTC 3/4 : C4 OVERFLOW                                                           6 graded, 6 wrong
-    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
-    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
-    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
-    ! C0=#3C > C4 OVF=00 (OVF IF 00) WRONG
-    ! C0=#38 > C4 OVF=00 (OVF IF 00) WRONG
-    ! C0=#38 > C4 OVF=00 (OVF IF 00) WRONG
+E (4)       CRTC 3/4 : C4 OVERFLOW                                                           recorded, ungraded
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
 E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        another CRTC type's
 E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   another CRTC type's
