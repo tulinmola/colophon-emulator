@@ -319,7 +319,12 @@
  * draws for those two. The *Not yet* list below carries what the shift leaves
  * unsettled. A character was drawn in that second microsecond and it counts:
  * the counter goes on from what was drawn and not from the ending, or the line
- * comes out a microsecond too long.
+ * comes out a microsecond too long. On a line of one character that second
+ * microsecond is the next line's end, and a type 1's write reaches past it to
+ * the end before, which is why the chip keeps two. Ch. 13.6.2 draws the
+ * "Previous R0=0" line with a type 1's OUTI going on a character further than
+ * ch. 13.6.1 draws a type 0's or 2's at both placements they give, and B (6)'s
+ * "OUTI ON C0=0,R0=0" asks the same of the type 1 record.
  *
  * The same character-clock edge reaches another comparison, the C4/R7 equality
  * that starts a VSYNC, which a type 1 reads on the character a write lands on
@@ -339,12 +344,17 @@
  * where a type 1's write reached the second. A sync begun on them is begun, a
  * byte fetched from the next line's start is fetched. The comparisons those
  * characters would have made are the other. Undoing what the ending did is
- * not making them, and all but one are gone. The one made is ch. 13.2.4's C9
+ * not making them, and all but two are gone. One made is ch. 13.2.4's C9
  * processing management, which "would in principle be activated on C0=1 if C0
- * succeeded in reaching this value" and which C0 now stands on, a line of one
- * character being the only line that has not already been given it back. The
- * VSYNC's own authorization is not treated the same way, and that is an
- * asymmetry rather than a finding: it is raised at C0=2 by a step of exactly
+ * succeeded in reaching this value" and which C0 now stands on, or stood on
+ * for the character the ending was taken on, a line of one character being
+ * the only line that has not already been given it back. The other is a
+ * type 1's comparison of the width on the character drawn since, "C0 is
+ * compared with the new value of R0" (ch. 13.3, note 3): where the new width
+ * names the character the ending was taken on, the line ends there and the
+ * character drawn since is the next line's head, decided as any head is. The
+ * VSYNC's own authorization is not treated as the C9 management is, and that is
+ * an asymmetry rather than a finding: it is raised at C0=2 by a step of exactly
  * the same kind (ch. 13.2.2), a character that never asks for it costs the
  * following line its VSYNC, and on a line of two characters — a width a
  * program building a screen out of invisible lines reaches for — that loses a
@@ -356,9 +366,8 @@
  * displayed where a chip that had been that wide all along borders it.
  * Shaker's B (6) grades the window at both its widths and neither cost: its
  * "4TH uSec ON C0=0" comes right on the type 0, type 1 and type 2 records
- * with the first character,
- * its "5TH uSec ON C0=0" for a type 1 with the second, and its "R7 LAST
- * CHANCE 4TH uSec" with the other comparison.
+ * with the first character, its "5TH uSec ON C0=0" for a type 1 with the
+ * second, and its "R7 LAST CHANCE 4TH uSec" with the other comparison.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — the character its line ending is decided on
@@ -366,9 +375,8 @@
  * above says what that costs, a width of nothing putting the counter at nothing
  * (the chapters put that only from a counter already home — "when R0 is 0 and
  * C0=0, then C0 remains at 0", ch. 13.2.6 — so the reach past C0=0 is ours on
- * Shaker's B (6) alone, which grades it on four of the five types, agrees on
- * the type 0, type 2 and type 4 records, and still wants a microsecond less
- * from the type 1; it is not the overflow a width narrowed under a running
+ * Shaker's B (6) alone, which grades it on four of the five types and agrees
+ * on all four of them; it is not the overflow a width narrowed under a running
  * counter gives), its register widths, its VMA/VMA' reload rules, the counter
  * widths a program can overrun, the last line decided while C0 is 0 or 1 and
  * made at C0=2 by a write that lands there, the vertical adjustment a type 0
@@ -749,9 +757,13 @@ typedef struct crtc_t {
   bool has_drawn_a_character;
   /* No type has quite finished deciding a line's end on the clock that took
      it, so a write landing there can still cancel the wrap; a type 1 keeps
-     the clock after that one as well (ch. 13.3, note 3). */
-  struct crtc_t *line_end_room;
+     the clock after that one as well (ch. 13.3, note 3). Two rooms, because
+     on a line of one character a type 1's write reaches the end taken a
+     character before the one standing: the first holds the end just taken,
+     the second the one before it. */
+  struct crtc_t *line_end_rooms;
   bool a_line_end_is_kept;
+  bool the_line_end_before_is_kept;
   /* And whether a character has been drawn since it ended, which a type 1
      lets happen: its window is two characters wide, and the counter goes on
      from what was drawn rather than from the ending (ch. 13.3, note 3). */
@@ -833,14 +845,15 @@ void crtc_init(crtc_t *crtc, uint8_t type);
 /* Advance one character clock. Returns the output pins. */
 uint64_t crtc_tick(crtc_t *crtc);
 
-/* Somewhere for the chip to keep the character boundary it may have to take
- * back. No type has quite finished deciding a line's end on the clock that
- * took it, so a write arriving there can still cancel the wrap, and a type 1
- * keeps the clock after that one as well; the chip keeps what it stood on
- * before the wrap, and this is where. A chip given none never takes a wrap
- * back, which is no type's behaviour here and what a host that cannot time
- * its accesses gets. */
-void crtc_give_line_end_room(crtc_t *crtc, crtc_t *room);
+/* Somewhere for the chip to keep the character boundaries it may have to take
+ * back: two chips' worth, rooms[0] and rooms[1]. No type has quite finished
+ * deciding a line's end on the clock that took it, so a write arriving there
+ * can still cancel the wrap, and a type 1 keeps the clock after that one as
+ * well — which on a line of one character is the clock of the next end, so
+ * the chip keeps what it stood on before each of the last two wraps. A chip
+ * given none never takes a wrap back, which is no type's behaviour here and
+ * what a host that cannot time its accesses gets. */
+void crtc_give_line_end_rooms(crtc_t *crtc, crtc_t rooms[2]);
 
 /* One bus transaction: CS, RS, RW and the data lanes in; the data lanes out
  * when the chip drives them. Where it does not — a read this type never

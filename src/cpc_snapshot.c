@@ -153,6 +153,7 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
      clock, registers and all. */
   cpc->crtc.r3_written_for_this_character = false;
   cpc->crtc.a_line_end_is_kept = false;
+  cpc->crtc.the_line_end_before_is_kept = false;
 
   /* The control word first, because setting it clears the output latches.
      The format stores inputs for A and B, outputs for C. */

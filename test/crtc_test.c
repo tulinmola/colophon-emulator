@@ -1467,9 +1467,24 @@ static void a_write_on_the_character_clock_takes_a_line_end_back(void) {
          the same: the comparison it is put to is the one that just held. */
       {1, 49, 49, true, 0, {0, 1, 2}},
       /* The chapter's "Previous R0=0" line, given a width to run to, where
-         every character is an ending and the room is re-taken on each. */
-      {1, 0, 16, true, 0, {1, 2, 3}},
+         every character is an ending. A type 1's write reaches the end a
+         character before the one standing, and ch. 13.6.2 draws its OUTI
+         going on a character further than ch. 13.6.1 draws a type 0's or
+         2's, at both placements it gives; the answer does not turn on which
+         character of the run the write lands on. */
+      {1, 0, 16, true, 0, {2, 3, 4}},
+      {1, 0, 16, true, 1, {2, 3, 4}},
       {0, 0, 16, true, 0, {1, 2, 3}},
+      {0, 0, 16, true, 1, {1, 2, 3}},
+      {2, 0, 16, true, 0, {1, 2, 3}},
+      /* And given a width of 1, which names the character the end before was
+         taken on: a type 1 makes that comparison on the character drawn
+         since, and the line is two characters wide on every type. */
+      {1, 0, 1, true, 0, {0, 1, 0}},
+      {1, 0, 1, true, 1, {0, 1, 0}},
+      {0, 0, 1, true, 0, {1, 0, 1}},
+      /* The same comparison on a wide line, in a type 1's second character. */
+      {1, 49, 50, true, 1, {0, 1, 2}},
       /* And the same write a quarter late, which no type takes. */
       {1, 0, 16, false, 0, {0, 1, 2}},
       /* A width of nothing written where a line's end is standing: the
@@ -1488,10 +1503,10 @@ static void a_write_on_the_character_clock_takes_a_line_end_back(void) {
          whatever C0 stood on, not a return to the head of a line. */
       {1, 1, 20, true, 0, {2, 3, 4}},
   };
-  static crtc_t line_end_room;
+  static crtc_t line_end_rooms[2];
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, cases[index].type);
-    crtc_give_line_end_room(&crtc, &line_end_room);
+    crtc_give_line_end_rooms(&crtc, line_end_rooms);
     write_register(0, cases[index].width);
     write_register(4, 38);
     write_register(9, 7);
@@ -1530,11 +1545,11 @@ static void a_write_on_the_character_clock_takes_a_line_end_back(void) {
 }
 
 /* And the two things that walk cannot see. A line's end goes stale: the chip
-   takes back the end it has just taken and no other, so a write landing four
-   characters later finds nothing to undo. And the line of one character the
-   rescue lets go is counted again: while R0 was 0 "C9 can no longer count"
-   (ch. 13.2.1), and the character the line starts again on is the one that
-   gives the management back.
+   takes back the end it has just taken, or on a type 1 the one before it, and
+   no other, so a write landing four characters later finds nothing to undo.
+   And the line of one character the rescue lets go is counted again: while R0
+   was 0 "C9 can no longer count" (ch. 13.2.1), and the character the line
+   starts again on is the one that gives the management back.
 
    That freeze is type 0's in the documentation and every type's here. Ch.
    13.3 and ch. 13.5 deny it of the rest in as many words — "if R0 is 0, then
@@ -1544,10 +1559,10 @@ static void a_write_on_the_character_clock_takes_a_line_end_back(void) {
    CRTC 0 R0=0" stopped settling, and Batman Forever on a type 1 moved 866
    frames from its twenty-fifth. So the freeze stays, and what it is standing
    in for is declared in crtc.h. */
-static void a_line_end_taken_back_is_the_one_just_taken(void) {
-  static crtc_t line_end_room;
+static void only_the_latest_line_ends_are_taken_back(void) {
+  static crtc_t line_end_rooms[2];
   crtc_init(&crtc, 1);
-  crtc_give_line_end_room(&crtc, &line_end_room);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
   write_register(0, 49);
   write_register(4, 38);
   write_register(9, 7);
@@ -1567,41 +1582,86 @@ static void a_line_end_taken_back_is_the_one_just_taken(void) {
   crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
   TEST_EQUAL(crtc.c0, 4u);
 
+  /* A type 1 goes on a character further, from the end before the one
+     standing, and the character it passes C0=1 on was drawn all the same. */
+  static const struct {
+    uint8_t type;
+    int ticks;            /* how far into the frozen line the write lands */
+    uint8_t goes_on_from; /* the character the line goes on from */
+    uint8_t c9;           /* and the row's line it goes on in */
+  } frozen[] = {
+      {0, 8, 1, 1},
+      {1, 8, 2, 1},
+      /* One character after the only end that counted: the end a type 1
+         reaches is that one, so the count it made is taken back with it. */
+      {0, 3, 1, 1},
+      {1, 3, 2, 0},
+  };
+  for (unsigned index = 0; index < sizeof frozen / sizeof *frozen; index++) {
+    crtc_init(&crtc, frozen[index].type);
+    crtc_give_line_end_rooms(&crtc, line_end_rooms);
+    write_register(0, 0);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (int character = 0; character < frozen[index].ticks; character++) {
+      crtc_tick(&crtc);
+    }
+    /* One line's end counted before the freeze shut, and none after it: the
+       management stands at power-on and is withdrawn by the first end that
+       finds C0 unable to reach 1. */
+    TEST_EQUAL(crtc.c9, 1u);
+    uint16_t line_start = crtc.vma;
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 3));
+    TEST_EQUAL(crtc.c0, frozen[index].goes_on_from);
+    TEST_EQUAL(crtc.c9, frozen[index].c9);
+    /* The address walked with the counter through every character drawn. */
+    TEST_EQUAL(crtc.vma - line_start, frozen[index].goes_on_from);
+    /* The first line of its own again is where the management tells: given
+       back on the character C0 names 1, the row moves on at that line's end;
+       withheld, it waits for the line after it. */
+    for (uint8_t character = frozen[index].goes_on_from; character <= 3; character++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 0u);
+    TEST_EQUAL(crtc.c9, (uint8_t)(frozen[index].c9 + 1));
+  }
+
+  /* And the end before goes stale as the end just taken does: a line of one
+     character given a width off the clock ends no more, and a write on the
+     clock four characters on finds nothing of it to take back. */
   crtc_init(&crtc, 1);
-  crtc_give_line_end_room(&crtc, &line_end_room);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
   write_register(0, 0);
   write_register(4, 38);
   write_register(9, 7);
   for (int character = 0; character < 8; character++) {
     crtc_tick(&crtc);
   }
-  /* One line's end counted before the freeze shut, and none of the seven
-     after it: the management stands at power-on and is withdrawn by the
-     first end that finds C0 unable to reach 1. */
-  uint8_t held_while_frozen = crtc.c9;
-  TEST_EQUAL(held_while_frozen, 1u);
-  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
-  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 3));
-  TEST_EQUAL(crtc.c0, 1u);
-  TEST_EQUAL(crtc.c9, held_while_frozen);
-  /* The first line of its own again is where the management tells: given
-     back on the character C0 names 1, the row moves on at that line's end;
-     withheld, it waits for the line after it. */
-  for (int character = 0; character < 3; character++) {
+  write_register(0, 20);
+  for (int character = 0; character < 4; character++) {
     crtc_tick(&crtc);
   }
-  TEST_EQUAL(crtc.c0, 0u);
-  TEST_EQUAL(crtc.c9, (uint8_t)(held_while_frozen + 1));
+  TEST_EQUAL(crtc.c0, 4u);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 30));
+  TEST_EQUAL(crtc.c0, 4u);
+  /* Nor does it come back with the next end the chip takes: the line of 30
+     runs to its own, and a write there takes back that end and no older. */
+  TICK_UNTIL(crtc.c0 == 0);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 40));
+  TEST_EQUAL(crtc.c0, 31u);
 }
 
 /* What "the line that had ended did not end" is worth as a whole. A chip
-   whose R0 was wide enough that the line never ended is the oracle: walk one
-   of those beside a chip whose narrow line does end, hand the narrow one the
-   wide width on the character clock, and from that character the two are the
-   same machine. Every counter the ending moved has to come back for that to
-   hold — the address, the row, the scanline within it, the HSYNC's own count
-   — and the sync is laid across the boundary on purpose, beginning before it
-   and ending after, because a sync is the one thing whose count the ending
+   given the width from the start is the oracle: walk one of those beside a
+   chip whose narrow line does end, hand the narrow one that width on the
+   character clock, and from that character the two are the same machine.
+   Every counter the ending moved has to come back for that to hold — the
+   address, the row, the scanline within it, the HSYNC's own count — and the
+   sync is laid across the boundary on purpose, beginning before it and
+   ending after, because a sync is the one thing whose count the ending
    advances and whose comparison it does not. The pins are what the
    comparison is made on: they carry the address, the raster address, both
    syncs and the display, and a frame of them is more than enough ground for
@@ -1611,25 +1671,32 @@ static void a_line_end_taken_back_is_the_one_just_taken(void) {
    type's own state out of the comparison: in the interlace video mode the
    parities, the line a frame is owed and the raster address the count is
    read up to are all live, and all of them are the ending's to move and the
-   rescue's to put back (ch. 19.5.3, 19.8.2). */
-static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t type, uint8_t r8,
-                                                               unsigned characters_late) {
-  static crtc_t never_ended;
-  static crtc_t line_end_room[2];
+   rescue's to put back (ch. 19.5.3, 19.8.2).
+
+   The width handed over is the oracle's own. At 200 its line never ends; at
+   50 it ends a character after the narrow one did, which is where a type 1's
+   write in its second character finds the new width naming the character the
+   ending was taken on, and the line begun there has to be the oracle's line
+   in every counter a line's head sets. */
+static void walk_a_taken_back_line_beside_its_oracle(uint8_t type, uint8_t r8,
+                                                     unsigned characters_late, uint8_t width) {
+  static crtc_t oracle;
+  static crtc_t line_end_rooms[2][2];
   static crtc_t ended;
   const uint8_t registers[] = {1, 40, 48, 0x26, 5, 2, 3, 4, r8, 3};
-  crtc_t *chips[2] = {&never_ended, &ended};
+  crtc_t *chips[2] = {&oracle, &ended};
   for (int which = 0; which < 2; which++) {
     crtc_init(chips[which], type);
-    crtc_give_line_end_room(chips[which], &line_end_room[which]);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
     crtc = *chips[which];
     for (int number = 1; number < (int)(sizeof registers); number++) {
       write_register(number, registers[number]);
     }
-    /* The only thing that differs: a width the line reaches and one it does
-       not. R0 is written last so that the address register stands at 0 on
-       both, which is where the write that follows needs it. */
-    write_register(0, which == 0 ? 200 : 49);
+    /* The only thing that differs: the oracle has the width at once, the
+       other a width its line ends at first. R0 is written last so that the
+       address register stands at 0 on both, which is where the write that
+       follows needs it. */
+    write_register(0, which == 0 ? width : 49);
     *chips[which] = crtc;
   }
   /* To the character the narrow line ends on, both chips stepped together.
@@ -1637,7 +1704,7 @@ static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t type, uin
   bool ended_here = false;
   bool climbed = false;
   for (long tick = 0; tick < 4L * SCANLINE && !ended_here; tick++) {
-    uint64_t wide = crtc_tick(&never_ended);
+    uint64_t wide = crtc_tick(&oracle);
     uint64_t narrow = crtc_tick(&ended);
     ended_here = climbed && ended.c0 == 0;
     climbed = climbed || ended.c0 != 0;
@@ -1654,39 +1721,197 @@ static void walk_a_taken_back_line_beside_one_that_never_ended(uint8_t type, uin
      never ended draws as well: what it draws there is what the rescue has to
      put back, the address and the sync's own count with it. */
   for (unsigned late = 0; late < characters_late; late++) {
-    crtc_tick(&never_ended);
+    crtc_tick(&oracle);
     crtc_tick(&ended);
   }
   crtc_access(&ended, CRTC_CS | crtc_set_data(0, 0));
-  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 200));
-  TEST_EQUAL(ended.c0, never_ended.c0);
-  TEST_EQUAL(ended.c9, never_ended.c9);
-  TEST_EQUAL(ended.c4, never_ended.c4);
-  TEST_EQUAL(ended.vma, never_ended.vma);
-  TEST_EQUAL(ended.c3l, never_ended.c3l);
-  TEST_EQUAL(ended.parity_frame, never_ended.parity_frame);
-  TEST_EQUAL(ended.parity_c9_held, never_ended.parity_c9_held);
+  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, width));
+  TEST_EQUAL(ended.c0, oracle.c0);
+  TEST_EQUAL(ended.c9, oracle.c9);
+  TEST_EQUAL(ended.c4, oracle.c4);
+  TEST_EQUAL(ended.vma, oracle.vma);
+  TEST_EQUAL(ended.c3l, oracle.c3l);
+  TEST_EQUAL(ended.parity_frame, oracle.parity_frame);
+  TEST_EQUAL(ended.parity_c9_held, oracle.parity_c9_held);
   /* Then a whole frame of pins, which is where a counter restored to the
      wrong line or a sync restored to the wrong width tells. */
   for (long tick = 0; tick < 4L * SCANLINE * 40; tick++) {
-    uint64_t wide = crtc_tick(&never_ended);
+    uint64_t wide = crtc_tick(&oracle);
     uint64_t narrow = crtc_tick(&ended);
     TEST_EQUAL(narrow, wide);
   }
 }
 
-static void a_line_taken_back_is_a_line_that_never_ended(void) {
+static void a_line_taken_back_is_the_line_its_oracle_draws(void) {
   /* At both widths of the window, and with the interlace mode quiet and live,
      so the parities and the raster address are in the comparison too. A type 0
      keeps the first character as a type 1 does, and its line ending moves
      state a type 1's does not — C9 spent on the adjustment where the other
      keeps C5 — so it is walked for that character as well. */
   for (unsigned characters_late = 0; characters_late < 2; characters_late++) {
-    walk_a_taken_back_line_beside_one_that_never_ended(1, 0, characters_late);
-    walk_a_taken_back_line_beside_one_that_never_ended(1, 3, characters_late);
+    walk_a_taken_back_line_beside_its_oracle(1, 0, characters_late, 200);
+    walk_a_taken_back_line_beside_its_oracle(1, 3, characters_late, 200);
   }
-  walk_a_taken_back_line_beside_one_that_never_ended(0, 0, 0);
-  walk_a_taken_back_line_beside_one_that_never_ended(0, 3, 0);
+  walk_a_taken_back_line_beside_its_oracle(0, 0, 0, 200);
+  walk_a_taken_back_line_beside_its_oracle(0, 3, 0, 200);
+  /* And a width that names the character the ending was taken on. */
+  walk_a_taken_back_line_beside_its_oracle(1, 0, 1, 50);
+  walk_a_taken_back_line_beside_its_oracle(1, 3, 1, 50);
+  walk_a_taken_back_line_beside_its_oracle(0, 0, 0, 50);
+}
+
+/* A line of nothing given a width of 1 by a type 1's write on the character
+   clock takes back the end before the one standing, and the width names the
+   character that end was taken on: the chip has to come out as one handed the
+   same width off the clock two characters sooner, whose counter climbed to 1
+   there and ended its line on the next. The other types take back the end
+   standing, and their oracle is handed the width a character sooner. The run
+   of lines of nothing begins at power-on or on a wide line cut to nothing off
+   the clock, and is this many characters long before the width is given. */
+static void give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(
+    uint8_t type, const uint8_t registers[10], bool after_a_wide_line, int run) {
+  static crtc_t had_it;
+  static crtc_t given_it;
+  static crtc_t line_end_rooms[2][2];
+  crtc_t *chips[2] = {&had_it, &given_it};
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], type);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
+    crtc = *chips[which];
+    for (int number = 1; number < 10; number++) {
+      write_register(number, registers[number]);
+    }
+    write_register(0, after_a_wide_line ? 49 : 0);
+    *chips[which] = crtc;
+  }
+  if (after_a_wide_line) {
+    for (int character = 0; character < SCANLINE && given_it.c0 != 10; character++) {
+      TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+    }
+    for (int which = 0; which < 2; which++) {
+      crtc_access(chips[which], CRTC_CS | crtc_set_data(0, 0));
+      crtc_access(chips[which], CRTC_CS | CRTC_RS | crtc_set_data(0, 0));
+    }
+  }
+  for (int character = 0; character < run; character++) {
+    TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+  }
+  crtc_access(&had_it, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&had_it, CRTC_CS | CRTC_RS | crtc_set_data(0, 1));
+  for (int character = 0; character < (type == 1 ? 2 : 1); character++) {
+    crtc_tick(&had_it);
+    crtc_tick(&given_it);
+  }
+  crtc_access(&given_it, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&given_it, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 1));
+  TEST_EQUAL(given_it.c0, had_it.c0);
+  TEST_EQUAL(given_it.c9, had_it.c9);
+  TEST_EQUAL(given_it.c4, had_it.c4);
+  TEST_EQUAL(given_it.vma, had_it.vma);
+  TEST_EQUAL(given_it.hsync, had_it.hsync);
+  TEST_EQUAL(given_it.c3l, had_it.c3l);
+  TEST_EQUAL(given_it.parity_frame, had_it.parity_frame);
+  for (long tick = 0; tick < 4L * SCANLINE * 40; tick++) {
+    TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+  }
+}
+
+static void a_line_of_nothing_given_a_width_of_one_is_a_line_that_had_it(void) {
+  /* A sync standing across the run, R2 being 0, walked across the whole of
+     its period, so the new line's head meets the sync ending, running and
+     free. */
+  static const uint8_t a_sync_across_the_run[10] = {0, 40, 0, 0x26, 5, 2, 3, 4, 0, 3};
+  for (int run = 3; run < 12; run++) {
+    give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(1, a_sync_across_the_run, false,
+                                                                 run);
+  }
+  /* Frames one line tall, so the run stands on a frame's head and the new
+     line's head is one: the parity turns there, whatever the character
+     before the ending last latched. */
+  static const uint8_t frames_of_one_line[10] = {0, 40, 48, 0x26, 0, 0, 3, 1, 0, 0};
+  give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(1, frames_of_one_line, false, 2);
+  /* The same frames in the interlace video mode for three of the types that
+     take back the end standing. Types 3 and 4 turn their parity at every
+     frame's head, so the head the rescue leaves them has to be one no
+     character of the running line stood on; a type 0 anticipates its parity,
+     shows nothing of the latch, and is walked beside them for the oracle. */
+  static const uint8_t interlaced_frames_of_one_line[10] = {0, 40, 48, 0x26, 0, 0, 3, 1, 3, 0};
+  static const uint8_t other_types[] = {0, 3, 4};
+  for (unsigned index = 0; index < sizeof other_types; index++) {
+    for (int run = 2; run < 6; run++) {
+      give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(
+          other_types[index], interlaced_frames_of_one_line, false, run);
+    }
+  }
+  /* And a wide line that reached C0=2 cut to nothing with no run before the
+     width is given, so the arming of the frame sync it raised is what the new
+     head spends. */
+  static const uint8_t after_an_armed_line[10] = {0, 40, 48, 0x26, 5, 0, 3, 1, 0, 1};
+  give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(1, after_an_armed_line, true, 0);
+}
+
+/* The same width named on a frame's last line, where the line's end is the
+   frame's head: the head the rescue decides has to be the one a chip handed
+   the width off the clock decides there — the parity turned, the frame sync
+   begun, R7 being 0, and the row's border opened again — in the interlace
+   video mode as out of it. */
+static void a_frame_ended_by_a_width_named_since_is_a_frame_that_had_it(void) {
+  static crtc_t had_it;
+  static crtc_t given_it;
+  static crtc_t line_end_rooms[2][2];
+  static crtc_t looking_ahead;
+  static crtc_t looking_ahead_rooms[2];
+  for (uint8_t r8 = 0; r8 < 4; r8 += 3) {
+    const uint8_t registers[] = {49, 40, 48, 0x26, 5, 0, 3, 0, r8, 3};
+    crtc_t *chips[2] = {&had_it, &given_it};
+    for (int which = 0; which < 2; which++) {
+      crtc_init(chips[which], 1);
+      crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
+      crtc = *chips[which];
+      for (int number = 1; number < (int)(sizeof registers); number++) {
+        write_register(number, registers[number]);
+      }
+      write_register(0, registers[0]);
+      *chips[which] = crtc;
+    }
+    /* To C0=40 on a frame's last line, found by running a copy to the line's
+       end and asking whether it is the frame's head. */
+    bool on_the_last_line = false;
+    for (long tick = 0; tick < 4L * SCANLINE * 40 && !on_the_last_line; tick++) {
+      TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+      if (given_it.c0 == 40 && tick > SCANLINE) {
+        looking_ahead = given_it;
+        crtc_give_line_end_rooms(&looking_ahead, looking_ahead_rooms);
+        for (int ahead = 0; ahead < SCANLINE && looking_ahead.c0 != 0; ahead++) {
+          crtc_tick(&looking_ahead);
+        }
+        on_the_last_line = looking_ahead.c0 == 0 && looking_ahead.c4 == 0 && looking_ahead.c9 == 0;
+      }
+    }
+    TEST_CHECK(on_the_last_line);
+    crtc_access(&had_it, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&had_it, CRTC_CS | CRTC_RS | crtc_set_data(0, 50));
+    for (int character = 0; character < SCANLINE && given_it.c0 != 0; character++) {
+      crtc_tick(&had_it);
+      crtc_tick(&given_it);
+    }
+    TEST_EQUAL(given_it.c0, 0u);
+    crtc_tick(&had_it);
+    crtc_tick(&given_it);
+    crtc_access(&given_it, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&given_it, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 50));
+    TEST_EQUAL(given_it.c0, had_it.c0);
+    TEST_EQUAL(given_it.c4, had_it.c4);
+    TEST_EQUAL(given_it.c9, had_it.c9);
+    TEST_EQUAL(given_it.vma, had_it.vma);
+    TEST_EQUAL(given_it.parity_frame, had_it.parity_frame);
+    TEST_EQUAL(given_it.vsync, had_it.vsync);
+    TEST_EQUAL(crtc_data(crtc_access(&given_it, CRTC_CS | CRTC_RW)),
+               crtc_data(crtc_access(&had_it, CRTC_CS | CRTC_RW)));
+    for (long tick = 0; tick < 2L * 4 * SCANLINE * 40; tick++) {
+      TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+    }
+  }
 }
 
 /* And the two costs the rescue cannot pay, which crtc.h declares and no line
@@ -1700,12 +1925,12 @@ static void a_line_taken_back_is_a_line_that_never_ended(void) {
    that was that wide all along raises it. */
 static void the_costs_a_taken_back_line_cannot_pay(void) {
   static crtc_t never_ended;
-  static crtc_t line_end_room[2];
+  static crtc_t line_end_rooms[2][2];
   static crtc_t ended;
   crtc_t *chips[2] = {&never_ended, &ended};
   for (int which = 0; which < 2; which++) {
     crtc_init(chips[which], 1);
-    crtc_give_line_end_room(chips[which], &line_end_room[which]);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
     crtc = *chips[which];
     write_register(4, 38);
     write_register(9, 7);
@@ -1734,7 +1959,7 @@ static void the_costs_a_taken_back_line_cannot_pay(void) {
      bordered from R1 onward (ch. 17.3, 18.2.1). */
   for (int which = 0; which < 2; which++) {
     crtc_init(chips[which], 1);
-    crtc_give_line_end_room(chips[which], &line_end_room[which]);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
     crtc = *chips[which];
     write_register(1, 30);
     write_register(4, 38);
@@ -1776,9 +2001,9 @@ static void the_costs_a_taken_back_line_cannot_pay(void) {
    R3 was written on this character does not — the tick that ended the line
    has already spent it, and a line's end is not an R3 write (ch. 15.3.1). */
 static void a_take_back_carries_the_writes_it_cannot_undo(void) {
-  static crtc_t line_end_room;
+  static crtc_t line_end_rooms[2];
   crtc_init(&crtc, 1);
-  crtc_give_line_end_room(&crtc, &line_end_room);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
   write_register(0, 49);
   write_register(4, 38);
   write_register(9, 7); /* which leaves R9 the register selected */
@@ -2377,8 +2602,8 @@ static void a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again(void) {
    its "OUTI ON C0=0,R0=0" writes the width seven microseconds before the
    OUTI's write lands, and reads that write landing on C0=0, which a counter
    spending those microseconds climbing cannot do. The disc grades it on the
-   type 0, 1, 2 and 4 records — right on all but the type 1's, which is a
-   microsecond over — and the type 3 is walked here on nothing but that.
+   type 0, 1, 2 and 4 records, right on all four, and the type 3 is walked
+   here on nothing but that.
 
    What it must not become is the plain overrun of a counter that can no
    longer meet its width, which leaves it climbing the eight bits it has and
@@ -2443,9 +2668,9 @@ static void a_width_of_nothing_puts_the_counter_at_nothing(void) {
    none has nowhere to go back to at all. Either way the line's end that was
    standing is no longer standing. */
 static void a_line_end_does_not_outlive_the_room_holding_it(void) {
-  static crtc_t line_end_room;
+  static crtc_t line_end_rooms[2];
   crtc_init(&crtc, 1);
-  crtc_give_line_end_room(&crtc, &line_end_room);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
   write_register(0, 49);
   write_register(4, 38);
   write_register(9, 7);
@@ -2458,8 +2683,25 @@ static void a_line_end_does_not_outlive_the_room_holding_it(void) {
   }
   TEST_CHECK(ended);
   TEST_CHECK(crtc.a_line_end_is_kept);
-  crtc_give_line_end_room(&crtc, 0);
+  crtc_give_line_end_rooms(&crtc, 0);
   TEST_CHECK(!crtc.a_line_end_is_kept);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 0u);
+
+  /* And the end before, which a type 1 keeps on a line of one character, is
+     let go with the rooms holding it just the same. */
+  static crtc_t other_rooms[2];
+  crtc_init(&crtc, 1);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
+  write_register(0, 0);
+  for (int character = 0; character < 4; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(crtc.the_line_end_before_is_kept);
+  crtc_give_line_end_rooms(&crtc, other_rooms);
+  TEST_CHECK(!crtc.a_line_end_is_kept);
+  TEST_CHECK(!crtc.the_line_end_before_is_kept);
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
   crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
   TEST_EQUAL(crtc.c0, 0u);
@@ -5981,8 +6223,10 @@ int main(void) {
   TEST_RUN(a_type_2_begins_an_odd_frame_again_where_its_first_line_takes_the_mode);
   TEST_RUN(a_type_2_first_line_goes_on_counting_where_the_mode_did_not_arrive);
   TEST_RUN(a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again);
-  TEST_RUN(a_line_end_taken_back_is_the_one_just_taken);
-  TEST_RUN(a_line_taken_back_is_a_line_that_never_ended);
+  TEST_RUN(only_the_latest_line_ends_are_taken_back);
+  TEST_RUN(a_line_taken_back_is_the_line_its_oracle_draws);
+  TEST_RUN(a_line_of_nothing_given_a_width_of_one_is_a_line_that_had_it);
+  TEST_RUN(a_frame_ended_by_a_width_named_since_is_a_frame_that_had_it);
   TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
   TEST_RUN(a_take_back_carries_the_writes_it_cannot_undo);
   TEST_RUN(an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0);

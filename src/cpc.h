@@ -127,8 +127,9 @@ typedef struct {
   uint64_t pins; /* the bus between ticks */
 
   crtc_t crtc;
-  /* Where the CRTC keeps a line's end while a write could still cancel it. */
-  crtc_t crtc_line_end_room;
+  /* Where the CRTC keeps its last two line ends while a write could still
+     cancel them. */
+  crtc_t crtc_line_end_rooms[2];
   uint64_t crtc_pins; /* the CRTC's outputs as of its last character clock */
   /* The CRTC's syncs a character ago, which are the ones the Gate Array
      follows where the chip is one of the two ASICs (Compendium ch. 7.1,

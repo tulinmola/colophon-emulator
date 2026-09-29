@@ -648,6 +648,20 @@ static void enter_scanline(crtc_t *crtc) {
   crtc->c9_processing_managed = false;
 }
 
+/* Drawing a character advances the address and any HSYNC riding on it, and
+   the latch that says the sync ended there is this character's alone. */
+static void pass_a_character(crtc_t *crtc) {
+  crtc->vma = (crtc->vma + 1) & 0x3FFF;
+  crtc->hsync_ended_here = false;
+  if (crtc->hsync) {
+    crtc->c3l = (crtc->c3l + 1) & 0x0F;
+    if (crtc->c3l == (crtc->registers[3] & 0x0F)) {
+      crtc->hsync = false;
+      crtc->hsync_ended_here = true;
+    }
+  }
+}
+
 /* C0 names the character being drawn and holds it for the whole of that
    microsecond, which is the position the Compendium gives a register write
    (ch. 13.2.1). Nothing reads it there yet.
@@ -657,11 +671,14 @@ static void enter_scanline(crtc_t *crtc) {
    C0: R0 takes all 256 values C0 does, and 255 is one a program can write,
    so a sentinel there would read as the end of a 256-character line. */
 static void enter_character(crtc_t *crtc) {
-  /* The room holds what the ending stood on for the character it was taken
-     on, and on a type 1 for the character after that as well. Shaker's
-     B (6) is what sets both widths: its "4TH uSec ON C0=0" wants the first
-     of every type and its "5TH uSec ON C0=0" the second of a type 1. */
-  if (crtc->a_line_end_is_kept && crtc->type == 1 && !crtc->a_character_was_drawn_since) {
+  /* The first room holds what the ending stood on for the character it was
+     taken on, and on a type 1 for the character after that as well. Shaker's
+     B (6) is what sets both widths: its "4TH uSec ON C0=0" wants the first of
+     every type and its "5TH uSec ON C0=0" the second of a type 1. */
+  bool a_line_end_enters_its_second_character =
+      crtc->a_line_end_is_kept && crtc->type == 1 && !crtc->a_character_was_drawn_since;
+  crtc->the_line_end_before_is_kept = false;
+  if (a_line_end_enters_its_second_character) {
     crtc->a_character_was_drawn_since = true;
   } else {
     crtc->a_line_end_is_kept = false;
@@ -672,15 +689,7 @@ static void enter_character(crtc_t *crtc) {
     return;
   }
   const uint8_t *r = crtc->registers;
-  crtc->vma = (crtc->vma + 1) & 0x3FFF;
-  crtc->hsync_ended_here = false;
-  if (crtc->hsync) {
-    crtc->c3l = (crtc->c3l + 1) & 0x0F;
-    if (crtc->c3l == (r[3] & 0x0F)) {
-      crtc->hsync = false;
-      crtc->hsync_ended_here = true;
-    }
-  }
+  pass_a_character(crtc);
   if (crtc->c0 != r[0]) {
     crtc->c0++;
     if (crtc->c0 == 1) {
@@ -703,12 +712,21 @@ static void enter_character(crtc_t *crtc) {
      is a question this chip cannot yet answer, its placements measuring one
      late against all three chronograms. The window is what carries that
      microsecond, and crtc.h says what it leaves unsettled. */
-  if (crtc->line_end_room != 0) {
-    *crtc->line_end_room = *crtc;
+  if (crtc->line_end_rooms != 0) {
+    /* A line of one character ends again on the second character of a
+       type 1's window, and the end before stays within that type's reach:
+       ch. 13.6.2 draws its OUTI on the "Previous R0=0" line going on a
+       character further than ch. 13.6.1 draws a type 0's or 2's, at both
+       placements it gives. */
+    if (a_line_end_enters_its_second_character) {
+      crtc->line_end_rooms[1] = crtc->line_end_rooms[0];
+      crtc->the_line_end_before_is_kept = true;
+    }
+    crtc->line_end_rooms[0] = *crtc;
     /* One latch in the copy belongs to the character rather than to the
        line: this tick is about to spend the R3 write it records, and a
        line's end is not an R3 write, so the copy carries none back. */
-    crtc->line_end_room->r3_written_for_this_character = false;
+    crtc->line_end_rooms[0].r3_written_for_this_character = false;
     crtc->a_line_end_is_kept = true;
     crtc->a_character_was_drawn_since = false;
   }
@@ -1310,19 +1328,24 @@ static void settle_parity(crtc_t *crtc) {
   }
 }
 
-void crtc_give_line_end_room(crtc_t *crtc, crtc_t *room) {
+void crtc_give_line_end_rooms(crtc_t *crtc, crtc_t rooms[2]) {
   /* A line's end kept in one room is not kept in another, and a chip given
      none has nowhere to go back to: the end stands only while the room
-     holding it does. A host re-pointing the chip at the room it already has
+     holding it does. A host re-pointing the chip at the rooms it already has
      changes nothing, which is what lets a machine do it every tick. */
-  if (crtc->line_end_room != room) {
+  if (crtc->line_end_rooms != rooms) {
     crtc->a_line_end_is_kept = false;
+    crtc->the_line_end_before_is_kept = false;
   }
-  crtc->line_end_room = room;
+  crtc->line_end_rooms = rooms;
 }
 
-uint64_t crtc_tick(crtc_t *crtc) {
-  enter_character(crtc);
+/* The decisions a character's tick makes once the chip has entered it. They
+   read latches that entering it and the character before leave, and a caller
+   outside the tick sets the sync's end as the tick would and clears the
+   frame's head, the character before having decided nothing; what it would
+   have decided is among the comparisons crtc.h counts lost. */
+static void decide_on_the_character(crtc_t *crtc) {
   settle_parity(crtc);
   decide_last_line(crtc);
   begin_vertical_adjustment(crtc);
@@ -1331,6 +1354,11 @@ uint64_t crtc_tick(crtc_t *crtc) {
   begin_syncs(crtc);
   latch_status_border(crtc);
   throw_display_latches(crtc);
+}
+
+uint64_t crtc_tick(crtc_t *crtc) {
+  enter_character(crtc);
+  decide_on_the_character(crtc);
   /* Cleared after the phases rather than before them, a write being made
      between two ticks and read by the second of the two. */
   crtc->r3_written_for_this_character = false;
@@ -1649,12 +1677,11 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            seven microseconds before the OUTI's write lands, and reads that
            write landing on C0=0, which a counter spending those microseconds
            climbing cannot do. The disc grades it on the type 0, 1, 2 and 4
-           records: the type 0's and type 2's lines came right on this, the
-           type 1's is still a microsecond over, which is the one line that
-           record has left, and the type 4's agrees too. The type 3's record
-           never grades it, that group not naming the machine there. Where a
-           line's end is standing, the take-back below outranks this: it
-           restores the character the ending was taken on and the counter
+           records and agrees on all four, the type 1's once that type's
+           write could reach the end before the one standing. The type 3's
+           record never grades it, that group not naming the machine there.
+           Where a line's end is standing, the take-back below outranks this:
+           it restores the character the ending was taken on and the counter
            goes on from there, the premature comparison of ch. 13.3's third
            note being made against a width of nothing like any other. */
         crtc->c0 = 0;
@@ -1675,40 +1702,63 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            own). The second character this chip gives it is one placement
            past that again, which the disc asks for and the chapter does
            not. */
-        uint8_t the_character_it_ended_on = crtc->line_end_room->c0;
+        /* Where the end before is still kept the write reaches that one,
+           and what stands after it is the line as the new width would have
+           run it. */
+        bool from_the_line_end_before = crtc->the_line_end_before_is_kept;
+        crtc_t *room = &crtc->line_end_rooms[from_the_line_end_before ? 1 : 0];
+        uint8_t the_character_it_ended_on = room->c0;
         /* Read before the copy comes back, which would carry the room's own
            stale answer to this question. */
-        bool a_character_was_drawn_since = crtc->a_character_was_drawn_since;
+        bool a_character_was_drawn_since =
+            from_the_line_end_before || crtc->a_character_was_drawn_since;
         if (crtc->registers[0] != the_character_it_ended_on) {
           /* What is taken back is the line's ending, not the write that
              cancelled it: the copy was taken before the host touched the
              chip, so the register file and the register a write is aimed at
              cross over as they stand rather than as they stood. */
           for (unsigned which = 0; which < sizeof crtc->registers; which++) {
-            crtc->line_end_room->registers[which] = crtc->registers[which];
+            room->registers[which] = crtc->registers[which];
           }
-          crtc->line_end_room->address_register = crtc->address_register;
-          *crtc = *crtc->line_end_room;
+          room->address_register = crtc->address_register;
+          *crtc = *room;
           crtc->a_line_end_is_kept = false;
+          crtc->the_line_end_before_is_kept = false;
           crtc->a_character_was_drawn_since = false;
           crtc->c0 = (uint8_t)(the_character_it_ended_on + (a_character_was_drawn_since ? 2 : 1));
+          /* No decision was made on the characters the line runs on
+             through, so the latch says none of them stood on the frame's
+             head, whatever the copy says. Where one wraps to C0=0 — a line
+             of 256, or of 255 on a type 1's second character — it may have
+             stood there; its turn of the parity is lost, or taken by the next
+             head where that head is the frame's too. */
+          crtc->stood_on_the_frame_head = false;
           if (a_character_was_drawn_since) {
-            /* That character was drawn, and drawing one advances the address
-               and any sync riding on it; the copy predates it. */
-            crtc->vma = (crtc->vma + 1) & 0x3FFF;
-            if (crtc->hsync) {
-              crtc->c3l = (crtc->c3l + 1) & 0x0F;
-              if (crtc->c3l == (crtc->registers[3] & 0x0F)) {
-                crtc->hsync = false;
-              }
-            }
+            /* That character was drawn, and the copy predates it. */
+            pass_a_character(crtc);
           }
-          if (crtc->c0 == 1) {
+          if (crtc->c0 == 1 || (a_character_was_drawn_since && crtc->c0 == 2)) {
             /* The one line whose management was never given back is the one
-               C0 could not carry to 1, and the counter now stands there
+               C0 could not carry to 1, and the counter now stands there, or
+               stood there on the character the ending was taken on
                (ch. 13.2.4). On every wider line it was given back where the
                chip gives it, and this says again what already stands. */
             crtc->c9_processing_managed = true;
+          }
+          if (a_character_was_drawn_since &&
+              crtc->registers[0] == (uint8_t)(the_character_it_ended_on + 1)) {
+            /* The new width names the character the ending was taken on, and
+               "C0 is compared with the new value of R0" (ch. 13.3, note 3) on
+               the character drawn since: the line ends there and that
+               character is the next line's head, decided as any head is, so
+               a line of nothing given a width of 1 is a line of two characters
+               rather than a counter run round. That end is kept for no write
+               to take back, no instruction landing two on a width a
+               microsecond apart. */
+            crtc->c0 = 0;
+            crtc->c0_reached_r0 = true;
+            enter_scanline(crtc);
+            decide_on_the_character(crtc);
           }
         }
       }

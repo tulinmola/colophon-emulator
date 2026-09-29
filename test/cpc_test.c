@@ -1110,7 +1110,7 @@ static void a_copied_machine_runs_as_the_one_it_was_copied_from(void) {
      line's end back out of a chip nobody is running. */
   for (int quarter = 0; quarter < 4; quarter++) {
     cpc_tick(&copy);
-    TEST_CHECK(copy.crtc.line_end_room == &copy.crtc_line_end_room);
+    TEST_CHECK(copy.crtc.line_end_rooms == copy.crtc_line_end_rooms);
   }
   for (int tick = 0; tick < 4 * 64 * 40; tick++) {
     cpc_tick(&copy);
