@@ -93,7 +93,7 @@ B (O)       CRTC 1-A OR 1-B?                                                    
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded
 B (F0)      BOUNGA!                                                                          recorded, ungraded, cut off at the cap
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
-B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, cut off at the cap
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
 B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
 B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
@@ -109,7 +109,7 @@ C (3)       CRTC 1   : PARITY SWITCH STATUS                                     
 C (4)       CRTC 1   : IVM ON/OFF                                                            another CRTC type's
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   another CRTC type's
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's
-C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded
+C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, cut off at the cap
 C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                another CRTC type's
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded

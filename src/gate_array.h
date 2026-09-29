@@ -29,8 +29,9 @@
  *   line maintained until acknowledged, bit 5 killed at acknowledge, and
  *   the rule two HSYNCs after VSYNC: an interrupt only if bit 5 is set,
  *   and the microsecond an interrupt waits after the end of the HSYNC
- *   that asked for it (ch. 27.6.1, whose diagrams put it R3+1 after C0
- *   reaches R2 for every width they draw).
+ *   that asked for it (ch. 27.6.1; ch. 27.6.2's diagrams put it R3+1
+ *   after C0 reaches R2 for every width they draw, and ch. 27.6.5's a
+ *   microsecond later where the sync reaches the chip a character late).
  *   Where "The Gate Array" states that rule inverted, the Compendium is
  *   the one whose reading matches the mechanism's purpose, and the one
  *   tested on silicon.

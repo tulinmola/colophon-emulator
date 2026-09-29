@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 63 groups run, 23 left to another CRTC type.
-5 of them printed self-graded lines, 29 in all: 26 agree with Longshot's
-silicon and 3 do not. That is 90% of what this reader can score, and no
+5 of them printed self-graded lines, 29 in all: 28 agree with Longshot's
+silicon and 1 do not. That is 97% of what this reader can score, and no
 measure at all of the other 58 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -86,11 +86,11 @@ B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                  
 B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
 B (4)       CRTC 2 FIND C0 MIN                                                               another CRTC type's
 B (5)       CRTC 2 RLAL                                                                      recorded, ungraded, cut off at the cap
-B (6)       CRTC 1 BUG OUTI R0                                                               6 graded, 2 wrong
-    ! OUTI ON R0.JIT 5TH uSec ON C0=0 - RES: #13 :WRONG!
+B (6)       CRTC 1 BUG OUTI R0                                                               6 graded, 0 wrong
+      OUTI ON R0.JIT 5TH uSec ON C0=0 - RES: #27 :GOOD
       OUTI ON R0.JIT 4TH uSec ON C0=0 - RES: #14 :GOOD
       OUTI ON R0.JIT 5TH uSec ON C0=1 - RES: #26 :GOOD
-    ! OUTI ON C0=0,R0=0, RES: #E1 :WRONG!
+      OUTI ON C0=0,R0=0, RES: #27 :GOOD
       OUTI ON R7 LAST CHANCE 5TH uSec ON C0=0 - RES: #1E :GOOD
       OUTI ON R7 LAST CHANCE 4TH uSec ON C0=0 - RES: #1E :GOOD
 B (7)       CRTC 0 BUG OVF C4                                                                another CRTC type's
@@ -99,7 +99,7 @@ B (O)       CRTC 1-A OR 1-B?                                                    
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded
 B (F0)      BOUNGA!                                                                          recorded, ungraded, cut off at the cap
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
-B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, cut off at the cap
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
 B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
 B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
@@ -115,7 +115,7 @@ C (3)       CRTC 1   : PARITY SWITCH STATUS                                     
 C (4)       CRTC 1   : IVM ON/OFF                                                            another CRTC type's
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   another CRTC type's
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's
-C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded
+C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, cut off at the cap
 C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                another CRTC type's
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded

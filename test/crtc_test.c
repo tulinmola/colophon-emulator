@@ -786,6 +786,38 @@ static void the_two_asics_read_a_table_of_eight(void) {
   }
 }
 
+/* Status 1's fourth bit names "C0=R2+R3", the character an HSYNC ends on.
+   Where R3's low nibble is 0 these two run the sync sixteen characters —
+   "on CRTC's 2, 3 and 4, the HSYNC lasts 16 µsec when R3=0" (ch. 28.1.5) — so
+   the bit falls where that sync ends, at R2+16, and not at R2 as the table's
+   sum read literally would put it. Taking the width the chip itself keeps is
+   our reading of a table that does not draw a width of nothing. */
+static void the_asic_hsync_end_bit_follows_a_width_of_nothing(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 30);
+    write_register(3, 0x80);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0);
+    int cleared_at = -1;
+    for (int character = 0; character < SCANLINE && cleared_at < 0; character++) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 10));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      if ((status & 0x10) == 0) {
+        cleared_at = crtc.c0;
+      }
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(cleared_at, 30 + 16);
+  }
+}
+
 /* Every bit of those two bytes but the wired ones traces something, so across
    a frame each must be caught at both values, and the wired ones at neither.
    Ch. 4.3's own view of the registers is what says which is which: on these
@@ -2345,10 +2377,8 @@ static void a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again(void) {
    its "OUTI ON C0=0,R0=0" writes the width seven microseconds before the
    OUTI's write lands, and reads that write landing on C0=0, which a counter
    spending those microseconds climbing cannot do. The disc grades it on the
-   type 0, 1, 2 and 4 records — right on the first and third, a microsecond
-   over on the type 1's, and overflowed on the type 4's, the board's
-   microsecond moving its R0=0 write onto the clock a line wraps on — and the
-   type 3 is walked here on nothing but that.
+   type 0, 1, 2 and 4 records — right on all but the type 1's, which is a
+   microsecond over — and the type 3 is walked here on nothing but that.
 
    What it must not become is the plain overrun of a counter that can no
    longer meet its width, which leaves it climbing the eight bits it has and
@@ -3398,6 +3428,40 @@ static void hsync_falls_where_r2_and_r3_put_it(void) {
   TEST_CHECK(!(recorded[60] & CRTC_HSYNC));
 }
 
+/* A width of nothing is read two ways: no HSYNC at all on types 0 and 1, and
+   sixteen characters on the other three — ch. 14.1's table gives "0 0 0 0 /
+   No Hsync" in one column and "0 0 0 0 / 16 nop" in the next, and "on CRTC's
+   2, 3 and 4, the HSYNC lasts 16 µsec when R3=0" (ch. 28.1.5), which is one
+   of the ways a program tells them apart. */
+static void a_width_of_nothing_is_sixteen_on_three_of_the_types(void) {
+  static const struct {
+    uint8_t type;
+    int characters; /* of HSYNC on a line */
+  } cases[] = {{0, 0}, {1, 0}, {2, 16}, {3, 16}, {4, 16}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x80);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 10);
+    int characters = 0;
+    for (int character = 0; character < SCANLINE; character++) {
+      if (crtc_tick(&crtc) & CRTC_HSYNC) {
+        characters++;
+      }
+    }
+    TEST_EQUAL(characters, cases[index].characters);
+  }
+}
+
 static void vsync_holds_eight_scanlines_from_row_30(void) {
   record_two_frames();
   int rises = 0;
@@ -4396,26 +4460,31 @@ static void an_r3_written_in_time_carries_the_hsync_on(void) {
 
 /* Ch. 14.5: "it is possible to change the value of R3l when C3l counts,
    which can affect the length of the HSYNC. If R3l is changed with a value
-   less than C3l, then C3l is overflowing". Ch. 14.5.4 gives the other half,
-   the one a program aims at: "if R3l is modified ... with the value of C3l
-   when C0 is at position which corresponds to C3l while R3l was greater
-   than this value, then the HSYNC stops on CRTC's 0, 1 and 2. This
-   technique is called R3.JIT". Ch. 14.5.1 draws both for this type at R2=11
-   and R3l=10, and the widths below are read off that diagram: written with
-   0, C3l runs 0 to 15 and round to 0 again; written with 1, one character
-   further. */
+   less than C3l, then C3l is overflowing". Ch. 14.5.1 draws it for types 0
+   and 2 at R2=11 and R3l=10, the write landing where C3l stands at 4, and
+   the widths below are read off that diagram: written with 5, the sync ends
+   where C3l meets it; with 0, C3l runs 0 to 15 and round to 0 again; with 1,
+   one character further. Ch. 14.5.1 and 14.5.3 draw the same run to sixteen
+   for a zero on types 2, 3 and 4; a type 1 cancels the sync instead
+   (ch. 14.5), which is not here and not pinned. Written with 4, the value
+   C3l stands at, ch. 14.5.1 draws the sync stopping, its row marked R3.JIT,
+   which ch. 14.5.4 gives types 0, 1 and 2 for an OUT; this chip runs it
+   round to 20, as ch. 14.5.3 draws for the two ASICs, and that row is
+   pinned so that it moves knowingly. */
 static void an_r3l_written_during_a_hsync_stops_it_or_overflows(void) {
   static const struct {
+    uint8_t type;
     uint8_t written; /* the R3l in force on the sync's sixth character */
     int characters;  /* and the width the sync comes out */
   } cases[] = {
-      {10, 10}, /* the value it already holds, which changes nothing */
-      {5, 5},   /* R3.JIT: the value C3l stands at, and the sync stops */
-      {0, 16},  /* under it, so C3l overflows and runs round to it */
-      {1, 17},
+      {0, 10, 10}, /* the value it already holds, which changes nothing */
+      {0, 5, 5},   /* one above where C3l stands, which it meets next */
+      {0, 4, 20},  /* R3.JIT, which silicon stops and this chip overflows */
+      {0, 0, 16},  /* under it, so C3l overflows and runs round to it */
+      {0, 1, 17},  {2, 0, 16}, {3, 0, 16}, {4, 0, 16},
   };
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
-    crtc_init(&crtc, 0);
+    crtc_init(&crtc, cases[index].type);
     write_register(0, 63);
     write_register(2, 11);
     write_register(3, 0x8A);
@@ -5859,7 +5928,7 @@ static void a_c0_that_overflowed_does_not_open_the_display(void) {
 
 static void a_sync_width_of_zero_makes_no_hsync(void) {
   /* Where types 2, 3 and 4 read 16, this one reads none — the difference a
-     program tells them apart by (ch. 14.1, 14.5, 28.1.5). */
+     program tells them apart by (ch. 14.1, 14.6, 28.1.5). */
   program_standard();
   write_register(3, 0x80);
   int hsyncs = 0, vsyncs = 0;
@@ -5895,6 +5964,7 @@ int main(void) {
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
   TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);
+  TEST_RUN(the_asic_hsync_end_bit_follows_a_width_of_nothing);
   TEST_RUN(the_asic_row_end_bit_stands_for_the_line_the_row_ends_on);
   TEST_RUN(the_asic_frame_timer_turns_every_sixteenth_frame);
   TEST_RUN(each_type_keeps_its_own_vsync_length);
@@ -5931,6 +6001,7 @@ int main(void) {
   TEST_RUN(a_write_can_make_a_last_line_as_well_as_unmake_one);
   TEST_RUN(unselected_chip_ignores_the_bus);
   TEST_RUN(hsync_falls_where_r2_and_r3_put_it);
+  TEST_RUN(a_width_of_nothing_is_sixteen_on_three_of_the_types);
   TEST_RUN(vsync_holds_eight_scanlines_from_row_30);
   TEST_RUN(display_covers_40_by_200);
   TEST_RUN(the_video_pointer_walks_the_documented_rows);

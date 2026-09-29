@@ -138,6 +138,31 @@ static bool crtc_takes_writes_on_its_clock(const cpc_t *cpc) {
   return cpc->crtc.type == 3 || cpc->crtc.type == 4;
 }
 
+/* Whether the syncs the Gate Array follows are the CRTC's a character late,
+   which is the two ASICs' way. A character is displayed a microsecond after
+   its address is handed over, and "this display time lag of the GATE ARRAY
+   with respect to the CRTC would not be a problem if the entirety of what is
+   sent by the CRTC to the GATE ARRAY were always delayed by 1 μsec. But this
+   is not always the case, especially for HSYNC signal management for
+   machines equipped with CRTC's 0, 1 and 2" (Compendium ch. 7.1). Behind a
+   Gate Array "the HSYNC visually begins approximately 1 µsec before the
+   display of the corresponding CRTC character", where "on CRTC's 3 and 4,
+   the HSYNC begins at the start of the display by the GATE ARRAY of the CRTC
+   character corresponding to C0=R2", so that "an interrupt occurs 1 µsec
+   later on CRTC's 3 and 4 than on the other CRTC's" (ch. 27.6.1; the
+   diagrams of ch. 27.6.5 draw the count beginning a character later at every
+   width, and ch. 13.1 says the same). Ch. 15.1 says it of the picture: the
+   ASICs "manage a HSYNC consistent with the C0 value displayed, delaying the
+   display of the HSYNC by 1 μsec", and on the monitor of a type 0, 1 or 2
+   machine a type 4's "image is shifted to the left because HSYNC occurs
+   1 µsec later". The frame sync going with it is our reading of ch. 7.1's
+   "entirety", which no diagram draws: it keeps the two meeting the Gate Array
+   in the order they leave the chip. What the PPI reads of the frame sync is
+   the chip's own, which is what ch. 27.6's diagrams count C0vs from. */
+static bool syncs_follow_the_display(const cpc_t *cpc) {
+  return cpc->crtc.type == 3 || cpc->crtc.type == 4;
+}
+
 /* Devices decode single address bits, so one access can reach several at
    once; every test in the two functions below is independent, and their
    order is the address lines' and carries no meaning — "I/O port
@@ -314,8 +339,13 @@ uint64_t cpc_tick(cpc_t *cpc) {
   }
   if (gate_array_character_clock(&cpc->gate_array)) {
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
-    gate_array_tick(&cpc->gate_array, (cpc->crtc_pins & CRTC_HSYNC) != 0,
-                    (cpc->crtc_pins & CRTC_VSYNC) != 0);
+    bool hsync = (cpc->crtc_pins & CRTC_HSYNC) != 0;
+    bool vsync = (cpc->crtc_pins & CRTC_VSYNC) != 0;
+    bool late = syncs_follow_the_display(cpc);
+    gate_array_tick(&cpc->gate_array, late ? cpc->crtc_hsync_a_character_ago : hsync,
+                    late ? cpc->crtc_vsync_a_character_ago : vsync);
+    cpc->crtc_hsync_a_character_ago = hsync;
+    cpc->crtc_vsync_a_character_ago = vsync;
     /* The video hardware reads the base 64K and nothing else: no ROM, no
        banked RAM, whatever the CPU is looking at ("The Gate Array", MMR). */
     uint16_t address = cpc_video_address(cpc);

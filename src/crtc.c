@@ -973,14 +973,20 @@ static void authorize_vsync(crtc_t *crtc) {
   crtc->vsync_armed = false;
 }
 
-/* HSYNC begins on the character where C0 meets R2 (ch. 6.1.2). A width of
-   zero is no HSYNC at all on this type — the 16 the other types read there
-   is what a program uses to tell them apart (ch. 14.1, 14.5, 28.1.5). VSYNC
-   begins where C4 meets R7, which is why writing R7 the value C4 already
-   holds starts one where it stands; the block keeps that same equality from
-   starting a second (ch. 16.3, 16.4.1). Each width is counted off where the
-   counter it rides advances, so the ends are in enter_character and
-   enter_scanline rather than here. */
+/* HSYNC begins on the character where C0 meets R2 (ch. 6.1.2). A sync asked
+   for with a width of zero is none at all on types 0 and 1, and sixteen
+   characters on the other three: "on CRTC's 2, 3 and 4, the HSYNC lasts
+   16 µsec when R3=0", which is what a program uses to tell them apart
+   (ch. 14.1, 14.6, 28.1.5), and ch. 27.6.4 and 27.6.5 draw it, the interrupt
+   coming 17 and 18 microseconds after C0 reaches R2. C3l counts on four bits,
+   so a width of 0 is met again after sixteen, and a zero written into a sync
+   already running runs it on to sixteen on every type, as ch. 14.5 has it on
+   all but a type 1; what a type 1 does instead, and ch. 14.5.4's first
+   microsecond, are not here (crtc.h). VSYNC begins where C4 meets R7, which
+   is why writing R7 the value C4 already holds starts one where it stands;
+   the block keeps that same equality from starting a second (ch. 16.3,
+   16.4.1). Each width is counted off where the counter it rides advances, so
+   the ends are in enter_character and enter_scanline rather than here. */
 static void begin_the_hsync(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   /* "On CRTC 0, two HSYNC's cannot be contiguous if position C0=R2 is
@@ -995,7 +1001,9 @@ static void begin_the_hsync(crtc_t *crtc) {
      carries: an OUT lands a whole byte on R3, and ch. 16.3 states that
      reading outright for R7, "whatever the value written". */
   bool blocked = crtc->hsync_ended_here && !crtc->r3_written_for_this_character;
-  if (crtc->c0 == r[2] && !crtc->hsync && !blocked && (r[3] & 0x0F) != 0) {
+  bool width_of_nothing_is_sixteen = crtc->type == 2 || crtc->type == 3 || crtc->type == 4;
+  bool a_width_asked = (r[3] & 0x0F) != 0 || width_of_nothing_is_sixteen;
+  if (crtc->c0 == r[2] && !crtc->hsync && !blocked && a_width_asked) {
     crtc->hsync = true;
     if (!crtc->hsync_ended_here) {
       crtc->c3l = 0;
@@ -1358,8 +1366,11 @@ static uint8_t status_1(const crtc_t *crtc) {
     status &= (uint8_t)~0x08;
   }
   /* "C0=R2+R3", where the R3 that ends an HSYNC is its low nibble alone —
-     the same table names the other half R3h where it means it. */
-  if (crtc->c0 == (uint8_t)(r[2] + (r[3] & 0x0F))) {
+     the same table names the other half R3h where it means it — and a nibble
+     of 0 ends one sixteen characters on, which is our reading: ch. 28.1.5
+     gives the sync that length, and no chapter gives the bit's. */
+  uint8_t hsync_width = (r[3] & 0x0F) != 0 ? (uint8_t)(r[3] & 0x0F) : 16;
+  if (crtc->c0 == (uint8_t)(r[2] + hsync_width)) {
     status &= (uint8_t)~0x10;
   }
   /* Bit 5 counts lines from the VSYNC and is not answered here. The chapter
@@ -1640,12 +1651,10 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            climbing cannot do. The disc grades it on the type 0, 1, 2 and 4
            records: the type 0's and type 2's lines came right on this, the
            type 1's is still a microsecond over, which is the one line that
-           record has left, and the type 4's is wrong by a counter overflowed
-           in the take-back below, the board's microsecond moving its R0=0
-           write onto the clock a line wraps on. The type 3's
-           record never grades it, that group not naming the machine there.
-           Where a line's end is standing, the take-back below outranks this:
-           it restores the character the ending was taken on and the counter
+           record has left, and the type 4's agrees too. The type 3's record
+           never grades it, that group not naming the machine there. Where a
+           line's end is standing, the take-back below outranks this: it
+           restores the character the ending was taken on and the counter
            goes on from there, the premature comparison of ch. 13.3's third
            note being made against a width of nothing like any other. */
         crtc->c0 = 0;

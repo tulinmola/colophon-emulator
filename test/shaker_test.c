@@ -64,7 +64,7 @@
 #define FIRST_CODE 32
 #define LAST_CODE 126
 
-/* Where the picture sits when nothing has moved it. */
+/* Where the picture sits when nothing has moved it, behind a Gate Array. */
 #define NOMINAL_LEFT 272
 #define NOMINAL_TOP 70
 
@@ -179,6 +179,18 @@ static cpc_t cpc;
    scoreboard's head is written by the parent, which powers nothing on and
    would name a type it never built. */
 static uint8_t crtc_type = 0;
+
+/* Where the picture's left edge sits when nothing has moved it, which the
+   machine decides: the two ASICs raise their line sync a microsecond later
+   against the display than a CRTC behind a Gate Array does, and a type 4's
+   "image is shifted to the left" on the monitor of a type 0, 1 or 2 machine
+   (Compendium ch. 15.1, 27.6.1). A microsecond is two of the ROM's
+   characters in mode 2, so the monitor shows their picture that much further
+   left. */
+static int nominal_left(void) {
+  return crtc_type == 3 || crtc_type == 4 ? NOMINAL_LEFT - 2 * GLYPH_WIDTH : NOMINAL_LEFT;
+}
+
 static cpc_t saved_cpc;
 static uint8_t saved_ram[sizeof ram];
 static floppy_t saved_disc;
@@ -1484,7 +1496,7 @@ static void run_group(const char *module, const group *entry, FILE *report,
                       bool the_menu_gave_it_to_another_type) {
   restore_machine();
   shaker_trace_group(&cpc, entry->key, 2L * FRAMES_KEY_HELD);
-  grid_left = NOMINAL_LEFT;
+  grid_left = nominal_left();
   grid_top = NOMINAL_TOP;
   capture_count = 0;
   captures_dropped = 0;
@@ -1594,7 +1606,7 @@ static void run_module(const char *module, const char *only_group) {
   if (!power_on()) {
     return;
   }
-  grid_left = NOMINAL_LEFT;
+  grid_left = nominal_left();
   grid_top = NOMINAL_TOP;
   char command[64];
   snprintf(command, sizeof command, "RUN\"SHAKE27%s\n", module);

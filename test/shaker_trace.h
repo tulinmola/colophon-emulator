@@ -40,6 +40,9 @@
  *                                 lower_rom_enabled says
  *   SHAKER_TRACE_EVENTS=...       syncs, reads, or both, comma separated:
  *                                 HSYNC edges with R52's count, and port reads.
+ *                                 The edges are the CRTC's own; a machine built
+ *                                 with one of the two ASICs hands the Gate
+ *                                 Array its syncs a character later (cpc.c).
  *                                 Off by default, since a line sync every 64
  *                                 microseconds and the drive's polling would
  *                                 bury everything else

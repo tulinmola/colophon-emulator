@@ -130,6 +130,11 @@ typedef struct {
   /* Where the CRTC keeps a line's end while a write could still cancel it. */
   crtc_t crtc_line_end_room;
   uint64_t crtc_pins; /* the CRTC's outputs as of its last character clock */
+  /* The CRTC's syncs a character ago, which are the ones the Gate Array
+     follows where the chip is one of the two ASICs (Compendium ch. 7.1,
+     15.1, 27.6.1). */
+  bool crtc_hsync_a_character_ago;
+  bool crtc_vsync_a_character_ago;
   /* A write the CRTC has yet to take where the chip is one of the two ASICs,
      which this board takes on the first character clock its I/O cycle spans
      (cpc.c): an OUT (C),r's a microsecond after a Gate Array would
@@ -181,12 +186,12 @@ typedef struct {
 } cpc_t;
 
 /* Power-on with a CRTC built as the given type. What follows the number is
- * set out at the head of crtc.h, and the board adds one thing: the
- * microsecond it holds an OUT's write for when the chip is one of the two
- * ASICs. The lower ROM is readable at &0000 — it must be, or no first
- * instruction could ever be fetched. Upper ROM enabled and configuration 0
- * are conventions: the firmware writes both registers before anything could
- * observe their reset state. */
+ * set out at the head of crtc.h, and the board adds two things where the chip
+ * is one of the two ASICs: the microsecond it holds an OUT's write for, and
+ * both syncs a character late. The lower ROM is readable at &0000 — it must
+ * be, or no first instruction could ever be fetched. Upper ROM enabled and
+ * configuration 0 are conventions: the firmware writes both registers before
+ * anything could observe their reset state. */
 void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
               uint8_t crtc_type);
 

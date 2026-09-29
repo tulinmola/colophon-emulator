@@ -90,9 +90,11 @@ static void act_on_hsync_end(gate_array_t *gate_array, gate_array_hsync_end_t hs
 }
 
 void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
-  /* The diagrams under ch. 27.6.1 put the interrupt R3+1 microseconds
-     after C0 reaches R2 for every width they draw — 15 for an R3 of 14, 9
-     for 8, 2 for 1. */
+  /* The diagrams of ch. 27.6.2 put the interrupt R3+1 microseconds after C0
+     reaches R2 for every width they draw — 15 for an R3 of 14, 9 for 8, 2
+     for 1 — where the CRTC's line sync reaches this chip at once; a board
+     that hands it over a character late, as the board behind the two ASICs
+     does, has it a microsecond later (ch. 27.6.5). */
   gate_array->hsync_end_to_act_on = gate_array->hsync_end_last_character;
   gate_array->hsync_end_last_character = GATE_ARRAY_NO_HSYNC_END;
 

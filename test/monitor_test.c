@@ -161,9 +161,10 @@ static void samples_past_the_edge_are_dropped(void) {
 /* A line that never syncs carries the beam along until the counter that
    holds it runs out of values and comes round to zero, where the raster is:
    16384 runs of 4 samples take it to 65536. A CPC can reach this — a sync
-   width of zero leaves the Gate Array nothing to send, and the beam runs on
-   for frames — and what the counter does there is a property of its width
-   rather than of any tube, so it is pinned here to be moved knowingly. */
+   width of zero on a type 0 or 1 CRTC leaves the Gate Array nothing to send,
+   and the beam runs on for frames — and what the counter does there is a
+   property of its width rather than of any tube, so it is pinned here to be
+   moved knowingly. */
 static void a_beam_that_outruns_its_counter_comes_round_to_the_left(void) {
   power_on();
   for (int run = 0; run < WIDTH / RUN; run++) {
