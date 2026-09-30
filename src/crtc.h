@@ -53,23 +53,35 @@
  * "CRTC's 0, 3 and 4" alone. No line on the disc moves on the shortened
  * count or the whole line withheld: what stands behind those two is those
  * chapters' sentences and tests of our own. One more divergence of that
- * pulse stands beside those two, and this one the disc does grade. An
- * equality a program makes by hand at the head of a line is a blocked VSYNC
- * here on every type but one: "the VSYNC is triggered immediately if it was
- * not already in progress, except if this modification occurs when C0vs=0 or
- * C0vs=1 ... we are in a BLOCKED VSYNC" is ch. 16.4.1.1's, that type's own
- * chapter, and ch. 16.4.2 answers for a type 1 with no exception at all: "if
- * R7 is modified with the value of C4, then VSYNC is triggered immediately".
- * A type 2 is blocked because its own answer is absent rather than because
- * its chapter asks for it: ch. 16.4.3 gives it a pulse outside its HSYNC and
- * a GHOST VSYNC inside it, and neither is here. The two ASICs are refused by
- * a rule of their own instead. "VSYNC starts when C4=R7 and C9=C0=0", and "if
- * R7 is modified with the value of C4 while C0>0 and/or C9>0, it will not
- * trigger CRTC VSYNC" (ch. 16.4.4), which ch. 19.7.1 draws as the exception
- * to every other type — "VSYNC occurs when C4 is equal to R7 on any position
+ * pulse stands beside those two, and this one the disc does grade. An equality
+ * a program makes by hand at the head of a line is a blocked VSYNC here on a
+ * type 0, and on the two ASICs, which keep that type's block for no reason of
+ * their own chapter (crtc.c): "the VSYNC is triggered immediately if it was not
+ * already in progress, except if this modification occurs when C0vs=0 or C0vs=1
+ * ... we are in a BLOCKED VSYNC" is ch. 16.4.1.1's, that type's own chapter,
+ * and ch. 16.4.2 answers for a type 1 with no exception at all: "if R7 is
+ * modified with the value of C4, then VSYNC is triggered immediately". A type 2
+ * has its own chapter's answer, "triggered immediately, except during the HSYNC
+ * period (C0=R2 to C0=R2+R3), which triggers the GHOST VSYNC" (ch. 16.4.3), a
+ * pulse that counts its lines and prevents another "but without the VSYNC pin
+ * being enabled". The GHOST is not here: inside that period the equality is
+ * blocked instead, which keeps the pin low and the equality spent and leaves
+ * the lines uncounted, so a second equality within them raises a pulse here
+ * where the GHOST prevents one. Shaker's C (P) bears the stand-in out,
+ * naming silicon's value on a line this reader does not score (crtc.c). Nor
+ * is the GHOST the chapter gives the equality C4 walks into during a sync,
+ * "If the VSYNC condition occurs during a HSYNC from C0=R2 to C0=R2+R3 ...
+ * then the CRTC generates a GHOST VSYNC": here that one raises the pin, and
+ * B (3) "FAKE VSYNC ON CRTC 2" and C (RETURN) "GHOST VSYNC VS LAST LINE",
+ * aimed at it, grade nothing. The two ASICs are refused by a rule of their
+ * own besides. "VSYNC starts when C4=R7 and C9=C0=0", and "if R7 is
+ * modified with the value of C4 while C0>0 and/or C9>0, it will not trigger
+ * CRTC VSYNC" (ch. 16.4.4), which ch. 19.7.1 draws as the exception to
+ * every other type — "VSYNC occurs when C4 is equal to R7 on any position
  * of C0 (except on CRTC's 3 and 4, which dictate that C4=C9=C0=0)" — so an
  * equality made by hand anywhere but a frame's corner is spent on them and
- * the pulse waits for the corner after. A MID-VSYNC is the one thing that
+ * the pulse waits for the corner after, save where the type 0 block they
+ * keep holds it past that corner (crtc.c). A MID-VSYNC is the one thing that
  * moves the character and the delay of ch. 19.7.1's other exception the one
  * thing that moves the line. An R7 of 0 puts the equality on the character
  * the frame's parity turns on, and these two read it first: "the management
@@ -93,8 +105,9 @@
  * the reentrancy — the group that watches this pin to catch a row counter
  * overrunning came right on both by the frame's end these two take where a line
  * ends, below, and the board's microsecond, and neither the corner nor the
- * reentrancy touched one of its lines. Lifting the block for a type 1 was what
- * let the eighth below reach the line of the disc that grades it. The third is
+ * reentrancy touched one of its lines. The eighth below reaches the line of the
+ * disc that grades it on the type 1 and type 2 records by their early reading
+ * of the equality alone, with or without a type 0's block. The third is
  * how a type 1 reads R9 in the interlace video mode, and the disc grades it
  * too: its odd-lined rows come of an even R9 where a type 0's come of an odd
  * one (ch. 19.5.3, 19.8.2), and it reads the limit down to that parity where a
@@ -327,16 +340,18 @@
  * "OUTI ON C0=0,R0=0" asks the same of the type 1 record.
  *
  * The same character-clock edge reaches another comparison, the C4/R7 equality
- * that starts a VSYNC, which a type 1 reads on the character a write lands on
- * where the rest read it on the one after. Ch. 16.4.2 times that one — a PPI
- * read answers such a write "at the earliest 5 μsec after" where ch. 16.4.1.1
- * has a type 0 read "6 µsec later" — and what it buys a program is ch. 16.4's
- * last chance, "up to the last µsecond preceding C4=R7", one microsecond
- * later than the other four have it: C4 has already walked onto the value
- * being written, and they do not read that equality until the character
- * after, where the block of the second exception above has already spent it.
- * The board says which edge an access landed on, through a pin no chip has,
- * and one that cannot say leaves it low, which costs every type its window.
+ * that starts a VSYNC, which types 1 and 2 read on the character a write lands
+ * on where the rest read it on the one after. Ch. 16.4.2 times it for a type 1
+ * — a PPI read answers such a write "at the earliest 5 μsec after" where
+ * ch. 16.4.1.1 has a type 0 read "6 µsec later" — and ch. 16.4.3 gives a
+ * type 2 only "triggered immediately", which Shaker's B (6) settles on that
+ * character. What it buys a program is ch. 16.4's last chance, "up to the last
+ * µsecond preceding C4=R7", one microsecond later than the other three have
+ * it: C4 has already walked onto the value being written, and they do not read
+ * that equality until the character after, where the block of the second
+ * exception above has already spent it. The board says which edge an access
+ * landed on, through a pin no chip has, and one that cannot say leaves it low,
+ * which costs every type its window.
  *
  * Two things the chip cannot take back. The characters it has already drawn
  * are one: their pins were handed over before the write arrived, so a machine
@@ -367,7 +382,8 @@
  * Shaker's B (6) grades the window at both its widths and neither cost: its
  * "4TH uSec ON C0=0" comes right on the type 0, type 1 and type 2 records
  * with the first character, its "5TH uSec ON C0=0" for a type 1 with the
- * second, and its "R7 LAST CHANCE 4TH uSec" with the other comparison.
+ * second, and its "R7 LAST CHANCE 4TH uSec" on the type 1 and type 2 records
+ * with the other comparison.
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — the character its line ending is decided on
@@ -570,8 +586,8 @@
  * difference — ch. 13.7.1 names "an internal processing phase shift between
  * this CRTC and CRTCs 0 and 2" — and a board that cannot say which edge an
  * access landed on simply leaves this low, which costs every type the window
- * its line ending is kept in, and a type 1 the second character of that
- * window and its early C4/R7 reading besides. */
+ * its line ending is kept in, a type 1 the second character of that window
+ * besides, and types 1 and 2 their early C4/R7 reading. */
 #define CRTC_ON_THE_CHARACTER_CLOCK (1ULL << 36)
 
 static inline uint16_t crtc_ma(uint64_t pins) { return (uint16_t)(pins & 0x3FFF); }

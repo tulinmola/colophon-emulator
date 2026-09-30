@@ -1029,27 +1029,50 @@ static void begin_the_hsync(crtc_t *crtc) {
   }
 }
 
-/* An equality a program makes by hand at the head of a line is a blocked
-   VSYNC here on every type but one: "the VSYNC is triggered immediately if it
-   was not already in progress, except if this modification occurs when C0vs=0
-   or C0vs=1 ... we are in a BLOCKED VSYNC" belongs to ch. 16.4.1.1, a type
-   0's chapter, and ch. 16.4.2 answers for a type 1 with no exception at all —
-   "if R7 is modified with the value of C4, then VSYNC is triggered
-   immediately".
+/* Whether an equality a program makes by hand is a blocked VSYNC rather than
+   a triggered one. At the head of a line it is on a type 0: "the VSYNC is
+   triggered immediately if it was not already in progress, except if this
+   modification occurs when C0vs=0 or C0vs=1 ... we are in a BLOCKED VSYNC"
+   belongs to ch. 16.4.1.1, a type 0's chapter, and ch. 16.4.2 answers for a
+   type 1 with no exception at all — "if R7 is modified with the value of C4,
+   then VSYNC is triggered immediately". A type 2 has ch. 16.4.3's answer,
+   "triggered immediately, except during the HSYNC period (C0=R2 to C0=R2+R3),
+   which triggers the GHOST VSYNC": a pulse that counts its lines and prevents
+   another, "but without the VSYNC pin being enabled". The GHOST is not here,
+   and the block stands in for it inside that period, keeping the pin low and
+   the equality spent. It counts none of the GHOST's lines, so a second
+   equality within them — R7 written onto C4 again past the sync, or met on a
+   row after — raises a pulse here where the GHOST prevents one. Shaker's
+   C (P) bears the stand-in out on a line this reader does not score: of the
+   six it tags "UPD R7 IN HSYNC", the one for R8=3, R9=6 and C4=#26 reads
+   #0431 against silicon's #0431 with the block, and #0001 without it.
 
-   The other three keep a type 0's block, which is not their chapters' answer
-   but the nearest thing this chip has to one. Ch. 16.4.3 gives a type 2 a
-   pulse outside its HSYNC and a GHOST VSYNC inside it, "except during the
-   HSYNC period (C0=R2 to C0=R2+R3), which triggers the GHOST VSYNC", and
-   ch. 16.4.4 gives types 3 and 4 a condition of their own: "VSYNC starts when
-   C4=R7 and C9=C0=0 ... if R7 is modified with the value of C4 while C0>0
-   and/or C9>0, it will not trigger CRTC VSYNC". Neither is here, and the disc
-   says the stand-in is the closer of the two answers for types 3 and 4: the
-   R7 line of its B (6) wants of them what it wants of a type 0. */
-static bool blocks_a_vsync_made_at_a_lines_head(const crtc_t *crtc) { return crtc->type != 1; }
+   The two ASICs keep a type 0's block for no reason in their own chapter,
+   which gives them "VSYNC starts when C4=R7 and C9=C0=0 ... if R7 is modified
+   with the value of C4 while C0>0 and/or C9>0, it will not trigger CRTC
+   VSYNC" (ch. 16.4.4), kept in begin_the_vsync. The block tells where their
+   start leaves the frame's corner — a MID-VSYNC's R0/2, or the delayed line —
+   and where an R4 of 0 brings C4 back to the corner unmoved, when nothing
+   lifts it and ch. 16.4.4's "renewed" condition would start a sync there.
+   Nothing on the disc grades it: both records swept with it lifted come out
+   the same. */
+static bool blocks_an_equality_made_by_hand(const crtc_t *crtc) {
+  if (crtc->type == 1) {
+    return false;
+  }
+  if (crtc->type == 2) {
+    /* The sync running and the character it ended on, which is the period
+       "1 µsec longer than the visual size of the HSYNC" read off the chip's
+       own state: a width of nothing run to sixteen, a sync carried past R0,
+       and an R2 no counter reaches all fall where the sync does. */
+    return crtc->hsync || crtc->hsync_ended_here;
+  }
+  return crtc->c0 < 2;
+}
 
-/* The C4/R7 equality, read on every character. A type 1 reads it on the
-   character a write lands on as well, which crtc_access says so. */
+/* The C4/R7 equality, read on every character. Types 1 and 2 read it on the
+   character a write lands on as well, where the write lands on the character
+   clock (crtc_access). */
 static void begin_the_vsync(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   /* The two ASICs start one only at a frame's own corner: "VSYNC starts when
@@ -1795,14 +1818,12 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
       }
       if (crtc->address_register == 7) {
         /* Writing R7 changes the comparison whatever the value written, so
-           it can serve again (ch. 16.3) — except that an equality made by
-           hand at the head of a line is not a VSYNC but a blocked one: "the
-           VSYNC is triggered immediately if it was not already in progress,
-           except if this modification occurs when C0vs=0 or C0vs=1. If the
-           modification of R7 with the value of C4 took place when C0vs<2,
-           we are in a BLOCKED VSYNC" (ch. 16.4.1.1). */
-        crtc->vsync_blocked =
-            blocks_a_vsync_made_at_a_lines_head(crtc) && crtc->c0 < 2 && c4_stands_on_r7(crtc);
+           it can serve again (ch. 16.3) — except where an equality made by
+           hand is a blocked VSYNC rather than one: on a type 0 "if the
+           modification of R7 with the value of C4 took place when C0vs<2, we
+           are in a BLOCKED VSYNC" (ch. 16.4.1.1), and the other types as
+           blocks_an_equality_made_by_hand says. */
+        crtc->vsync_blocked = c4_stands_on_r7(crtc) && blocks_an_equality_made_by_hand(crtc);
         /* And on a type 1 the equality a write makes is read on the character
            the write lands on, not on the one after it, where the board
            reports the write finishing on the character clock. It is the same
@@ -1813,8 +1834,17 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            chance of ch. 16.4 one microsecond later than the rest of them
            have it: C4 has already walked onto the value being written, and
            the others do not read that equality until the character after,
-           where the block above has already spent it. */
-        if (crtc->type == 1 && (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
+           where the block above has already spent it. A type 2 reads it there
+           too, and that rests on the disc rather than on ch. 13.7.1, which
+           sets a type 2 with type 0 in its phase: ch. 16.4.3 gives it no
+           timing, only "triggered immediately" and a triggered pulse counted
+           word for word as ch. 16.4.2 counts a type 1's, and Shaker's B (6)
+           settles the character, its "R7 LAST CHANCE 4TH uSec" landing on the
+           last character of the row C4 stands on, the one character the
+           equality holds, and wanting the sync of a type 2 as of a type 1.
+           That the edge is the character clock's for a type 2 as well is
+           taken from the type 1, not settled. */
+        if ((crtc->type == 1 || crtc->type == 2) && (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
           begin_the_vsync(crtc);
         }
       }

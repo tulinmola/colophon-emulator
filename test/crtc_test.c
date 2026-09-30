@@ -2046,12 +2046,13 @@ static void a_take_back_carries_the_writes_it_cannot_undo(void) {
    same quarter ch. 13.7.1's phase shift gives R0, which ch. 16.4.2 times at
    "the earliest 5 μsec after" against ch. 16.4.1.1's "6 µsec later".
 
-   What it buys a program is ch. 16.4's last chance one microsecond later
-   than the other four have it: C4 has already walked onto the value being
-   written, and they do not read that equality until the character after,
-   where the block has already spent it. Shaker's B (6) grades exactly that,
-   and its "R7 LAST CHANCE 4TH uSec" came right with it. */
-static void an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0(void) {
+   What it buys a program is ch. 16.4's last chance one microsecond later than
+   types 0, 3 and 4 have it — a type 2 reads the equality as early,
+   on the disc's evidence (crtc.c) — C4 having already walked onto the value being written, where
+   they do not read that equality until the character after. Shaker's B (6)
+   grades exactly that, and its "R7 LAST CHANCE 4TH uSec" came right with
+   it. */
+static void an_r7_written_on_c4_raises_or_blocks_a_vsync_as_each_type_reads_it(void) {
   static const struct {
     uint8_t type;
     uint8_t written_on; /* the character C0 names when the write lands */
@@ -2076,9 +2077,16 @@ static void an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0(voi
          all that separates this one from the rest. */
       {1, 20, true, true, true, 16},
       {1, 20, false, false, true, 16},
-      {2, 20, true, false, true, 16},
-      /* The other three keep a type 0's block at a line's head, their own
-         chapters' answers not being implemented; crtc.h says which and why. */
+      /* A type 2 reads it on that character too, "triggered immediately"
+         (ch. 16.4.3), and its pulse runs as a type 1's; off the clock it waits
+         for the next, an edge taken from the type 1 rather than settled. */
+      {2, 20, true, true, true, 16},
+      {2, 20, false, false, true, 16},
+      /* At a line's head it is blocked here only because the sync power-on's
+         R2 and R3 of 0 ask for spans it, which is where its chapter gives a
+         GHOST VSYNC and this chip a block. The two ASICs keep a type 0's
+         block, their own chapter's answer standing elsewhere; crtc.h says
+         which and why. */
       {2, 0, true, false, false, 0},
       {3, 0, true, false, false, 0},
       {4, 0, true, false, false, 0},
@@ -4420,6 +4428,62 @@ static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
   TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
 }
 
+/* A type 2 has no C0vs<2 exception: "if R7 is modified with the value of C4,
+   then the VSYNC is triggered immediately, except during the HSYNC period
+   (C0=R2 to C0=R2+R3), which triggers the GHOST VSYNC" (ch. 16.4.3) — a
+   period "1 µsec longer than the visual size of the HSYNC". The GHOST counts
+   its lines with the pin low and is not here; the block stands in for it, so
+   what is graded inside the period is that no pin rises then or later. The
+   period is the sync's own, wherever R2 and R3 put it: carried past R0 into
+   the next line, and nowhere at all where no counter reaches R2. */
+static void an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync(void) {
+  static const struct {
+    uint8_t r2;
+    uint8_t r3;         /* the sync's width */
+    uint8_t written_on; /* the character C0 names when the write lands */
+    bool triggers;
+  } cases[] = {
+      {46, 0x8E, 0, true},   /* a line's head, which a type 0 blocks */
+      {46, 0x8E, 1, true},   /* and the character after it */
+      {46, 0x8E, 45, true},  /* the character before the sync */
+      {46, 0x8E, 46, false}, /* the sync's first character */
+      {46, 0x8E, 53, false}, /* inside it */
+      {46, 0x8E, 59, false}, /* its last character */
+      {46, 0x8E, 60, false}, /* the microsecond past it */
+      {46, 0x8E, 61, true},  /* and the one past that */
+      {46, 0x80, 62, false}, /* a width of nothing is sixteen on this type */
+      {46, 0x80, 63, true},  /* and ends there */
+      {60, 0x88, 2, false},  /* a sync carried past R0 into the next line */
+      {50, 0x8E, 0, false},  /* B (3)'s sync, ended on the next line's head */
+      {50, 0x8E, 1, true},   /* and the character after */
+      {250, 0x8A, 2, true},  /* an R2 no counter reaches: no sync at all */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(2, cases[index].r2);
+    write_register(3, cases[index].r3);
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(7, 60); /* beyond C4's reach, so no VSYNC of its own */
+    bool arrived = false;
+    for (long tick = 0; tick < 64L * SCANLINE && !arrived; tick++) {
+      crtc_tick(&crtc);
+      arrived = crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == cases[index].written_on;
+    }
+    TEST_CHECK(arrived);
+    TEST_CHECK(!crtc.vsync);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+    crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
+    TEST_EQUAL(crtc.vsync, cases[index].triggers);
+    bool raised_later = false;
+    for (int character = 0; character < SCANLINE; character++) {
+      raised_later = raised_later || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+    }
+    TEST_EQUAL(raised_later, cases[index].triggers);
+  }
+}
+
 /* The management has no more defined a start than the VSYNC's permission
    does, and this chip wakes holding it — a chip that has been running has
    passed C0=1 more times than anyone can count. It shows only where R0 is
@@ -6229,7 +6293,7 @@ int main(void) {
   TEST_RUN(a_frame_ended_by_a_width_named_since_is_a_frame_that_had_it);
   TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
   TEST_RUN(a_take_back_carries_the_writes_it_cannot_undo);
-  TEST_RUN(an_r7_written_at_a_lines_head_raises_a_vsync_on_all_but_a_type_0);
+  TEST_RUN(an_r7_written_on_c4_raises_or_blocks_a_vsync_as_each_type_reads_it);
   TEST_RUN(a_line_end_does_not_outlive_the_room_holding_it);
   TEST_RUN(a_mode_taken_up_inside_a_row_is_counted_from_the_address);
   TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);
@@ -6292,6 +6356,7 @@ int main(void) {
   TEST_RUN(an_r7_and_r4_of_zero_give_one_vsync_and_no_more);
   TEST_RUN(an_r7_written_at_a_lines_head_blocks_instead_of_triggering);
   TEST_RUN(an_r7_written_on_an_unarmed_line_still_triggers);
+  TEST_RUN(an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync);
   TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
   TEST_RUN(an_r7_of_zero_is_read_before_the_parity_turns_on_the_asics);
   TEST_RUN(the_video_mode_doubles_the_raster_address);
