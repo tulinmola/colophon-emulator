@@ -6,6 +6,11 @@
  * address wiring and the clock that divides between the chips; the chips it
  * wires know nothing about it.
  *
+ * Bit 0 of the 8255's port B is the CRTC's VSYNC, taken in and never driven:
+ * a program that turns the port round to drive the line itself, the FAKE
+ * VSYNC of Compendium ch. 7.3, reads back its own latch and reaches neither
+ * the Gate Array nor the CRTC's pin.
+ *
  * Sources:
  * - "The Gate Array" (Grim),
  *   https://www.grimware.org/doku.php/documentations/devices/gatearray — the

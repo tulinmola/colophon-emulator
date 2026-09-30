@@ -2082,12 +2082,12 @@ static void an_r7_written_on_c4_raises_or_blocks_a_vsync_as_each_type_reads_it(v
          for the next, an edge taken from the type 1 rather than settled. */
       {2, 20, true, true, true, 16},
       {2, 20, false, false, true, 16},
-      /* At a line's head it is blocked here only because the sync power-on's
-         R2 and R3 of 0 ask for spans it, which is where its chapter gives a
-         GHOST VSYNC and this chip a block. The two ASICs keep a type 0's
-         block, their own chapter's answer standing elsewhere; crtc.h says
-         which and why. */
-      {2, 0, true, false, false, 0},
+      /* At a line's head it is a GHOST, only because the sync power-on's R2
+         and R3 of 0 ask for spans it: a pulse that runs and counts as any
+         does, its pin held low (ch. 16.4.3), which the test below grades.
+         The two ASICs keep a type 0's block, their own chapter's answer
+         standing elsewhere; crtc.h says which and why. */
+      {2, 0, true, true, true, 16},
       {3, 0, true, false, false, 0},
       {4, 0, true, false, false, 0},
   };
@@ -4431,32 +4431,37 @@ static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
 /* A type 2 has no C0vs<2 exception: "if R7 is modified with the value of C4,
    then the VSYNC is triggered immediately, except during the HSYNC period
    (C0=R2 to C0=R2+R3), which triggers the GHOST VSYNC" (ch. 16.4.3) — a
-   period "1 µsec longer than the visual size of the HSYNC". The GHOST counts
-   its lines with the pin low and is not here; the block stands in for it, so
-   what is graded inside the period is that no pin rises then or later. The
-   period is the sync's own, wherever R2 and R3 put it: carried past R0 into
-   the next line, and nowhere at all where no counter reaches R2. */
+   period "1 µsec longer than the visual size of the HSYNC". Either way a sync
+   begins at once; inside the period it is a GHOST and no pin rises, then or
+   over the line after. The period is the sync's own, wherever R2 and R3 put
+   it: carried past R0 into the next line, and nowhere at all where no
+   counter reaches R2. */
 static void an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync(void) {
   static const struct {
     uint8_t r2;
     uint8_t r3;         /* the sync's width */
     uint8_t written_on; /* the character C0 names when the write lands */
-    bool triggers;
+    bool on_the_clock;
+    bool pin; /* whether the sync it begins reaches the pin */
   } cases[] = {
-      {46, 0x8E, 0, true},   /* a line's head, which a type 0 blocks */
-      {46, 0x8E, 1, true},   /* and the character after it */
-      {46, 0x8E, 45, true},  /* the character before the sync */
-      {46, 0x8E, 46, false}, /* the sync's first character */
-      {46, 0x8E, 53, false}, /* inside it */
-      {46, 0x8E, 59, false}, /* its last character */
-      {46, 0x8E, 60, false}, /* the microsecond past it */
-      {46, 0x8E, 61, true},  /* and the one past that */
-      {46, 0x80, 62, false}, /* a width of nothing is sixteen on this type */
-      {46, 0x80, 63, true},  /* and ends there */
-      {60, 0x88, 2, false},  /* a sync carried past R0 into the next line */
-      {50, 0x8E, 0, false},  /* B (3)'s sync, ended on the next line's head */
-      {50, 0x8E, 1, true},   /* and the character after */
-      {250, 0x8A, 2, true},  /* an R2 no counter reaches: no sync at all */
+      {46, 0x8E, 0, true, true},    /* a line's head, which a type 0 blocks */
+      {46, 0x8E, 1, true, true},    /* and the character after it */
+      {46, 0x8E, 45, true, true},   /* the character before the sync */
+      {46, 0x8E, 46, true, false},  /* the sync's first character */
+      {46, 0x8E, 53, true, false},  /* inside it */
+      {46, 0x8E, 59, true, false},  /* its last character */
+      {46, 0x8E, 60, true, false},  /* the microsecond past it */
+      {46, 0x8E, 61, true, true},   /* and the one past that */
+      {46, 0x80, 62, true, false},  /* a width of nothing is sixteen on this type */
+      {46, 0x80, 63, true, true},   /* and ends there */
+      {60, 0x88, 2, true, false},   /* a sync carried past R0 into the next line */
+      {50, 0x8E, 0, true, false},   /* B (3)'s sync, ended on the next line's head */
+      {50, 0x8E, 1, true, true},    /* and the character after */
+      {250, 0x8A, 2, true, true},   /* an R2 no counter reaches: no sync at all */
+      {46, 0x8E, 45, false, true},  /* off the clock, the equality read a */
+      {46, 0x8E, 46, false, false}, /* character later: ch. 15.4.4's drawing of */
+      {46, 0x8E, 60, false, false}, /* an OUT gives the same period, the last */
+      {46, 0x8E, 61, false, true},  /* character of it included */
   };
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, 2);
@@ -4474,13 +4479,175 @@ static void an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync(void) {
     TEST_CHECK(arrived);
     TEST_CHECK(!crtc.vsync);
     crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
-    crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
-    TEST_EQUAL(crtc.vsync, cases[index].triggers);
+    uint64_t pins = CRTC_CS | CRTC_RS | crtc_set_data(0, crtc.c4);
+    if (cases[index].on_the_clock) {
+      pins |= CRTC_ON_THE_CHARACTER_CLOCK;
+    }
+    crtc_access(&crtc, pins);
+    if (!cases[index].on_the_clock) {
+      crtc_tick(&crtc); /* the equality is read on the next character */
+    }
+    TEST_CHECK(crtc.vsync);
+    TEST_EQUAL(crtc.vsync_is_a_ghost, !cases[index].pin);
     bool raised_later = false;
     for (int character = 0; character < SCANLINE; character++) {
       raised_later = raised_later || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
     }
-    TEST_EQUAL(raised_later, cases[index].triggers);
+    TEST_EQUAL(raised_later, cases[index].pin);
+  }
+}
+
+/* What a GHOST is for: "the CRTC counts the lines as if a VSYNC were taking
+   place by preventing a new VSYNC from occurring, but without the VSYNC pin
+   being enabled" (ch. 16.4.3). A condition merely ignored inside the sync
+   "would occur immediately when leaving HSYNC", and the chip "will therefore
+   only be able to accept a new VSYNC condition when GHOST VSYNC is
+   completed" (ch. 15.4.4) — so an R7 written onto C4 again past the sync
+   raises nothing until the GHOST's sixteen lines are counted, and R7 written
+   onto C4 once they are raises a pulse that reaches the pin. */
+static void a_ghost_vsync_holds_another_off_until_its_lines_are_counted(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 50);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 4));
+  TEST_CHECK(crtc.vsync && crtc.vsync_is_a_ghost);
+  TICK_UNTIL(crtc.c0 == 62);
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 4));
+  int pin_characters = 0;
+  int lines = 0;
+  while (crtc.vsync && lines < 32) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      pin_characters++;
+    }
+    if (crtc.c0 == 0) {
+      lines++;
+    }
+  }
+  TEST_EQUAL(pin_characters, 0);
+  TEST_EQUAL(lines, 16);
+  /* Counted, and an equality made anew reaches the pin. */
+  TICK_UNTIL(crtc.c0 == 10);
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
+  TEST_CHECK(crtc.vsync && !crtc.vsync_is_a_ghost);
+}
+
+/* A GHOST ends as any VSYNC does, and the equality that raised it is spent
+   with it: where the row outlasts the sixteen lines, C4 still standing on R7
+   raises nothing more until the comparison changes (ch. 16.3). */
+static void a_ghost_vsync_spends_the_equality_that_raised_it(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 50);
+  write_register(3, 0x0E);
+  write_register(4, 38);
+  write_register(9, 31);
+  write_register(7, 5);
+  TICK_UNTIL(crtc.c4 == 5 && crtc.vsync);
+  TEST_CHECK(crtc.vsync_is_a_ghost);
+  /* Sixteen lines into a row of thirty-two it has ended, and nothing stands
+     in its place on the row's last line. */
+  TICK_UNTIL(crtc.c4 == 5 && crtc.c9 == 31);
+  TEST_CHECK(!crtc.vsync);
+}
+
+/* The GHOST an R7 written off the clock makes is that write's alone: the
+   next frame's sync, walked into at a row's head outside the line sync,
+   reaches the pin. And so where such a write begins no sync at all, one
+   already running when it lands. */
+static void a_ghost_written_off_the_clock_leaves_the_next_frame_its_pin(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 50);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 4));
+  crtc_tick(&crtc);
+  TEST_CHECK(crtc.vsync && crtc.vsync_is_a_ghost);
+  TICK_UNTIL(!crtc.vsync);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 0);
+  TEST_CHECK(crtc.vsync && !crtc.vsync_is_a_ghost);
+
+  TICK_UNTIL(crtc.c0 == 50);
+  TEST_CHECK(crtc.vsync);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 4));
+  TICK_UNTIL(!crtc.vsync);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 0);
+  TEST_CHECK(crtc.vsync && !crtc.vsync_is_a_ghost);
+}
+
+/* A write that makes no equality leaves C4 to walk into one on its own
+   terms: R7 written off the clock with the row still to come, on the last
+   character of a line whose sync ends there, is no GHOST at the next row's
+   head, which lies outside that sync (ch. 15.4.4). */
+static void an_r7_written_in_a_sync_ahead_of_c4_leaves_the_walk_in_alone(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 49);
+  write_register(3, 0x8E); /* 49 to 62, ended on 63 */
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 7 && crtc.c0 == 63);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 5));
+  bool pin = false;
+  for (int character = 0; character < 2 * SCANLINE; character++) {
+    pin = pin || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+  }
+  TEST_CHECK(crtc.vsync);
+  TEST_CHECK(pin);
+}
+
+/* And the condition C4 walks into: "If this evaluation occurs while the
+   HSYNC is in progress, then a GHOST VSYNC starts", and one taking place
+   from C0=R2 to past the sync "will therefore trigger a GHOST VSYNC, unless
+   R2=0. When R2=0, the HSYNC starts on C0=0, but the VSYNC has had time to be
+   processed and it occurs normally" (ch. 15.4.4). That chapter's diagrams put the sync at 50
+   and give a pulse at R3 of 12 and 13 and none at 14 and 15, the widths whose
+   sync runs into, or ends on, the C0=0 the row R7 names begins on. The GHOST
+   is that chip's alone: the other four raise the pin there. */
+static void a_type_2_walks_into_a_ghost_vsync_where_its_hsync_runs(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r2;
+    uint8_t r3;
+    bool pin;
+  } cases[] = {
+      {2, 50, 0x0C, true},  /* the sync ends before the row's head */
+      {2, 50, 0x0D, true},  /* and on the character before it */
+      {2, 50, 0x0E, false}, /* on the head itself: a GHOST */
+      {2, 50, 0x0F, false}, /* running through it */
+      {2, 0, 0x0E, true},   /* only beginning there, R2 being 0 */
+      {0, 50, 0x0E, true},  {1, 50, 0x0E, true}, {3, 50, 0x0E, true}, {4, 50, 0x0E, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(2, cases[index].r2);
+    write_register(3, cases[index].r3);
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(7, 5);
+    TICK_UNTIL(crtc.c4 == 4);
+    bool began = false;
+    bool pin = false;
+    for (long tick = 0; tick < 2L * 8 * SCANLINE; tick++) {
+      pin = pin || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+      began = began || crtc.vsync;
+    }
+    TEST_CHECK(began);
+    TEST_EQUAL(pin, cases[index].pin);
   }
 }
 
@@ -6357,6 +6524,11 @@ int main(void) {
   TEST_RUN(an_r7_written_at_a_lines_head_blocks_instead_of_triggering);
   TEST_RUN(an_r7_written_on_an_unarmed_line_still_triggers);
   TEST_RUN(an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync);
+  TEST_RUN(a_ghost_vsync_holds_another_off_until_its_lines_are_counted);
+  TEST_RUN(a_type_2_walks_into_a_ghost_vsync_where_its_hsync_runs);
+  TEST_RUN(a_ghost_vsync_spends_the_equality_that_raised_it);
+  TEST_RUN(an_r7_written_in_a_sync_ahead_of_c4_leaves_the_walk_in_alone);
+  TEST_RUN(a_ghost_written_off_the_clock_leaves_the_next_frame_its_pin);
   TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
   TEST_RUN(an_r7_of_zero_is_read_before_the_parity_turns_on_the_asics);
   TEST_RUN(the_video_mode_doubles_the_raster_address);

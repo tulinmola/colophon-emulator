@@ -64,17 +64,20 @@
  * has its own chapter's answer, "triggered immediately, except during the HSYNC
  * period (C0=R2 to C0=R2+R3), which triggers the GHOST VSYNC" (ch. 16.4.3), a
  * pulse that counts its lines and prevents another "but without the VSYNC pin
- * being enabled". The GHOST is not here: inside that period the equality is
- * blocked instead, which keeps the pin low and the equality spent and leaves
- * the lines uncounted, so a second equality within them raises a pulse here
- * where the GHOST prevents one. Shaker's C (P) bears the stand-in out,
- * naming silicon's value on a line this reader does not score (crtc.c). Nor
- * is the GHOST the chapter gives the equality C4 walks into during a sync,
- * "If the VSYNC condition occurs during a HSYNC from C0=R2 to C0=R2+R3 ...
- * then the CRTC generates a GHOST VSYNC": here that one raises the pin, and
- * B (3) "FAKE VSYNC ON CRTC 2" and C (RETURN) "GHOST VSYNC VS LAST LINE",
- * aimed at it, grade nothing. The two ASICs are refused by a rule of their
- * own besides. "VSYNC starts when C4=R7 and C9=C0=0", and "if R7 is
+ * being enabled". That GHOST is here, and so is the one the chapter gives the
+ * equality C4 walks into during a sync, "If the VSYNC condition occurs during a
+ * HSYNC from C0=R2 to C0=R2+R3 ... then the CRTC generates a GHOST VSYNC": the
+ * sync is in progress where it ran into the character or ended on it, and not
+ * where it only begins there, "When R2=0, the HSYNC starts on C0=0, but the
+ * VSYNC has had time to be processed" (ch. 15.4.4). Shaker's C (P) bears it
+ * out, naming silicon's value on a line this reader does not score (crtc.c);
+ * B (3) "FAKE VSYNC ON CRTC 2" sets R2 to 50 and R3 to 14, under which ch. 7.3
+ * says a type 2 raises no VSYNC and the chip raises none, and the frame
+ * sync it then tries to raise through the 8255's port B is not wired here
+ * (cpc.h). A MID-VSYNC, begun at C0=R0/2 on an even frame, takes the GHOST by
+ * the same reading where the sync runs into or ends on that character, which no
+ * chapter covers and nothing grades. The two ASICs are refused by a rule of
+ * their own besides. "VSYNC starts when C4=R7 and C9=C0=0", and "if R7 is
  * modified with the value of C4 while C0>0 and/or C9>0, it will not trigger
  * CRTC VSYNC" (ch. 16.4.4), which ch. 19.7.1 draws as the exception to
  * every other type — "VSYNC occurs when C4 is equal to R7 on any position
@@ -850,6 +853,16 @@ typedef struct crtc_t {
      the modification that same sentence exempts. */
   bool r3_written_for_this_character;
   bool vsync;
+  /* A type 2's VSYNC begun while its HSYNC is in progress, which counts its
+     lines and holds another off as any VSYNC does, "but without the VSYNC
+     pin being enabled" (ch. 16.4.3, 15.4.4): the GHOST VSYNC. */
+  bool vsync_is_a_ghost;
+  /* Whether an R7 a type 2 took off the character clock made the C4/R7
+     equality while its HSYNC was in progress. The equality is read on the
+     next character, and ch. 15.4.4 draws every such write from C0=R2 to
+     C0=R2+R3 triggering a GHOST, the last included; a write that makes no
+     equality leaves C4 to walk into one on its own terms. */
+  bool r7_was_written_in_the_hsync;
 } crtc_t;
 
 /* Power-on as the given type. Real silicon leaves the register file

@@ -150,10 +150,12 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
      believing it was would let a HSYNC through on the first tick back. Nor
      is any of this a line's end: a chip loaded with one still armed would
      take the whole of itself back on the next R0 written to a character
-     clock, registers and all. */
+     clock, registers and all; nor is restoring R7 a write a program made
+     inside a sync. */
   cpc->crtc.r3_written_for_this_character = false;
   cpc->crtc.a_line_end_is_kept = false;
   cpc->crtc.the_line_end_before_is_kept = false;
+  cpc->crtc.r7_was_written_in_the_hsync = false;
 
   /* The control word first, because setting it clears the output latches.
      The format stores inputs for A and B, outputs for C. */
