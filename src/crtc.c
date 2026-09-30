@@ -325,12 +325,53 @@ static void c9_ivm_goes_on(crtc_t *crtc) {
       crtc->c9 == (crtc->registers[9] >> 1) ? 0 : (uint8_t)((crtc->c9_ivm + 1) & C9_BITS);
 }
 
+/* An R5 above 0 asks padding of the last line, and here of any row's end
+   whose C4 has gone past R4 as well, on every type. Ch. 12.2's note gives
+   that to a type 0, "if C4 exceeds R4 on at least one of these events, it
+   will return to 0 once the additional line handling is complete"; no
+   chapter gives it to a type 2, and Shaker says a type 2 does not (crtc.h). */
+static bool r5_asks_padding_here(const crtc_t *crtc) {
+  return crtc->registers[5] != 0 && crtc->c4 >= crtc->registers[4] &&
+         row_is_on_its_last_scanline(crtc);
+}
+
+static void count_a_line_on(crtc_t *crtc) {
+  if (row_is_on_its_last_scanline(crtc)) {
+    crtc->c9 = 0;
+    crtc->c9_ivm = 0;
+    enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
+  } else {
+    c9_ivm_goes_on(crtc);
+    crtc->c9 = (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
+  }
+}
+
+/* "On CRTC 2, if the interlace mode is disabled (R8=0) while the 'Interlace'
+   line is displayed, then the 'Last Line' condition is cancelled. The current
+   line is no longer considered as an interlace line. C9 then continues to
+   count to R9, and C4 is increasing if it is different from R4" (ch. 11.9).
+   Ch. 19.6.3 gives it again as the other half of "a noticeable bug on the
+   management of the additional line", and names the mode differently: "if
+   the IVM mode is disabled during the additional line ... C4 will increment
+   until it reaches R4". Both write R8=0. Where they part, R8 taken from 3 to
+   1 or from 1 to 0, ch. 11.9 is taken, it being the chapter about this line
+   and the mode it names, "(IVM/non-IVM)", being what adds the line at all.
+   Disabled while the line is displayed is read as not asked for at the
+   line's end, a character after the C0=R0 read that asks for the line after
+   it: a write made on the line's last character, after that read, gives it
+   up, and one given up and asked for again inside the line is not given up.
+   Nothing grades those. */
+static bool gives_up_interlace_on_its_interlace_line(const crtc_t *crtc) {
+  return crtc->type == 2 && !interlace_asked(crtc);
+}
+
 /* A frame begins where the last one is done with, whatever the counters
    read on the way: C4 of 127 carries the interlace line itself to a C0, C4
    and C9 all zero, and a frame that read its own head off those would renew
    the line under the line it had just given and never end. One interlace
    line to a frame (ch. 11.9), and the frame it was given to is what spends
-   it, not the adjustment that carried it. */
+   it, not the adjustment that carried it — save a type 2's line given up,
+   which was no interlace line after all. */
 static void begin_frame(crtc_t *crtc) {
   crtc->vertical_adjustment_in_progress = false;
   crtc->adjustment_opened_at_c4_of_zero = false;
@@ -492,10 +533,21 @@ static void enter_scanline(crtc_t *crtc) {
     /* The padding the head of the line armed by default is asked again of R5
        as it now stands, and of the interlace line as C0=R0 answered it, which
        is where ch. 11.9 puts that question on every type. R5 admitting a row
-       whose C4 has gone past R4 is a type 0's rule (ch. 11.2.2), carried
+       whose C4 has gone past R4 is a type 0's rule (ch. 12.2), carried
        over, the ASICs' chapters saying nothing of it. */
     crtc->vertical_adjustment_armed = row_ends && ((crtc->last_line && crtc->interlace_line_owed) ||
                                                    (r[5] != 0 && crtc->c4 >= r[4]));
+  }
+  /* The line was no interlace line after all: the adjustment carrying it is
+     over, and the line is the frame's own, going on to the next unless the
+     program has made it a last line too, when it ends the frame as any last
+     line does. R5 asks padding of it as of any row's end at or past R4, at
+     the line's end where the chip asks by C0=3; that is ours, and nothing
+     grades it. */
+  if (crtc->interlace_line_given && gives_up_interlace_on_its_interlace_line(crtc)) {
+    crtc->vertical_adjustment_in_progress = false;
+    crtc->interlace_line_given = false;
+    crtc->vertical_adjustment_armed = r5_asks_padding_here(crtc);
   }
   /* The first line a type 2 turned into an additional line ends as that line
      ends a frame, and a new line 0 follows it. An adjustment armed on that
@@ -548,13 +600,8 @@ static void enter_scanline(crtc_t *crtc) {
         crtc->c9 = 0;
         crtc->c9_ivm = 0;
         enter_character_row(crtc, 0);
-      } else if (row_is_on_its_last_scanline(crtc)) {
-        crtc->c9 = 0;
-        crtc->c9_ivm = 0;
-        enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       } else {
-        c9_ivm_goes_on(crtc);
-        crtc->c9 = (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
+        count_a_line_on(crtc);
       }
     }
   } else if (crtc->vertical_adjustment_armed) {
@@ -621,13 +668,8 @@ static void enter_scanline(crtc_t *crtc) {
     }
   } else if (crtc->last_line || frame_begins_again) {
     begin_frame(crtc);
-  } else if (row_is_on_its_last_scanline(crtc)) {
-    crtc->c9 = 0;
-    crtc->c9_ivm = 0;
-    enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
   } else {
-    c9_ivm_goes_on(crtc);
-    crtc->c9 = (uint8_t)((c9_the_count_goes_on_from(crtc) + 1) & C9_BITS);
+    count_a_line_on(crtc);
   }
 
   /* And the doubling R8 asks for is taken up here rather than where it was
@@ -816,7 +858,7 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      and a write lands in the microsecond after the tick that named it, so
      the last tick that sees one in time is the one naming 3 (ch. 11.2.2,
      12.2, 13.2.1). */
-  if (crtc->c0 < 4 && r[5] != 0 && crtc->c4 >= r[4] && row_is_on_its_last_scanline(crtc)) {
+  if (crtc->c0 < 4 && r5_asks_padding_here(crtc)) {
     crtc->vertical_adjustment_armed = true;
   }
   /* And the same deadline read the other way: a line armed on an R5 that

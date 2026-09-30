@@ -157,16 +157,23 @@
  * woke on; with it C (S) and all four of C (O)'s wrong lines come right, as
  * do the two C (P) then had wrong; C (8), which says its piece in a picture,
  * holds that picture still where it had rolled; and the scoreboard stands the
- * same whichever parity the chip wakes on. Ch. 19.6.3's converse is here only
- * for that first line: "if the IVM mode is disabled during the additional
- * line ... then C4 will not be automatically reset to 0 on the next line. C9
- * will count until it reaches R9", which leaves a first line given the mode
- * and back counting on as it would have, and that the paragraph reaches that
- * line at all is our reading. Of the line a frame's end adds, whose C4 above
- * R4 the sentence names, it is not here: that line sends C4 home whatever R8
- * has become. Shaker's C (P) turns the mode off on that line on a type 2, and
- * two of its graded lines are wrong for want of the rule: silicon takes
- * #0B1C and #0020 to reach C4=0 where this chip takes #0004. The fourth is
+ * same whichever parity the chip wakes on. Ch. 19.6.3's converse is here as
+ * well, in the words ch. 11.9 gives it: where "the interlace mode is disabled
+ * (R8=0) while the 'Interlace' line is displayed, then the 'Last Line'
+ * condition is cancelled. The current line is no longer considered as an
+ * interlace line. C9 then continues to count to R9, and C4 is increasing if
+ * it is different from R4" — a type 2's alone, and ch. 19.6.3's "IVM mode"
+ * read as ch. 11.9's interlace mode, which is what adds the line. So the
+ * frame goes on, and a last line after it — or the line itself, made one by
+ * the program — is met as any frame's is. On a first line given the mode, ch.
+ * 19.6.3's converse leaves the count going on as it would have, and that it
+ * reaches that line at all is our reading. Shaker's C (P) gives up the mode
+ * on the line a frame's end adds and grades two frames on a type 2: the one
+ * that moves R4 onto C4 there comes right (#0020), and the one that leaves C4
+ * past R4 answers #0020 here where silicon answers #0B1C — to #0020 as 711
+ * lines are to eight, 711 being what C4 run on round to 0 takes from the head
+ * of that line, the second of row #27, R4 being #26 and R9 7 — for the R5 of
+ * 1 it leaves standing admits that row's end here (below). The fourth is
  * the frame parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame
  * "switch between each frame when C4 = C9 = C0 = 0" and does so "whatever the
  * value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type 2 take the
@@ -252,7 +259,7 @@
  * one character still freezes them, as it freezes every type here, and the C4
  * increment it lands on a last line opens a type 0's adjustment on them too
  * (ch. 13.2.6); and R5 admitting a row whose C4 has passed R4 is a type 0's
- * rule (ch. 11.2.2), carried over. Shaker's E (4) came right on both records on
+ * rule (ch. 12.2), carried over. Shaker's E (4) came right on both records on
  * the frame's end taken where the line ends, all twelve of the readings its
  * program makes on each — the record holds none of them, the group printing
  * only where it disagrees — with the microsecond the board gives these two an
@@ -464,7 +471,10 @@
  * 12.2) — the interlace line is left out, its question being put "on the last
  * line of a frame" (ch. 11.9) and this one no longer being one, which is our
  * reading and ungraded; an R5 above 0 still admits a line whose C4 has gone past
- * R4, which the assessment cannot see; and an adjustment already begun is past
+ * R4, which the assessment cannot see — ch. 12.2's note gives it to a type 0, "if
+ * C4 exceeds R4 on at least one of these events, it will return to 0 once the
+ * additional line handling is complete", and nothing gives it to a type 2, which
+ * Shaker's C (P) grades against (above); and an adjustment already begun is past
  * both (ch. 13.2.6), which is what keeps ch. 10.3.1.2's exception alive now the
  * disarm asks only what ch. 13.2.5 says it asks. A line too short to reach the
  * disarm keeps what it was armed with, as ch. 11.2.2 and ch. 12.2 have it at "R0
@@ -765,7 +775,9 @@ typedef struct crtc_t {
      microsecond before the line it decides could begin. */
   bool interlace_line_owed;
   /* The one line interlace adds after the R5 lines, and one to a frame
-     however the adjustment carrying it ends (ch. 11.9, 19.6.1). */
+     however the adjustment carrying it ends (ch. 11.9, 19.6.1) — save on a
+     type 2 that gives interlace up on it, which makes it "no longer
+     considered as an interlace line" (ch. 11.9). */
   bool interlace_line_given;
   /* The interlace video mode as the counters see it, which is not quite as
      R8 holds it: the mode a write asks for is taken up at the next C0=0,

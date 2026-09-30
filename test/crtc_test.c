@@ -2602,6 +2602,124 @@ static void a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again(void) {
   TEST_EQUAL(crtc.c4, 2);
 }
 
+/* Stops on the head of the line interlace adds to an even frame of 39 rows of
+   eight, R5 lines before it as asked. */
+static void stand_on_the_head_of_the_interlace_line(uint8_t type, uint8_t r5, uint8_t r8) {
+  crtc_init(&crtc, type);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(4, 38);
+  write_register(5, r5);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 7);
+  write_register(8, r8);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 0 && crtc.interlace_line_given);
+}
+
+/* The other half of ch. 19.6.3's "noticeable bug on the management of the
+   additional line", on the line a frame's end adds: "if the IVM mode is
+   disabled during the additional line (C4 being then greater than R4), then
+   C4 will not be automatically reset to 0 on the next line. C9 will count
+   until it reaches R9, and C4 will increment until it reaches R4", and the
+   chapter's example is this frame: R4=38 and R5=0, "an additional IVM line is
+   added on C4=39, C9=0. If IVM is disabled on this line (R8=0), then C9 will
+   count to R9, then C4 will be incremented again to 40" (ch. 19.6.3). Ch.
+   11.9 says it of "the interlace mode ... (R8=0)", and that "the current line
+   is no longer considered as an interlace line". A type 2's alone; the other
+   four end the frame after the line as they would have.
+
+   Counted from the head of the interlace line to the head of the next frame:
+   on a type 2 the line itself and the rest of its row, the rows C4 climbs
+   through to 127 and round, and the frame's rows up to R4 again, 1024 lines.
+   With R5=1 the line follows an R5 line, and R4 moved onto C4 inside it — "it
+   is perfectly possible to reprogram R4 with C4 (equal to the old R4+1) in
+   order to reactivate the 'Last Line' state when C9 reaches R9" (ch. 11.9) —
+   makes that row's own last line a last line like any other, which takes its
+   R5 line, the line before having been no interlace line: eight lines, where
+   the machine answers C (P)'s #0020 as silicon does. Made a last line on the
+   line itself — R4 and R9 moved onto the counters in time for C0=1 — the line
+   is padded or ends the frame as any last line: two lines with R5=1, one
+   without, where "C4 is increasing if it is different from R4" (ch. 11.9)
+   and here it is not. R8 written on the line's last character, after the
+   C0=R0 read that asks for the line after it, gives the line up all the same:
+   padded where R5 is 1, which only a line given up is, and with no second
+   interlace line where R5 is 0. Made only its row's end, R9 alone moved, it
+   is padded as any row's end past R4 is on this machine, which Shaker's C (P)
+   says a type 2 does not do (crtc.h). The sync mode given up is ch. 11.9's
+   "interlace mode" too; the video mode given up with the sync mode kept, R8
+   from 3 to 1, is not, though ch. 19.6.3's "IVM mode" would say it was; and a
+   mode given up and asked for again inside the line is not given up. Those
+   three are our reading of the two chapters, and nothing we can run grades
+   them. */
+static void a_type_2_frame_goes_on_where_its_interlace_line_gives_up_interlace(void) {
+  static const struct {
+    uint8_t r5;
+    uint8_t standing;     /* R8 as the frame has it */
+    uint8_t first_write;  /* R8, at C0=10 of the interlace line */
+    uint8_t r4;           /* R4, at C0=20 */
+    uint8_t second_write; /* R8, at C0=30 */
+    long lines_on_a_type_2;
+  } cases[] = {
+      {0, 3, 0, 38, 0, 1024}, {1, 3, 0, 39, 0, 8}, {0, 1, 0, 38, 0, 1024},
+      {0, 3, 1, 38, 1, 1},    {0, 3, 0, 38, 3, 1},
+  };
+  for (uint8_t type = 0; type < 5; type++) {
+    for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+      stand_on_the_head_of_the_interlace_line(type, cases[index].r5, cases[index].standing);
+      uint8_t row = crtc.c4;
+      uint8_t line = crtc.c9;
+      uint8_t frames = crtc.frames_counted;
+      TICK_UNTIL(crtc.c0 == 10);
+      write_register(8, cases[index].first_write);
+      TICK_UNTIL(crtc.c0 == 20);
+      write_register(4, cases[index].r4);
+      TICK_UNTIL(crtc.c0 == 30);
+      write_register(8, cases[index].second_write);
+      TICK_UNTIL(crtc.c0 == 0);
+      long wanted = type == 2 ? cases[index].lines_on_a_type_2 : 1;
+      TEST_EQUAL(crtc.c4, wanted == 1 ? 0 : row);
+      TEST_EQUAL(crtc.c9, wanted == 1 ? 0 : line + 1);
+      long lines = 1;
+      while (crtc.frames_counted == frames && lines < 2000) {
+        TICK_UNTIL(crtc.c0 == 1);
+        TICK_UNTIL(crtc.c0 == 0);
+        lines++;
+      }
+      TEST_EQUAL(lines, wanted);
+    }
+  }
+
+  static const struct {
+    uint8_t r5;
+    bool r4_onto_c4;   /* R4 moved with R9, or R9 alone */
+    uint8_t character; /* the one R8=0 is written on */
+    long lines;
+  } ends[] = {
+      {0, true, 10, 1}, {1, true, 10, 2}, {0, true, 63, 1}, {1, true, 63, 2}, {1, false, 10, 2}};
+  for (unsigned index = 0; index < sizeof ends / sizeof *ends; index++) {
+    stand_on_the_head_of_the_interlace_line(2, ends[index].r5, 3);
+    uint8_t frames = crtc.frames_counted;
+    if (ends[index].r4_onto_c4) {
+      write_register(4, crtc.c4);
+    }
+    write_register(9, crtc.c9);
+    TICK_UNTIL(crtc.c0 == ends[index].character);
+    write_register(8, 0);
+    TICK_UNTIL(crtc.c0 == 0);
+    long lines = 1;
+    while (crtc.frames_counted == frames && lines < 2000) {
+      TICK_UNTIL(crtc.c0 == 1);
+      TICK_UNTIL(crtc.c0 == 0);
+      lines++;
+    }
+    TEST_EQUAL(lines, ends[index].lines);
+  }
+}
+
 /* A width of nothing puts the counter home wherever it stood when the write
    landed. The chapters put it only from a counter already there — "if R0=0,
    then C0 never reaches 1 (and therefore remains at 0)" (ch. 13.2.1), "when
@@ -6454,6 +6572,7 @@ int main(void) {
   TEST_RUN(a_type_2_begins_an_odd_frame_again_where_its_first_line_takes_the_mode);
   TEST_RUN(a_type_2_first_line_goes_on_counting_where_the_mode_did_not_arrive);
   TEST_RUN(a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again);
+  TEST_RUN(a_type_2_frame_goes_on_where_its_interlace_line_gives_up_interlace);
   TEST_RUN(only_the_latest_line_ends_are_taken_back);
   TEST_RUN(a_line_taken_back_is_the_line_its_oracle_draws);
   TEST_RUN(a_line_of_nothing_given_a_width_of_one_is_a_line_that_had_it);
