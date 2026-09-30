@@ -842,11 +842,9 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      inside an adjustment, long after R5's own window has shut. The answer
      is kept because the line it decides cannot begin until the next
      character. A frame that would have ended here is held open for it, and
-     one already held open by R5 needs no holding. Shaker points its C (P)
-     group at this, and every line it grades in words on the type 0 and type
-     2 records agrees, but none of them has been tied to the character the
-     deadline names: it stands on the chapter's own sentence and on our
-     tests. */
+     one already held open by R5 needs no holding. Shaker's C (P) grades that
+     reach on a type 2 and bounds the deadline's character to C0=#2A..R0
+     (crtc.h); R0 is the chapter's word. */
   if (crtc->c0 == r[0]) {
     crtc->interlace_line_owed = interlace_line_asked_for(crtc);
     if (crtc->interlace_line_owed && crtc->last_line) {
@@ -1064,10 +1062,11 @@ static bool blocks_an_equality_made_by_hand(const crtc_t *crtc) {
    condition ignored, which "would occur immediately when leaving HSYNC", and
    the chip "will therefore only be able to accept a new VSYNC condition when
    GHOST VSYNC is completed" (ch. 15.4.4); so it runs and counts as any VSYNC
-   does, and the pin alone is withheld. Shaker's C (P) bears it out on a line
-   this reader does not score: of the six it tags "UPD R7 IN HSYNC", the one
-   for R8=3, R9=6 and C4=#26 reads #0431 against silicon's #0431 with the
-   GHOST, and #0001 with the equality left to trigger. */
+   does, and the pin alone is withheld. Shaker's C (P) bears it out: of the
+   six lines it tags "UPD R7 IN HSYNC", the one for R8=3, R9=6 and C4=#26
+   reads #0431 against silicon's #0431 with the GHOST, and #0001 with the
+   equality left to trigger. The one for R8=0, R9=6 and C4=#27 reads #0445
+   against silicon's #0449; the GHOST did not move it. */
 static void begin_the_vsync(crtc_t *crtc, bool a_sync_is_in_progress) {
   const uint8_t *r = crtc->registers;
   /* The two ASICs start one only at a frame's own corner: "VSYNC starts when
@@ -1626,13 +1625,14 @@ static void take_up_r8_parity(crtc_t *crtc, bool was_video_mode) {
    odd frame, given the mode on C4=0 and C9=0, runs on to C9=1 with no new line
    0. The prose is taken, in three places against one table, and Shaker takes
    it too: the routine settling the parity before its C (O), C (P), C (S)
-   and C (8) reads this line to learn which frame it is on, and the three of
-   those that grade themselves agree with silicon only where it is here. What
-   ch. 19.6.3 says the line shows meanwhile — "the C9 displayed as soon as R8=3
-   on this line will be odd (i.e. C9=1)" — is not here: this chip takes the mode
-   up at the next C0=0, which the head of crtc.h declares, and the line keeps
-   its address to its end. The table cannot say which, every one of its rows
-   that carries a write showing the address from before it.
+   and C (8) reads this line to learn which frame it is on, and in the three
+   of those that grade themselves the lines it moved agree with silicon only
+   where it is here. What ch. 19.6.3 says the line shows meanwhile — "the C9
+   displayed as soon as R8=3 on this line will be odd (i.e. C9=1)" — is not
+   here: this chip takes the mode up at the next C0=0, which the head of
+   crtc.h declares, and the line keeps its address to its end. The table
+   cannot say which, every one of its rows that carries a write showing the
+   address from before it.
 
    The mode given up again inside that line takes the line back: "if the IVM
    mode is disabled during the additional line (C4 being then greater than R4),

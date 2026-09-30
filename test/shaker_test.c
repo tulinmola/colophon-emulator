@@ -815,17 +815,18 @@ static bool keep_rasters;
 
 /* Some groups grade themselves. Most of them keep both values on the one
    line: the value the machine produced stands last before a bracket and the
-   value real silicon produced stands inside it. Longshot writes that six
+   value real silicon produced stands inside it. Longshot writes that seven
    ways:
 
        >>>>>> DELAY TO VSYNC:#0030 (EXP:#00F7)  WRONG
        RESULT:#8700 WRONG (EXP:#4E40)
        R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)
        R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
+       R5=1/R8=0,R9=6 ON LAST LINE/ CPU TO C4=#27:#0445 (#0449 exp) (UPD R7 IN HSYNC)
        R7=0/VSYNC/R4=0 VSIZE=#0044 (CRTC 0.1.2:#44 / 3.4:#FFFF=DEADLOCK)
        2B         :#CC >WRONG (Exp #C4)
 
-   Three of them never write WRONG at all, so the values decide and the word
+   Four of them never write WRONG at all, so the values decide and the word
    only corroborates. They are compared as numbers because #0032 and #32
    are one measurement written two ways.
 
@@ -888,10 +889,11 @@ static bool matches_ignoring_case(const char *at, const char *lowercase, size_t 
   return true;
 }
 
-/* The word, then the value: with a colon between them as modules C, D and
-   E write it, spelt out as module C's (E) does, or with neither as modules
-   B and D do — `(Exp #C4)`, `(Exp#00)`. The value has to be there: what
-   keeps a title out is the rule above, that a line carrying no
+/* The word and the value: the word first, with a colon between them as
+   modules C, D and E write it or with no colon as modules B and D do —
+   `(Exp #C4)`, `(Exp#00)` — or spelt out after the value, as module C's (E)
+   and (P) write it. The value has to be there: what keeps a title out is
+   the rule above, that a line carrying no
    measurement of its own is not a grading here, which is what leaves module
    D's `TST COMP C4/R7 ACTIVE DURING VSYNC FOR DEADLOCK (EXP #5F)` to the
    reader below that takes it for the title it is, and grades the rows that
@@ -925,6 +927,57 @@ static bool names_the_expected_value(const char *opening, const char *closing) {
     }
   }
   return false;
+}
+
+/* And the value before the word cut short, "(#0449 exp)", which module C's
+   (P) writes on a type 2 from its fifth line on, where its first four spell
+   the word out. The bracket holds the value and the word and nothing
+   else. */
+static bool names_the_expected_value_before_the_short_word(const char *opening, const char *closing,
+                                                           unsigned long *expected) {
+  const char *at = opening + 1;
+  while (at < closing && *at == ' ') {
+    at++;
+  }
+  if (!hex_value_at(at, expected)) {
+    return false;
+  }
+  for (at++; at < closing && isxdigit((unsigned char)*at); at++) {
+  }
+  while (at < closing && *at == ' ') {
+    at++;
+  }
+  if (closing - at < 3 || !matches_ignoring_case(at, "exp", 3)) {
+    return false;
+  }
+  for (at += 3; at < closing && *at == ' '; at++) {
+  }
+  return at == closing;
+}
+
+/* Whether nothing but brackets and spaces follows. From one of its later
+   tests on, the screen of module C's (P) on a type 2 stands eight rows
+   lower, and the rows above the group's title show its later records a
+   second time, each split across two rows: a record's tail with the head of
+   the next run on after it. The same record stands whole on a row of its
+   own below the title, and it is read there; read on the split copy as
+   well, one test would be counted twice under two texts. */
+static bool only_brackets_follow(const char *at) {
+  while (*at != '\0') {
+    if (*at == ' ') {
+      at++;
+      continue;
+    }
+    if (*at != '(') {
+      return false;
+    }
+    const char *closing = strchr(at, ')');
+    if (closing == NULL) {
+      return false;
+    }
+    at = closing + 1;
+  }
+  return true;
 }
 
 static bool holds_text(const char *from, const char *to, const char *lowercase) {
@@ -1057,6 +1110,10 @@ static bool read_a_measured_verdict(const char *line, uint8_t type, bool *failed
          grading this reader knows, and reading past it would pair a later
          bracket with a number standing inside this one. */
       if (!first_hex_value_between(opening, closing, &expected)) {
+        return false;
+      }
+    } else if (names_the_expected_value_before_the_short_word(opening, closing, &expected)) {
+      if (!only_brackets_follow(closing + 1)) {
         return false;
       }
     } else if (!value_for_this_crtc_type(opening, closing, type, &expected)) {
@@ -1387,6 +1444,52 @@ static int collect_verdicts(int percentage_named) {
   return added;
 }
 
+/* Whether a line names silicon's value before the short word, in any
+   bracket. */
+static bool holds_a_value_before_the_short_word(const char *line) {
+  for (const char *opening = strchr(line, '('); opening != NULL;
+       opening = strchr(opening + 1, '(')) {
+    const char *closing = strchr(opening, ')');
+    unsigned long expected;
+    if (closing != NULL &&
+        names_the_expected_value_before_the_short_word(opening, closing, &expected)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* While a record is the last one module C's (P) has printed on a type 2,
+   the copy split across the rows above its title has nothing run on after
+   the record's tail, and only_brackets_follow cannot tell that tail from a
+   whole record. What tells it is that the whole record stands among the
+   same group's verdicts ending in the tail word for word; such a verdict is
+   that record's, and is dropped once the group is done. */
+static void drop_the_tails_of_split_records(void) {
+  bool a_tail[MAX_VERDICTS] = {false};
+  for (int index = 0; index < verdict_count; index++) {
+    const char *tail = verdicts[index].text;
+    if (!holds_a_value_before_the_short_word(tail)) {
+      continue;
+    }
+    size_t tail_length = strlen(tail);
+    for (int other = 0; other < verdict_count; other++) {
+      const char *whole = verdicts[other].text;
+      size_t whole_length = strlen(whole);
+      if (whole_length > tail_length && strcmp(whole + whole_length - tail_length, tail) == 0) {
+        a_tail[index] = true;
+      }
+    }
+  }
+  int kept = 0;
+  for (int index = 0; index < verdict_count; index++) {
+    if (!a_tail[index]) {
+      verdicts[kept++] = verdicts[index];
+    }
+  }
+  verdict_count = kept;
+}
+
 /* Most of these groups say what they have to say in the picture rather than
    in words, so a screen kept by name keeps its beam path too. When the
    record is full the newest replaces the last kept, because a test that
@@ -1554,6 +1657,7 @@ static void run_group(const char *module, const group *entry, FILE *report,
   }
   fprintf(report, "\n");
 
+  drop_the_tails_of_split_records();
   int wrong = 0;
   for (int index = 0; index < verdict_count; index++) {
     if (verdicts[index].failed) {
@@ -1793,6 +1897,60 @@ static void a_screen_read_in_part_cannot_repeat_a_verdict(void) {
   memset(previous_screen, 0, sizeof previous_screen);
 }
 
+/* The rows are module C's (P) own on a type 2, the frame it had printed
+   the record for C4=#26 last. Of the split copy above the title only that
+   record's tail is taken on the screen, and it goes at the group's end,
+   where its whole record is found. */
+static void a_record_split_across_rows_is_read_once(void) {
+  static const char *const split[] = {
+      " AFTER LAST LINE/ CPU TO C4=0:#0004 (#0020 exp) R5=1/R8=3,R9=6 ON LAST LINE/ CPU",
+      " TO C4=#00:#0009 (#0009 exp) (UPD R7 IN HSYNC)  R5=1/R8=3,R9=6 ON LAST LINE/ CPU",
+      " TO C4=#27:#044D (#044D exp) (UPD R7 IN HSYNC)  R5=1/R8=3,R9=6 ON LAST LINE/ CPU",
+      " TO C4=#26:#0431 (#0431 exp) (UPD R7 IN HSYNC)",
+      "CRTC 2  R8 ON LAST LINE",
+      "R5=1/R8=3, R8=0,R4++ ON 2ND LINE AFTER LAST LINE/ CPU TO C4=0:#0004 (#0020 exp)",
+      "R5=1/R8=3,R9=6 ON LAST LINE/ CPU TO C4=#00:#0009 (#0009 exp) (UPD R7 IN HSYNC)",
+      "R5=1/R8=3,R9=6 ON LAST LINE/ CPU TO C4=#27:#044D (#044D exp) (UPD R7 IN HSYNC)",
+      "R5=1/R8=3,R9=6 ON LAST LINE/ CPU TO C4=#26:#0431 (#0431 exp) (UPD R7 IN HSYNC)",
+  };
+  static const char *const tail_alone[] = {
+      " TO C4=#26:#0431 (#0431 exp) (UPD R7 IN HSYNC)",
+  };
+  /* A line that ends another word for word under the other conventions is
+     a test of its own as far as this reader knows. */
+  static const char *const suffix_elsewhere[] = {
+      "R8=3 ON LAST LINE/ CPU TO C4=0:#0007 (#0007 expected)",
+      "CPU TO C4=0:#0007 (#0007 expected)",
+  };
+  verdict_count = 0;
+  verdicts_dropped = 0;
+  show_screen(split, 9);
+  TEST_EQUAL(collect_verdicts(100), 5);
+  drop_the_tails_of_split_records();
+  TEST_EQUAL(verdict_count, 4);
+  for (int index = 0; index < verdict_count; index++) {
+    TEST_CHECK(strncmp(verdicts[index].text, "R5=1/", 5) == 0);
+  }
+
+  /* With no whole record to answer to, the tail is all the record has of
+     that test and it stays. */
+  verdict_count = 0;
+  show_screen(tail_alone, 1);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  drop_the_tails_of_split_records();
+  TEST_EQUAL(verdict_count, 1);
+
+  verdict_count = 0;
+  show_screen(suffix_elsewhere, 2);
+  TEST_EQUAL(collect_verdicts(100), 2);
+  drop_the_tails_of_split_records();
+  TEST_EQUAL(verdict_count, 2);
+
+  verdict_count = 0;
+  memset(screen, 0, sizeof screen);
+  memset(previous_screen, 0, sizeof previous_screen);
+}
+
 /* The page module E's (2) draws while it is still drawing carries both of
    its sentences, and neither is a verdict until one of them is left standing
    alone. Sampled twice, as a page that stood still would be, it yields
@@ -2023,6 +2181,16 @@ static const verdict_case printed_lines[] = {
     {"RESULT:#8700 WRONG (EXP:#4E40)", true, true},
     {"R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)", true, false},
     {"R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)", true, true},
+    /* And the value before the word, which module C's (P) writes from its
+       fifth line on, a bracket of its own after it or none; and two of its
+       records split across rows above its title, the next record's head run
+       on after the verdict, which are read where they stand whole. */
+    {"R5=1/R8=3, R8=0 ON 1ST R5 LINE/ CPU TO C4=0:#0004 (#0004 exp)", true, false},
+    {"R5=1/R8=0,R9=6 ON LAST LINE/ CPU TO C4=#27:#0445 (#0449 exp) (UPD R7 IN HSYNC)", true, true},
+    {" TO C4=#00:#0009 (#0009 exp) (UPD R7 IN HSYNC)  R5=1/R8=3,R9=6 ON LAST LINE/ CPU", false,
+     false},
+    {" AFTER LAST LINE/ CPU TO C4=0:#0004 (#0020 exp) R5=1/R8=3,R9=6 ON LAST LINE/ CPU", false,
+     false},
     /* And the word with no colon at all, which modules B and D write. The
        first is a row of a two-column table: the test whose value stands
        nearest the bracket is the one graded, and the other goes unread. */
@@ -2135,6 +2303,7 @@ static const verdict_case built_lines[] = {
     /* A word that merely begins with the letters, naming a value for
        something other than silicon, and a word that is not the word. */
     {"X=#0044 (EXPANSION #44)", false, false},
+    {"X=#0044 (#0044 EXPANSION)", false, false},
     {"X=#0044 (EXT #44)", false, false},
     /* A clause for a type 0 whose value cannot be read takes the bracket
        down rather than letting the rest answer in its place. */
@@ -2474,6 +2643,7 @@ static void run_the_readers_own_tests(void) {
   TEST_RUN(the_verdict_reader_knows_its_renderings);
   TEST_RUN(the_reader_follows_the_type_the_machine_was_built_as);
   TEST_RUN(a_screen_read_in_part_cannot_repeat_a_verdict);
+  TEST_RUN(a_record_split_across_rows_is_read_once);
   TEST_RUN(a_page_that_speaks_both_verdicts_yields_neither);
   TEST_RUN(a_title_carries_the_expectation_for_the_lines_below_it);
   TEST_RUN(a_title_is_told_from_the_lines_it_does_not_govern);

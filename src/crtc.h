@@ -70,7 +70,7 @@
  * sync is in progress where it ran into the character or ended on it, and not
  * where it only begins there, "When R2=0, the HSYNC starts on C0=0, but the
  * VSYNC has had time to be processed" (ch. 15.4.4). Shaker's C (P) bears it
- * out, naming silicon's value on a line this reader does not score (crtc.c);
+ * out on a line where the machine gives silicon's value (crtc.c);
  * B (3) "FAKE VSYNC ON CRTC 2" sets R2 to 50 and R3 to 14, under which ch. 7.3
  * says a type 2 raises no VSYNC and the chip raises none, and the frame
  * sync it then tries to raise through the 8255's port B is not wired here
@@ -154,9 +154,9 @@
  * its C (O), C (P), C (S) and C (8) reads it there and turns the parity once
  * where it is not the one wanted. Without the line the routine read the same
  * answer on either parity, so those groups were graded on whichever this chip
- * woke on; with it C (S) and all four of C (O)'s wrong lines come right, C (P)
- * agrees in all four of its own, C (8), which says its piece in a picture,
- * holds that picture still where it had rolled, and the scoreboard stands the
+ * woke on; with it C (S) and all four of C (O)'s wrong lines come right, as
+ * do the two C (P) then had wrong; C (8), which says its piece in a picture,
+ * holds that picture still where it had rolled; and the scoreboard stands the
  * same whichever parity the chip wakes on. Ch. 19.6.3's converse is here only
  * for that first line: "if the IVM mode is disabled during the additional
  * line ... then C4 will not be automatically reset to 0 on the next line. C9
@@ -164,8 +164,10 @@
  * and back counting on as it would have, and that the paragraph reaches that
  * line at all is our reading. Of the line a frame's end adds, whose C4 above
  * R4 the sentence names, it is not here: that line sends C4 home whatever R8
- * has become. The fourth is the
- * frame parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame
+ * has become. Shaker's C (P) turns the mode off on that line on a type 2, and
+ * two of its graded lines are wrong for want of the rule: silicon takes
+ * #0B1C and #0020 to reach C4=0 where this chip takes #0004. The fourth is
+ * the frame parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame
  * "switch between each frame when C4 = C9 = C0 = 0" and does so "whatever the
  * value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type 2 take the
  * parity R6 anticipated and hold it for ever once C4 can no longer reach R6
@@ -423,7 +425,13 @@
  * 11.9 gives it, later than R5's three characters and read on the last line a
  * frame has — which may be one of R5's own, so a program may add the line or
  * take it back from inside an adjustment, and a frame R5 asked nothing of is
- * held open for it. Nothing outside this repository grades that deadline either.
+ * held open for it. Shaker's C (P) grades that reach into an adjustment on a
+ * type 2: were the deadline read only on the last line of a frame's last row,
+ * never on an adjustment line, two more of the group's graded lines would come
+ * out wrong. It bounds the character too. Read at C0=#29, where one of its
+ * tests writes R8 on a last line, or at any character before it, the deadline
+ * puts at least one more line wrong; from C0=#2A to R0, #3F there, the group
+ * cannot tell one character from another. R0 is the chapter's word.
  * C0 names the character being drawn and holds it for that whole microsecond,
  * which is what a positional register write needs; the last line and the
  * vertical adjustment already read it, and both are settled at the characters

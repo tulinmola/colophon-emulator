@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-7 of them printed self-graded lines, 31 in all: 31 agree with Longshot's
-silicon and 0 do not. That is 100% of what this reader can score, and no
+7 of them printed self-graded lines, 42 in all: 39 agree with Longshot's
+silicon and 3 do not. That is 93% of what this reader can score, and no
 measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -125,11 +125,22 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
       R5=2 / ON 1ST ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
       R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)
       R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0080 (#0080 expected)
-C (P)       ALL      : ADD LINE R8                                                           4 graded, 0 wrong
+C (P)       ALL      : ADD LINE R8                                                           15 graded, 3 wrong
       R5=3/ON 2ND ADD LINE,R5=1,R8=3/ CPU TO NEW FRAME:#0084 (#0084 expected)
       R8=3 ON LAST LINE/ CPU TO C4=0:#0007 (#0007 expected)
       R8=3 ON LAST LINE/ CPU TO C4=1:#0027 (#0027 expected)
       CANCEL IVM ON LAST LINE/ CPU TO C4=0:#0004 (#0004 expected)
+      R5=1/R8=3, R8=0 ON 1ST R5 LINE/ CPU TO C4=0:#0004 (#0004 exp)
+    ! R5=1/R8=3, R8=0 ON 2ND LINE AFTER LAST LINE/ CPU TO C4=0:#0004 (#0B1C exp)
+      R5=1/R8=3, R5=0 ON 2ND LINE AFTER LAST LINE/ CPU TO C4=0:#0004 (#0004 exp)
+    ! R5=1/R8=3, R8=0,R4++ ON 2ND LINE AFTER LAST LINE/ CPU TO C4=0:#0004 (#0020 exp)
+      R5=1/R8=3,R9=6 ON LAST LINE/ CPU TO C4=#00:#0009 (#0009 exp) (UPD R7 IN HSYNC)
+      R5=1/R8=3,R9=6 ON LAST LINE/ CPU TO C4=#27:#044D (#044D exp) (UPD R7 IN HSYNC)
+      R5=1/R8=3,R9=6 ON LAST LINE/ CPU TO C4=#26:#0431 (#0431 exp) (UPD R7 IN HSYNC)
+    ! R5=1/R8=0,R9=6 ON LAST LINE/ CPU TO C4=#27:#0445 (#0449 exp) (UPD R7 IN HSYNC)
+      R5=1/R8=3,R9=7 ON LAST LINE/ CPU TO C4=#00:#0009 (#0009 exp) (UPD R7 IN HSYNC)
+      R5=1/R8=3,R9=7 ON LAST LINE/ CPU TO C4=#27:#0001 (#0001 exp) (UPD R7 IN HSYNC)
+      R5=1/R8=3,R9=6 ON LAST LINE/ CPU TO C4=#26:#0001 (#0001 exp)
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
 C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
