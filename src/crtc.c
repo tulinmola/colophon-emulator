@@ -325,14 +325,21 @@ static void c9_ivm_goes_on(crtc_t *crtc) {
       crtc->c9 == (crtc->registers[9] >> 1) ? 0 : (uint8_t)((crtc->c9_ivm + 1) & C9_BITS);
 }
 
-/* An R5 above 0 asks padding of the last line, and here of any row's end
-   whose C4 has gone past R4 as well, on every type. Ch. 12.2's note gives
-   that to a type 0, "if C4 exceeds R4 on at least one of these events, it
-   will return to 0 once the additional line handling is complete"; no
-   chapter gives it to a type 2, and Shaker says a type 2 does not (crtc.h). */
+/* Whether an R5 above 0 asks padding of a row's end whose C4 has gone past
+   R4, as well as of the last line itself. Ch. 12.2's note gives it to a type
+   0, "if C4 exceeds R4 on at least one of these events, it will return to 0
+   once the additional line handling is complete". A type 2 does not: Shaker's
+   C (P) leaves R5 at 1 with C4 carried past R4, and silicon runs C4 on round
+   to 0, as ch. 12.1 has any C4 past R4 outside an adjustment do — "C4 counts
+   up to its limit (127) and loops back". Types 1, 3 and 4 keep a type 0's
+   here, which no chapter gives them; taken from them, and from a type 0,
+   it moves no line Shaker grades. */
+static bool pads_a_row_past_r4(const crtc_t *crtc) { return crtc->type != 2; }
+
 static bool r5_asks_padding_here(const crtc_t *crtc) {
-  return crtc->registers[5] != 0 && crtc->c4 >= crtc->registers[4] &&
-         row_is_on_its_last_scanline(crtc);
+  const uint8_t *r = crtc->registers;
+  bool row_asked = crtc->c4 == r[4] || (crtc->c4 > r[4] && pads_a_row_past_r4(crtc));
+  return r[5] != 0 && row_asked && row_is_on_its_last_scanline(crtc);
 }
 
 static void count_a_line_on(crtc_t *crtc) {
@@ -534,16 +541,16 @@ static void enter_scanline(crtc_t *crtc) {
        as it now stands, and of the interlace line as C0=R0 answered it, which
        is where ch. 11.9 puts that question on every type. R5 admitting a row
        whose C4 has gone past R4 is a type 0's rule (ch. 12.2), carried
-       over, the ASICs' chapters saying nothing of it. */
-    crtc->vertical_adjustment_armed = row_ends && ((crtc->last_line && crtc->interlace_line_owed) ||
-                                                   (r[5] != 0 && crtc->c4 >= r[4]));
+       over, the ASICs' chapters saying nothing of it (pads_a_row_past_r4). */
+    crtc->vertical_adjustment_armed =
+        (row_ends && crtc->last_line && crtc->interlace_line_owed) || r5_asks_padding_here(crtc);
   }
   /* The line was no interlace line after all: the adjustment carrying it is
      over, and the line is the frame's own, going on to the next unless the
      program has made it a last line too, when it ends the frame as any last
-     line does. R5 asks padding of it as of any row's end at or past R4, at
-     the line's end where the chip asks by C0=3; that is ours, and nothing
-     grades it. */
+     line does. R5 asks padding of it only there, C4 standing on R4 at its
+     row's end (pads_a_row_past_r4), and asks it at the line's end where the
+     chip asks by C0=3; that is ours, and nothing grades it. */
   if (crtc->interlace_line_given && gives_up_interlace_on_its_interlace_line(crtc)) {
     crtc->vertical_adjustment_in_progress = false;
     crtc->interlace_line_given = false;
@@ -812,11 +819,13 @@ static void decide_last_line(crtc_t *crtc) {
 
 /* An R5 seen before C0 reaches 3 spends the line on a vertical adjustment
    instead of ending the frame, which is why the two states are exclusive.
-   C4 standing past R4 does not disqualify the line: the overflow rule is
-   written "excluding vertical adjustment", and an adjustment that finishes
-   returns C4 to 0 from wherever it had climbed (ch. 11.2.2, 12.1, 12.2).
-   This is the way back for a program that moved R4 under its own counter,
-   and the reason a split screen resynchronises instead of drifting. */
+   On every type but a type 2, C4 standing past R4 does not disqualify the
+   line: the overflow rule is written "excluding vertical adjustment", and an
+   adjustment that finishes returns C4 to 0 from wherever it had climbed (ch.
+   11.2.2, 12.1, 12.2). This is the way back for a program that moved R4
+   under its own counter, and the reason a split screen resynchronises
+   instead of drifting; a type 2's counter goes the long way round to R4
+   (pads_a_row_past_r4). */
 static void begin_vertical_adjustment(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   /* A last line whose comparison held while C0 was 0 and 1 and does not
@@ -854,10 +863,10 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
     crtc->vertical_adjustment_armed = false;
   }
   /* R5 admits a line whose C4 has already gone past R4, which that
-     assessment cannot see. It counts on the characters C0 names 0, 1 and 2,
-     and a write lands in the microsecond after the tick that named it, so
-     the last tick that sees one in time is the one naming 3 (ch. 11.2.2,
-     12.2, 13.2.1). */
+     assessment cannot see, on the types that pad one (pads_a_row_past_r4).
+     It counts on the characters C0 names 0, 1 and 2, and a write lands in
+     the microsecond after the tick that named it, so the last tick that sees
+     one in time is the one naming 3 (ch. 11.2.2, 12.2, 13.2.1). */
   if (crtc->c0 < 4 && r5_asks_padding_here(crtc)) {
     crtc->vertical_adjustment_armed = true;
   }

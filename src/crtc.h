@@ -169,12 +169,12 @@
  * 19.6.3's converse leaves the count going on as it would have, and that it
  * reaches that line at all is our reading. Shaker's C (P) gives up the mode
  * on the line a frame's end adds and grades two frames on a type 2: the one
- * that moves R4 onto C4 there comes right (#0020), and the one that leaves C4
- * past R4 answers #0020 here where silicon answers #0B1C — to #0020 as 711
- * lines are to eight, 711 being what C4 run on round to 0 takes from the head
- * of that line, the second of row #27, R4 being #26 and R9 7 — for the R5 of
- * 1 it leaves standing admits that row's end here (below). The fourth is
- * the frame parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame
+ * that moves R4 onto C4 there comes right (#0020), and so does the one
+ * that leaves C4 past R4 with R5 at 1 (#0B1C), because a type 2 pads no
+ * row past R4 (below): C4 runs on round to 0, #0B1C standing to #0020 as
+ * the 711 lines of that climb from the head of the line, the second of
+ * row #27, stand to eight, R4 being #26 and R9 7. The fourth is the frame
+ * parity itself. Types 1, 3 and 4 anticipate none of it: ParityFrame
  * "switch between each frame when C4 = C9 = C0 = 0" and does so "whatever the
  * value of R8" (ch. 19.5.3, 19.5.5), where a type 0 and a type 2 take the
  * parity R6 anticipated and hold it for ever once C4 can no longer reach R6
@@ -470,11 +470,12 @@
  * on R5 alone, so a last line unmade at C0=0 unmakes the arming with it (ch.
  * 12.2) — the interlace line is left out, its question being put "on the last
  * line of a frame" (ch. 11.9) and this one no longer being one, which is our
- * reading and ungraded; an R5 above 0 still admits a line whose C4 has gone past
- * R4, which the assessment cannot see — ch. 12.2's note gives it to a type 0, "if
- * C4 exceeds R4 on at least one of these events, it will return to 0 once the
- * additional line handling is complete", and nothing gives it to a type 2, which
- * Shaker's C (P) grades against (above); and an adjustment already begun is past
+ * reading and ungraded; an R5 above 0 still admits a line whose C4 has gone
+ * past R4, which the assessment cannot see, on every type but a type 2 — ch.
+ * 12.2's note gives it to a type 0, "if C4 exceeds R4 on at least one of
+ * these events, it will return to 0 once the additional line handling is
+ * complete", nothing gives it to types 1, 3 and 4, and Shaker's C (P) says a
+ * type 2 does not have it (above); and an adjustment already begun is past
  * both (ch. 13.2.6), which is what keeps ch. 10.3.1.2's exception alive now the
  * disarm asks only what ch. 13.2.5 says it asks. A line too short to reach the
  * disarm keeps what it was armed with, as ch. 11.2.2 and ch. 12.2 have it at "R0

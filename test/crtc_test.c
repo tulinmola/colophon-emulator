@@ -575,19 +575,22 @@ static void the_two_asics_still_add_the_interlace_line_to_an_even_frame(void) {
    let loose: on the two ASICs that run's count is never zeroed at its opening,
    so a limit read as reached-or-passed could end it a line in where it should
    spend R5. It does not — the padding comes out the same length on every type
-   as it did before that reading was given them — and this is what says so.
+   that opens one as it did before that reading was given them — and this is
+   what says so.
 
    "C4 standing past R4 does not disqualify the line: the overflow rule is
    written 'excluding vertical adjustment', and an adjustment that finishes
-   returns C4 to 0 from wherever it had climbed" (ch. 11.2.2, 12.1, 12.2). The
-   two that count their padding on C5 spend all of R5 there; the three that
-   count it on C9 have the counter already above the limit and spend what is
-   left of it. */
-static void a_run_opened_past_r4_is_the_same_length_on_every_type(void) {
+   returns C4 to 0 from wherever it had climbed" (ch. 11.2.2, 12.1, 12.2). A
+   type 1, which counts its padding on C5, spends all of R5 there; the three
+   that count it on C9 have the counter already above the limit and spend what
+   is left of it. A type 2 opens no run past R4 at all (crtc.c): its counter
+   goes round through 0 to R4 and is padded there, all of R5 on C5. */
+static void a_run_opened_past_r4_is_the_same_length_on_the_types_that_open_one(void) {
   static const struct {
     uint8_t type;
     unsigned padding_lines;
-  } cases[] = {{0, 2}, {1, 6}, {2, 6}, {3, 2}, {4, 2}};
+    bool opens_past_r4;
+  } cases[] = {{0, 2, true}, {1, 6, true}, {2, 6, false}, {3, 2, true}, {4, 2, true}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, cases[index].type);
     write_register(0, 63);
@@ -603,8 +606,10 @@ static void a_run_opened_past_r4_is_the_same_length_on_every_type(void) {
     write_register(4, 2); /* the counter is now past R4, where it stands */
     unsigned padding_lines = 0;
     bool opened = false;
+    bool came_round = false;
     for (long tick = 0; tick < 8L * FRAME_TICKS; tick++) {
       crtc_tick(&crtc);
+      came_round = came_round || (!opened && crtc.c4 == 0);
       if (crtc.vertical_adjustment_in_progress && crtc.c0 == 0) {
         padding_lines++;
         opened = true;
@@ -615,6 +620,7 @@ static void a_run_opened_past_r4_is_the_same_length_on_every_type(void) {
     }
     TEST_CHECK(opened);
     TEST_EQUAL(padding_lines, cases[index].padding_lines);
+    TEST_EQUAL(came_round, !cases[index].opens_past_r4);
   }
 }
 
@@ -2648,13 +2654,14 @@ static void stand_on_the_head_of_the_interlace_line(uint8_t type, uint8_t r5, ui
    C0=R0 read that asks for the line after it, gives the line up all the same:
    padded where R5 is 1, which only a line given up is, and with no second
    interlace line where R5 is 0. Made only its row's end, R9 alone moved, it
-   is padded as any row's end past R4 is on this machine, which Shaker's C (P)
-   says a type 2 does not do (crtc.h). The sync mode given up is ch. 11.9's
-   "interlace mode" too; the video mode given up with the sync mode kept, R8
-   from 3 to 1, is not, though ch. 19.6.3's "IVM mode" would say it was; and a
-   mode given up and asked for again inside the line is not given up. Those
-   three are our reading of the two chapters, and nothing we can run grades
-   them. */
+   is no last line, and a type 2 pads no row past R4 (crtc.c): C4 climbs round
+   to R4 on rows of two lines and the frame is padded there, 256 lines in all,
+   the climb Shaker's C (P) holds a type 2 to. The sync mode given up is ch.
+   11.9's "interlace mode" too; the video mode given up with the sync mode
+   kept, R8 from 3 to 1, is not, though ch. 19.6.3's "IVM mode" would say it
+   was; and a mode given up and asked for again inside the line is not given
+   up. Those three are our reading of the two chapters, and nothing we can run
+   grades them. */
 static void a_type_2_frame_goes_on_where_its_interlace_line_gives_up_interlace(void) {
   static const struct {
     uint8_t r5;
@@ -2699,7 +2706,7 @@ static void a_type_2_frame_goes_on_where_its_interlace_line_gives_up_interlace(v
     uint8_t character; /* the one R8=0 is written on */
     long lines;
   } ends[] = {
-      {0, true, 10, 1}, {1, true, 10, 2}, {0, true, 63, 1}, {1, true, 63, 2}, {1, false, 10, 2}};
+      {0, true, 10, 1}, {1, true, 10, 2}, {0, true, 63, 1}, {1, true, 63, 2}, {1, false, 10, 256}};
   for (unsigned index = 0; index < sizeof ends / sizeof *ends; index++) {
     stand_on_the_head_of_the_interlace_line(2, ends[index].r5, 3);
     uint8_t frames = crtc.frames_counted;
@@ -3661,15 +3668,15 @@ static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
 }
 
 /* The other half of that parenthesis. A line whose C4 has already gone past
-   R4 can still arm a run, because R5's own window asks only that the row be
-   on its last scanline (ch. 11.2.2, 12.2, 13.2.1) — so a program that moves
-   R4 down under its own row counter opens a run on a line that was never
-   going to end the frame. "C4 should return to 0 at the end of the frame
-   (C4=R4, C9=R9)" is false there as surely as it is on a last line unmade,
-   and no state is taken: an R5 cancelled inside such a run is ch. 11.3.1's
-   plain overflow, the thirty-two a five-bit counter has. A chip that read
-   only the C9 half of the parenthesis would hold the frame instead, until C4
-   had climbed its whole counter to find R4 again. */
+   R4 can still arm a run on a type 1, which keeps a type 0's padding past R4
+   (pads_a_row_past_r4; ch. 12.2's note gives it a type 0, no chapter a type
+   1) — so a program that moves R4 down under its own row counter opens a run
+   on a line that was never going to end the frame. "C4 should return to 0 at
+   the end of the frame (C4=R4, C9=R9)" is false there as surely as it is on a
+   last line unmade, and no state is taken: an R5 cancelled inside such a run
+   is ch. 11.3.1's plain overflow, the thirty-two a five-bit counter has. A
+   chip that read only the C9 half of the parenthesis would hold the frame
+   instead, until C4 had climbed its whole counter to find R4 again. */
 static void a_type_1_takes_no_state_where_c4_is_past_r4(void) {
   enum { GIVE_UP_AFTER = 4096 };
   crtc_init(&crtc, 1);
@@ -6547,7 +6554,7 @@ int main(void) {
   TEST_RUN(a_counter_above_its_limit_comes_home_on_the_asics);
   TEST_RUN(the_two_asics_leave_the_pointer_alone_through_the_padding);
   TEST_RUN(an_r5_under_the_count_ends_the_padding_on_the_asics);
-  TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_every_type);
+  TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_the_types_that_open_one);
   TEST_RUN(the_two_asics_raise_a_sync_only_at_a_frames_corner);
   TEST_RUN(the_two_asics_take_the_frames_end_where_the_line_ends);
   TEST_RUN(the_two_asics_take_r5_on_any_character_of_a_last_line);
