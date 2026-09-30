@@ -452,10 +452,28 @@ static uint8_t vsync_lines(const crtc_t *crtc) {
    them, turns a last line unmade at C0=1 into an adjustment, and gives R5 a
    deadline of its own (ch. 10.3.1.2, 12.2, 13.2) — its own chapters'
    exceptions, which the ASICs' do not share. Types 1 and 2 are left a type
-   0's, ch. 11.4.1 notwithstanding. */
+   0's frame end, and a type 1 its R5 deadline too (below). */
 static bool takes_the_frame_end_where_the_line_ends(const crtc_t *crtc) {
   return crtc->type == 3 || crtc->type == 4;
 }
+
+/* Whether this type asks R5 of its last line to the line's end, the frame's
+   end itself being settled earlier: a type 2, whose "Last Line" state "can no
+   longer be modified during the current line" (ch. 12.4.1) while "R5
+   management is considered on each C0 position" (ch. 11.4.1). Shaker's C (P)
+   holds it to that, with R5 written at C0=#26 of a last line. Only the line
+   that state names is padded, R5's lines following a last line (ch. 12.4.1),
+   so one unmade at C0=0 is not — save a given-up interlace line (below). The
+   state is settled here in a type 0's window, which ch. 12.4.1 does not quite
+   give a type 2: an R9 written at C0=0, which that chapter has come too late
+   for the evaluation, unmakes it here, and its evaluation on an R4 or R9
+   write later in the line is not here, so a row made last so late is neither
+   ended nor padded. An R5 written while C0 names R0 is taken, as on the
+   ASICs, which nothing grades. A type 1 is left a type 0's deadline, ch.
+   11.4.1 notwithstanding, for want of anything Shaker grades that asks for
+   it; an R5 raised from 0 at C0=R0 would also set off "a bug described in
+   chapter 11.6" on that chip, which is not here. */
+static bool asks_r5_to_the_end_of_the_last_line(const crtc_t *crtc) { return crtc->type == 2; }
 
 /* A line that never reaches C0=1 leaves C9's management disabled, and then
    "all of the CRTC counters are frozen as long as R0=0" (ch. 13.2.1) — the
@@ -545,12 +563,19 @@ static void enter_scanline(crtc_t *crtc) {
     crtc->vertical_adjustment_armed =
         (row_ends && crtc->last_line && crtc->interlace_line_owed) || r5_asks_padding_here(crtc);
   }
+  /* A type 2's padding is settled again where the line ends, for the line
+     its last-line state names and no other: from R5 as it then stands and
+     from the interlace line as C0=R0 answered it. */
+  if (asks_r5_to_the_end_of_the_last_line(crtc) && !crtc->vertical_adjustment_in_progress) {
+    crtc->vertical_adjustment_armed = crtc->last_line && (crtc->interlace_line_owed || r[5] != 0);
+  }
   /* The line was no interlace line after all: the adjustment carrying it is
      over, and the line is the frame's own, going on to the next unless the
      program has made it a last line too, when it ends the frame as any last
      line does. R5 asks padding of it only there, C4 standing on R4 at its
-     row's end (pads_a_row_past_r4), and asks it at the line's end where the
-     chip asks by C0=3; that is ours, and nothing grades it. */
+     row's end (pads_a_row_past_r4), read from the row's own comparison where
+     a type 2's last line is read from its settled state; that is ours, and
+     nothing grades it. */
   if (crtc->interlace_line_given && gives_up_interlace_on_its_interlace_line(crtc)) {
     crtc->vertical_adjustment_in_progress = false;
     crtc->interlace_line_given = false;
@@ -887,10 +912,11 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
   }
   /* The line interlace adds is additional-line handling too, and asks for
      no R5 at all (ch. 19.6.1). Ch. 11.9 gives it a deadline of its own,
-     later than R5's: the condition "is evaluated on the last line of a
-     frame, when C0=R0", and "this latest line can be one of the adjustment
-     lines displayed via R5" — so a program may turn the line on or off from
-     inside an adjustment, long after R5's own window has shut. The answer
+     later than a type 0's R5: the condition "is evaluated on the last line
+     of a frame, when C0=R0", and "this latest line can be one of the
+     adjustment lines displayed via R5" — so a program may turn the line on
+     or off from inside an adjustment, long after R5's own window has shut
+     on a type 0; a type 2 reads R5 a character later still (above). The answer
      is kept because the line it decides cannot begin until the next
      character. A frame that would have ended here is held open for it, and
      one already held open by R5 needs no holding. Shaker's C (P) grades that
@@ -1116,8 +1142,9 @@ static bool blocks_an_equality_made_by_hand(const crtc_t *crtc) {
    does, and the pin alone is withheld. Shaker's C (P) bears it out: of the
    six lines it tags "UPD R7 IN HSYNC", the one for R8=3, R9=6 and C4=#26
    reads #0431 against silicon's #0431 with the GHOST, and #0001 with the
-   equality left to trigger. The one for R8=0, R9=6 and C4=#27 reads #0445
-   against silicon's #0449; the GHOST did not move it. */
+   equality left to trigger. The one for R8=0, R9=6 and C4=#27, which the
+   GHOST does not move, turns on an R5 written late in its last line and reads
+   #0449 as silicon does (asks_r5_to_the_end_of_the_last_line). */
 static void begin_the_vsync(crtc_t *crtc, bool a_sync_is_in_progress) {
   const uint8_t *r = crtc->registers;
   /* The two ASICs start one only at a frame's own corner: "VSYNC starts when

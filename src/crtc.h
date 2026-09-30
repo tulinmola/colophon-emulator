@@ -277,12 +277,18 @@
  * already holds as the frame's end wherever on the line it lands — "if we were
  * on the last line (C9=R9), then C9 goes to 0, C4=0" (ch. 12.3) — where a type
  * 0 reads that comparison only while C0 is under 2, and it is a type 0's window
- * this chip keeps; types 1 and 2 are also left a type 0's R5 deadline,
- * ch. 11.4.1 notwithstanding. The sixth is the border R6 asks for. Where R6 is
- * 0 a frame's first line is a conflict on types 0 and 2 and comes out an
- * alternation of bordered and displayed bytes, cancellable until C0 meets R1
- * and definitive after it (ch. 18.3.2); a type 1 borders outright on an R6 of 0
- * "without the condition C4=R6 being required" and gives the border up with the
+ * this chip keeps; a type 1 is also left a type 0's R5 deadline, ch. 11.4.1
+ * notwithstanding, for want of anything the disc grades that asks for it —
+ * an R5 raised from 0 at C0=R0 would also set off a bug of that chip's own
+ * (ch. 11.6), which is not here. A type 2 asks R5 of its last line to the
+ * line's end (crtc.c), of the line it settled as the last in a type 0's
+ * window, where ch. 12.4.1 has an R9 written at C0=0 come too late to
+ * unmake it and an R4 or R9 written later in the line able to make it. The
+ * sixth is the border R6 asks for. Where R6 is 0 a frame's first line is a
+ * conflict on types 0 and 2 and comes out an alternation of bordered and
+ * displayed bytes, cancellable until C0 meets R1 and definitive after it
+ * (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the
+ * condition C4=R6 being required" and gives the border up with the
  * register, except where the write was made while C4 stood at 0, which keeps it
  * for the frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict and
  * test R6 where a line begins rather than through it (ch. 18.2.4, 18.3.4). No
@@ -429,7 +435,7 @@
  * with it (ch. 19.2). Nothing outside this repository grades those: what stands
  * behind them is a reading of ch. 19.2's diagrams and no evidence we did not
  * write. The interlace line is asked for on the deadline of its own that ch.
- * 11.9 gives it, later than R5's three characters and read on the last line a
+ * 11.9 gives it, later than a type 0's R5 deadline and read on the last line a
  * frame has — which may be one of R5's own, so a program may add the line or
  * take it back from inside an adjustment, and a frame R5 asked nothing of is
  * held open for it. Shaker's C (P) grades that reach into an adjustment on a

@@ -503,16 +503,23 @@ static void the_two_asics_take_the_frames_end_where_the_line_ends(void) {
 }
 
 /* And the padding after it: an R5 asked for late in a frame's last line is
-   taken on the two ASICs and not on a type 0. "R5 management is considered on
-   each C0 position" on types 1 to 4 (ch. 11.4.1), where of a type 0 "the R5>0
-   update after position C0>2 on the last line of the frame is not considered
-   because its evaluation is completed" (ch. 11.4.2). Three lines asked for at
-   C0=40: the ASICs pad the frame by three, a type 0 begins the next. */
-static void the_two_asics_take_r5_on_any_character_of_a_last_line(void) {
+   taken on a type 2 and the two ASICs, and not on a type 0. "R5 management is
+   considered on each C0 position" on types 1 to 4 (ch. 11.4.1), where of a
+   type 0 "the R5>0 update after position C0>2 on the last line of the frame
+   is not considered because its evaluation is completed" (ch. 11.4.2). Three
+   lines asked for at C0=40: a type 2 and the ASICs pad the frame by three, a
+   type 0 begins the next, and so does a type 1, left a type 0's deadline
+   (crtc.c). A type 2 asks its last line, not the row's own comparison: with
+   R9 moved off C9 at C0=25, after the "Last Line" state was settled — which
+   "can no longer be modified during the current line" (ch. 12.4.1) — an R5 of
+   1 at C0=38 still pads it by one, as Shaker's C (P) has silicon do. */
+static void a_type_2_and_the_two_asics_take_r5_on_any_character_of_a_last_line(void) {
   static const struct {
     uint8_t type;
+    uint8_t r9_moved_to; /* at C0=25, or 7 to leave it */
+    uint8_t r5;          /* at C0=40, or at C0=38 where R9 moves */
     unsigned lines_before_the_next_frame;
-  } cases[] = {{0, 0}, {3, 3}, {4, 3}};
+  } cases[] = {{0, 7, 3, 0}, {1, 7, 3, 0}, {2, 7, 3, 3}, {3, 7, 3, 3}, {4, 7, 3, 3}, {2, 6, 1, 1}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, cases[index].type);
     write_register(0, 63);
@@ -524,8 +531,15 @@ static void the_two_asics_take_r5_on_any_character_of_a_last_line(void) {
     for (long tick = 0; tick < 400L * SCANLINE; tick++) {
       crtc_tick(&crtc);
     }
-    TICK_UNTIL(crtc.c0 == 40 && crtc.c4 == 10 && crtc.c9 == 7);
-    write_register(5, 3);
+    bool r9_moves = cases[index].r9_moved_to != 7;
+    if (r9_moves) {
+      TICK_UNTIL(crtc.c0 == 25 && crtc.c4 == 10 && crtc.c9 == 7);
+      write_register(9, cases[index].r9_moved_to);
+      TICK_UNTIL(crtc.c0 == 38);
+    } else {
+      TICK_UNTIL(crtc.c0 == 40 && crtc.c4 == 10 && crtc.c9 == 7);
+    }
+    write_register(5, cases[index].r5);
     unsigned lines = 0;
     TICK_UNTIL(crtc.c0 == 0);
     while (!(crtc.c4 == 0 && crtc.c9 == 0) && lines < 40) {
@@ -535,6 +549,34 @@ static void the_two_asics_take_r5_on_any_character_of_a_last_line(void) {
     }
     TEST_EQUAL(lines, cases[index].lines_before_the_next_frame);
   }
+
+  /* And only the line that is last: a last line unmade at C0=0 — "if C4<>R4
+     or C9<>R9 during this C0==0 evaluation, then the 'Last Line' state is
+     false" (ch. 12.4.1), R4 written there — is not padded on a type 2, R5's
+     lines following a last line. With R5 at 1 the frame runs on through the next
+     row, eight lines, and is padded after that. */
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(4, 10);
+  write_register(5, 1);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 7);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 10 && crtc.c9 == 7);
+  write_register(4, 11);
+  unsigned lines = 0;
+  crtc_tick(&crtc);
+  TICK_UNTIL(crtc.c0 == 0);
+  while (!(crtc.c4 == 0 && crtc.c9 == 0) && lines < 40) {
+    lines++;
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+  }
+  TEST_EQUAL(lines, 9);
 }
 
 /* The interlace line is padding too, and the two ASICs still add it when the
@@ -4264,7 +4306,7 @@ static void stand_on_the_last_line_of_an_even_frame(uint8_t r5) {
 }
 
 /* Ch. 11.9 gives the interlace line a deadline of its own, and a later one
-   than the three microseconds R5 is read in: "The adjustment condition
+   than the three microseconds a type 0 reads R5 in: "The adjustment condition
    (interlace mode (IVM/non-IVM) activated and even frame) is evaluated on
    the last line of a frame, when C0=R0, and only if R8 contains the right
    value on the last line." So a write in force during that character
@@ -6557,7 +6599,7 @@ int main(void) {
   TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_the_types_that_open_one);
   TEST_RUN(the_two_asics_raise_a_sync_only_at_a_frames_corner);
   TEST_RUN(the_two_asics_take_the_frames_end_where_the_line_ends);
-  TEST_RUN(the_two_asics_take_r5_on_any_character_of_a_last_line);
+  TEST_RUN(a_type_2_and_the_two_asics_take_r5_on_any_character_of_a_last_line);
   TEST_RUN(the_two_asics_still_add_the_interlace_line_to_an_even_frame);
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
