@@ -828,7 +828,12 @@ static bool keep_rasters;
 
    Four of them never write WRONG at all, so the values decide and the word
    only corroborates. They are compared as numbers because #0032 and #32
-   are one measurement written two ways.
+   are one measurement written two ways. One more keeps both on the line
+   without the bracket, silicon's value after the word, and only where the
+   machine is wrong, so there the word decides and the values fix only the
+   shape:
+
+       HSYNC R4=38,AFTER HSYNC R4=0 THEN 00, R7=1,   DELAY:#0000 WRONG:EXP:#09
 
    A value before the bracket is what tells a grading from a legend naming
    the value a test is about to check, which carries no measurement of its
@@ -1230,7 +1235,7 @@ static bool the_ok_is_handed_to_types(const char *line, uint8_t type, bool *ours
     if (closing == NULL) {
       return false;
     }
-    if (!holds_text(opening, closing, "ok for")) {
+    if (closing - opening < 8 || !matches_ignoring_case(opening + 1, "ok for ", 7)) {
       continue;
     }
     for (const char *at = opening; at + 3 <= closing; at++) {
@@ -1243,6 +1248,9 @@ static bool the_ok_is_handed_to_types(const char *line, uint8_t type, bool *ours
       }
       while (numbers < closing && *numbers == ' ') {
         numbers++;
+      }
+      if (!isdigit((unsigned char)*numbers)) {
+        return false;
       }
       *ours = names_the_crtc_type(numbers, closing, type);
       return true;
@@ -1266,21 +1274,60 @@ static bool the_ok_is_handed_to_types(const char *line, uint8_t type, bool *ours
    answers it the other way, so taking an unnamed ring for this machine's
    own would book a right answer as a fault.
 
-   The bare ":OK" beside them is not read either. The same group prints it
-   where the machine answered — "UPD R4=0 WHEN C4=1 & C9=7 >> C4=2 (Ovf)
-   :OK" — and group 4 prints the same bare word for the branch its counter
-   took, so the word alone cannot be told apart by its shape. */
-static bool read_a_marked_failure(const char *line, uint8_t type, bool *failed) {
+   The ":OK" the same line ends in on a type 3 or 4 is the other half, and is
+   read by the same bracket: an OK the bracket hands to this machine is its
+   answer, and one it hands to other types is a fault. The bare ":OK" is not
+   read. The same group prints it, and the bare ring, where it names no type
+   — "PREV R9=7 R4=38 >> UPD R4=1 WHEN C4=1 & C9=7 >> C4=0       :OK" on a
+   type 3 or 4 and ":xKOx" on the other three, and "UPD R4=0 WHEN C4=1 &
+   C9=7 >> C4=2 (Ovf) :OK" — and group 4 prints the same bare word for the
+   branch its counter took, so the word alone cannot be told apart by its
+   shape. */
+static bool read_an_outcome_handed_to_types(const char *line, uint8_t type, bool *failed) {
   bool ours = false;
-  if (!ends_with(line, ":xKOx") || !the_ok_is_handed_to_types(line, type, &ours)) {
+  bool ringed = ends_with(line, ":xKOx");
+  if (!(ringed || ends_with(line, ":OK")) || !the_ok_is_handed_to_types(line, type, &ours)) {
     return false;
   }
-  *failed = ours;
+  *failed = ringed == ours;
+  return true;
+}
+
+/* And the word with silicon's value after it, outside any bracket: module
+   E's (7) prints "R7=1,   DELAY:#0000 WRONG:EXP:#09" where its own
+   comparison fails and the value alone, "DELAY:#0018", where it passes —
+   the disc carries a "WRONG:EXP:#xx" beside each of the group's four DELAY
+   templates — so like the groups above that speak only on failure it is
+   counted only while it disagrees. The value before the word is the
+   measurement, which is what keeps a legend out, and the line ends on
+   silicon's value. */
+static bool read_a_failure_naming_silicons_value(const char *line, bool *failed) {
+  static const char word[] = "WRONG:EXP:";
+  const char *at = strstr(line, word);
+  unsigned long expected;
+  unsigned long produced;
+  if (at == NULL || !hex_value_at(at + strlen(word), &expected) ||
+      !last_hex_value_before(line, at, &produced)) {
+    return false;
+  }
+  const char *after = at + strlen(word) + 1;
+  while (isxdigit((unsigned char)*after)) {
+    after++;
+  }
+  while (*after == ' ') {
+    after++;
+  }
+  if (*after != '\0') {
+    return false;
+  }
+  *failed = true;
   return true;
 }
 
 static bool read_verdict(const char *line, uint8_t type, bool *failed) {
-  return read_a_measured_verdict(line, type, failed) || read_a_marked_failure(line, type, failed) ||
+  return read_a_measured_verdict(line, type, failed) ||
+         read_an_outcome_handed_to_types(line, type, failed) ||
+         read_a_failure_naming_silicons_value(line, failed) ||
          read_a_declared_verdict(line, failed) || read_a_spoken_verdict(line, failed);
 }
 
@@ -1303,14 +1350,6 @@ static bool appears_in_previous_screen(const char *line) {
   return false;
 }
 
-/* A group that runs more tests than the screen holds scrolls the early ones
-   away, so verdicts are collected as they pass. A line is taken only once
-   it has stood still for a sample: a screen read while the module was
-   repainting splices the left of one line onto the right of another, and
-   such a line would otherwise be recorded as a grading of its own. A line
-   carrying a glyph the table could not name is refused outright — the word
-   WRONG can be lost to a bad read where the brackets survive, and a
-   half-read failure must never be counted as agreement. */
 /* A page carrying both of the sentences above is one still being drawn, and
    neither of them is its verdict. The line that stands still for a sample is
    what this reader records, and the pair very nearly clears that bar: it
@@ -1328,6 +1367,14 @@ static bool the_page_speaks_both_verdicts(void) {
   return won && problem;
 }
 
+/* A group that runs more tests than the screen holds scrolls the early ones
+   away, so verdicts are collected as they pass. A line is taken only once
+   it has stood still for a sample: a screen read while the module was
+   repainting splices the left of one line onto the right of another, and
+   such a line would otherwise be recorded as a grading of its own. A line
+   carrying a glyph the table could not name is refused outright — the word
+   WRONG can be lost to a bad read where the brackets survive, and a
+   half-read failure must never be counted as agreement. */
 static int collect_verdicts(int percentage_named) {
   /* What this screen carries, in the order Shaker wrote it. */
   verdict standing[ROWS];
@@ -2180,6 +2227,10 @@ static const verdict_case printed_lines[] = {
     {">>>>>> DELAY TO VSYNC:#0032 (EXP:#0032)", true, false},
     {"RESULT:#8700 WRONG (EXP:#4E40)", true, true},
     {"R5=1 / ON 1ST ADD LINE, R5=0 / CPU TO NEW FRAME:#0080 (#0080 expected)", true, false},
+    /* Module E's (7): silicon's value after the word where it fails, and
+       nothing where it passes. */
+    {"HSYNC R9=7, AFTER HSYNC R9=0 THEN 0, R7=1,   DELAY:#0000 WRONG:EXP:#09", true, true},
+    {"HSYNC R9=7, AFTER HSYNC R9=0 THEN 7, R4=R7=1,DELAY:#0018", false, false},
     {"R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0084 (exp:#0004)", true, true},
     /* And the value before the word, which module C's (P) writes from its
        fifth line on, a bracket of its own after it or none; and two of its
@@ -2310,6 +2361,18 @@ static const verdict_case built_lines[] = {
     {"X=#0058 (CRTC 0:DEADLOCK/ OTHERS:#22)", false, false},
     {"X=#0058 (CRTC 0:/ OTHERS:#22)", false, false},
     {"X=#0058 (CRTC 0:#FFFFFFFF/ OTHERS:#22)", false, false},
+    /* Silicon's value after the word and outside a bracket is no grading
+       with no measurement before it, with more after it, or with no value. */
+    {"AFTER HSYNC WRONG:EXP:#09", false, false},
+    {"DELAY:#0000 WRONG:EXP:#09 THEN", false, false},
+    {"DELAY:#0000 WRONG:EXP:09", false, false},
+    {"DELAY:#0000 WRONG:EXP:#", false, false},
+    /* Nor is an OK handed to no type it names, or a bracket that holds the
+       words without opening on them. */
+    {"X (OK FOR CRT ALL):OK", false, false},
+    {"X (LOOK FOR CRT 3+4):OK", false, false},
+    {"X (ONLY OK FOR CRT 3+4):OK", false, false},
+    {"X (OK FORMAT CRT 3):OK", false, false},
 };
 
 static void check_verdict_case(const char *provenance, const verdict_case *wanted) {
@@ -2367,6 +2430,14 @@ static const verdict_case_by_type lines_by_type[] = {
     {"PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):xKOx", 3, true, true},
     {"X (OK FOR CRTC 3+4 ONLY):xKOx", 0, true, false},
     {"X (OK FOR CRTC 3+4 ONLY):xKOx", 3, true, true},
+    /* And the OK the same line ends in where it passes: this machine's
+       answer where the bracket names it, a fault where it does not. The
+       bare word with no type named stays unread. */
+    {"PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):OK", 3, true, false},
+    {"PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):OK", 4, true, false},
+    {"PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):OK", 0, true, true},
+    {"UPD R4=0 WHEN C4=1 & C9=7 >> C4=2 (Ovf) :OK", 0, false, false},
+    {"PREV R9=7 R4=38 >> UPD R4=1 WHEN C4=1 & C9=7 >> C4=0       :OK", 3, false, false},
     /* A bracket that names some types and gathers no rest grades nothing on
        a machine it passes over, and grades on one it names. */
     {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", 0, false, false},
@@ -2742,7 +2813,8 @@ int main(int argc, char **argv) {
   fprintf(file, "silicon produced. A module can also state a failure and mean it for\n");
   fprintf(file, "another type: where a line hands the passing outcome to CRTC types this\n");
   fprintf(file, "machine is not one of, the failure it marks is the answer asked for, and\n");
-  fprintf(file, "the line stands unmarked. A few lines here are graded against a title\n");
+  fprintf(file, "the line stands unmarked; a pass it hands to those other types is marked\n");
+  fprintf(file, "as the failure it is. A few lines here are graded against a title\n");
   fprintf(file, "rather than against anything standing on them: their group puts silicon's\n");
   fprintf(file, "value on a title and the machine's on the screen rows beneath it, so what\n");
   fprintf(file, "they were measured against stands on the screen they came from rather\n");

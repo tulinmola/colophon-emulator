@@ -23,7 +23,8 @@ module said so, or the machine's value differs from the one Longshot's
 silicon produced. A module can also state a failure and mean it for
 another type: where a line hands the passing outcome to CRTC types this
 machine is not one of, the failure it marks is the answer asked for, and
-the line stands unmarked. A few lines here are graded against a title
+the line stands unmarked; a pass it hands to those other types is marked
+as the failure it is. A few lines here are graded against a title
 rather than against anything standing on them: their group puts silicon's
 value on a title and the machine's on the screen rows beneath it, so what
 they were measured against stands on the screen they came from rather

@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 63 groups run, 23 left to another CRTC type.
-5 of them printed self-graded lines, 29 in all: 29 agree with Longshot's
+6 of them printed self-graded lines, 30 in all: 30 agree with Longshot's
 silicon and 0 do not. That is 100% of what this reader can score, and no
-measure at all of the other 58 groups.
+measure at all of the other 57 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -23,7 +23,8 @@ module said so, or the machine's value differs from the one Longshot's
 silicon produced. A module can also state a failure and mean it for
 another type: where a line hands the passing outcome to CRTC types this
 machine is not one of, the failure it marks is the answer asked for, and
-the line stands unmarked. A few lines here are graded against a title
+the line stands unmarked; a pass it hands to those other types is marked
+as the failure it is. A few lines here are graded against a title
 rather than against anything standing on them: their group puts silicon's
 value on a title and the machine's on the screen rows beneath it, so what
 they were measured against stands on the screen they came from rather
@@ -76,7 +77,8 @@ A (CAPS)    INTERACTIVE TEST MODE X TO Y (16 INTERACTIVE TST)                   
 A (TAB)     HSYNC START POSITION (4 INTERACTIVE TST)                                         recorded, ungraded
 A (T)       R2 UPD DURING & AFTER HSYNC (6 TST)                                              recorded, ungraded
 A (Y)       R3 UPD DURING HSYNC (8 TST)                                                      recorded, ungraded
-A (U)       R4 & R9 CHECKING (54 TST)                                                        recorded, ungraded
+A (U)       R4 & R9 CHECKING (54 TST)                                                        1 graded, 0 wrong
+      PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):OK
 A (I)       VSYNC CONDITIONS (413 TST)                                                       recorded, ungraded
 A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded
 A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded

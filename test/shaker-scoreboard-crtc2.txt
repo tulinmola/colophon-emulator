@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-7 of them printed self-graded lines, 43 in all: 43 agree with Longshot's
-silicon and 0 do not. That is 100% of what this reader can score, and no
-measure at all of the other 63 groups.
+8 of them printed self-graded lines, 45 in all: 43 agree with Longshot's
+silicon and 2 do not. That is 96% of what this reader can score, and no
+measure at all of the other 62 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -23,7 +23,8 @@ module said so, or the machine's value differs from the one Longshot's
 silicon produced. A module can also state a failure and mean it for
 another type: where a line hands the passing outcome to CRTC types this
 machine is not one of, the failure it marks is the answer asked for, and
-the line stands unmarked. A few lines here are graded against a title
+the line stands unmarked; a pass it hands to those other types is marked
+as the failure it is. A few lines here are graded against a title
 rather than against anything standing on them: their group puts silicon's
 value on a title and the machine's on the screen rows beneath it, so what
 they were measured against stands on the screen they came from rather
@@ -188,5 +189,7 @@ E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                      
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
 E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        another CRTC type's
-E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   recorded, ungraded
+E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   2 graded, 2 wrong
+    ! HSYNC R9=7, AFTER HSYNC R9=0 THEN 0, R7=1,   DELAY:#0000 WRONG:EXP:#09
+    ! HSYNC R4=38,AFTER HSYNC R4=0 THEN 00, R7=1,   DELAY:#0000 WRONG:EXP:#09
 E (COPY)    RESET CPC                                                                        recorded, ungraded
