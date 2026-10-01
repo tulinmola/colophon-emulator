@@ -164,6 +164,30 @@ static bool syncs_follow_the_display(const cpc_t *cpc) {
   return cpc->crtc.type == 3 || cpc->crtc.type == 4;
 }
 
+/* Whether the interrupt generator acts on a line sync's end a quarter of a
+   microsecond sooner than behind a Gate Array: on the character clock that
+   hands the end over, which on the two ASICs is itself a character late
+   (above). The Compendium draws a line sync's black to the mode 2 pixel, a
+   sixteenth of a microsecond, and ch. 14.9's schematics show where it ends:
+   four pixels into a character on a type 0 and a type 2, five on a type 1,
+   two on a type 4. That is the second of the processor's four cycles on the
+   first three, which is where a Gate Array here acts, and the first on a
+   type 4. No end is drawn for a type 3, whose black ch. 14.7.2 assumes
+   begins on the 17th pixel of the displayed character before C0=R2, two
+   before a type 4's 19th (where ch. 14.7.1 gives a type 0 the 5th); as wide
+   as a type 4's, it would end in the first cycle too. Where the chapters see
+   half a pixel more displayed, a type 4's black begins a sixteenth later,
+   which leans the other way, and ch. 27.7.2 finds types 2, 3 and 4 "generally
+   give results identical to the CRTC 0, with a few small differences". That
+   the interrupt keeps the cycle the sync's black ends in is our reading.
+   Shaker's D (I), racing the interrupt against a DEC DE's last T-state, finds
+   silicon's ASICs catching it where the other three types miss it, which is
+   what this gives (gate_array.c). Read on every character clock, as the type
+   is. */
+static bool acts_on_a_sync_end_at_the_clock(const cpc_t *cpc) {
+  return cpc->crtc.type == 3 || cpc->crtc.type == 4;
+}
+
 /* Devices decode single address bits, so one access can reach several at
    once; every test in the two functions below is independent, and their
    order is the address lines' and carries no meaning — "I/O port
@@ -343,6 +367,7 @@ uint64_t cpc_tick(cpc_t *cpc) {
     bool hsync = (cpc->crtc_pins & CRTC_HSYNC) != 0;
     bool vsync = (cpc->crtc_pins & CRTC_VSYNC) != 0;
     bool late = syncs_follow_the_display(cpc);
+    cpc->gate_array.acts_on_a_sync_end_at_the_clock = acts_on_a_sync_end_at_the_clock(cpc);
     gate_array_tick(&cpc->gate_array, late ? cpc->crtc_hsync_a_character_ago : hsync,
                     late ? cpc->crtc_vsync_a_character_ago : vsync);
     cpc->crtc_hsync_a_character_ago = hsync;

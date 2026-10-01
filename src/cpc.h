@@ -192,9 +192,10 @@ typedef struct {
 } cpc_t;
 
 /* Power-on with a CRTC built as the given type. What follows the number is
- * set out at the head of crtc.h, and the board adds two things where the chip
- * is one of the two ASICs: the microsecond it holds an OUT's write for, and
- * both syncs a character late. The lower ROM is readable at &0000 — it must
+ * set out at the head of crtc.h, and the board adds three things where the
+ * chip is one of the two ASICs: the microsecond it holds an OUT's write for,
+ * both syncs a character late, and the interrupt raised a quarter of a
+ * microsecond sooner after them. The lower ROM is readable at &0000 — it must
  * be, or no first instruction could ever be fetched. Upper ROM enabled and
  * configuration 0 are conventions: the firmware writes both registers before
  * anything could observe their reset state. */

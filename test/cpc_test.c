@@ -388,7 +388,11 @@ static void the_gate_array_interrupts_six_times_a_frame(void) {
    a character later throughout: "the HSYNC begins at the start of the display
    by the GATE ARRAY of the CRTC character corresponding to C0=R2", so that
    "an interrupt occurs 1 µsec later on CRTC's 3 and 4 than on the other
-   CRTC's" — 16, 10, 3 and 18 in ch. 27.6.5 (ch. 27.6.1). */
+   CRTC's" — 16, 10, 3 and 18 in ch. 27.6.5 (ch. 27.6.1). Inside that
+   character the request rises on the processor's second cycle behind a Gate
+   Array and on its first, the character clock, behind the two ASICs, whose
+   line sync's black ch. 14.9 draws ending in the first of those cycles where
+   a type 0's ends in the second (cpc.c). */
 static void the_interrupt_falls_a_character_after_the_hsync(void) {
   static const struct {
     uint8_t type;
@@ -414,16 +418,21 @@ static void the_interrupt_falls_a_character_after_the_hsync(void) {
     write_crtc(3, widths[index].r3);
 
     int risen_at = -1;
+    int risen_on_quarter = -1;
     for (long tick = 0; tick < 400000 && risen_at < 0; tick++) {
       bool standing = cpc.gate_array.interrupt_request;
       cpc_tick(&cpc);
       if (!standing && cpc.gate_array.interrupt_request) {
         risen_at = cpc.crtc.c0;
+        risen_on_quarter = cpc.gate_array.cpu_phase;
       }
     }
     TEST_EQUAL(risen_at, widths[index].characters_after_r2 < 0
                              ? -1
                              : hsync_at + widths[index].characters_after_r2);
+    if (risen_at >= 0) {
+      TEST_EQUAL(risen_on_quarter, widths[index].type >= 3 ? 0 : 1);
+    }
   }
 }
 

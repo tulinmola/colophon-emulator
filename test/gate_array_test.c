@@ -107,6 +107,27 @@ static void the_request_rises_a_character_after_the_hsync(void) {
   TEST_CHECK(gate_array.interrupt_request); /* and on quarter 1 */
 }
 
+/* And a quarter sooner where the board asks for it, which is on the
+   character clock itself: the two ASICs, whose line sync's black ch. 14.9
+   draws ending in the first of the processor's cycles where a type 0's ends
+   in the second (cpc.c). */
+static void a_chip_acting_at_the_clock_raises_the_request_a_quarter_sooner(void) {
+  gate_array_init(&gate_array);
+  gate_array.acts_on_a_sync_end_at_the_clock = true;
+  pulse_hsyncs(51);
+  TEST_CHECK(!gate_array.interrupt_request);
+
+  character(true, false);
+  character(false, false); /* the end R52 counts */
+  TEST_EQUAL(gate_array.r52, 51);
+  TEST_CHECK(!gate_array.interrupt_request);
+  do {
+    advance(false, false);
+  } while (!gate_array_character_clock(&gate_array));
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(gate_array.interrupt_request); /* on quarter 0 */
+}
+
 /* And an interrupt asked for by an HSYNC that has just ended is cancelled
    with the rest by RMR's bit 4, rather than arriving a character after the
    program disowned it. */
@@ -245,21 +266,28 @@ static void the_vsync_checks_request_waits_the_same_character(void) {
   TEST_CHECK(gate_array.interrupt_request);
 }
 
-/* And the acknowledge does not reach a request raised on the cycle it is
-   heard on, where RMR's bit 4 does: it answers the interrupt the processor
-   was offered, and the counter has since asked for another. */
+/* And the acknowledge does not reach a request raised in the microsecond it
+   is heard in, where RMR's bit 4 does: it answers the interrupt the processor
+   was offered, and the counter has since asked for another. Behind a Gate
+   Array that is the very cycle, the second of the microsecond; where the
+   chip acts at the clock the request rises a cycle before the acknowledge
+   is heard, and is left standing all the same. */
 static void an_acknowledge_leaves_a_request_just_risen(void) {
-  gate_array_init(&gate_array);
-  pulse_hsyncs(51);
-  character(true, false);
-  character(false, false);
-  character(false, false); /* the count that asks, this very cycle */
-  TEST_CHECK(gate_array.interrupt_request);
-  gate_array_interrupt_acknowledged(&gate_array);
-  TEST_CHECK(gate_array.interrupt_request);
-  advance(false, false);
-  gate_array_interrupt_acknowledged(&gate_array); /* a cycle on, it does */
-  TEST_CHECK(!gate_array.interrupt_request);
+  for (int at_the_clock = 0; at_the_clock < 2; at_the_clock++) {
+    gate_array_init(&gate_array);
+    gate_array.acts_on_a_sync_end_at_the_clock = at_the_clock;
+    pulse_hsyncs(51);
+    character(true, false);
+    character(false, false);
+    character(false, false); /* the count that asks, in this microsecond */
+    TEST_CHECK(gate_array.interrupt_request);
+    TEST_EQUAL(gate_array.cpu_phase, 1);
+    gate_array_interrupt_acknowledged(&gate_array);
+    TEST_CHECK(gate_array.interrupt_request);
+    character(false, false);
+    gate_array_interrupt_acknowledged(&gate_array); /* a microsecond on, it does */
+    TEST_CHECK(!gate_array.interrupt_request);
+  }
 }
 
 static void vsync_check_interrupts_only_from_afar(void) {
@@ -662,6 +690,7 @@ int main(void) {
   TEST_RUN(acknowledge_kills_bit_5);
   TEST_RUN(rmr_bit_4_clears_counter_and_request);
   TEST_RUN(the_request_rises_a_character_after_the_hsync);
+  TEST_RUN(a_chip_acting_at_the_clock_raises_the_request_a_quarter_sooner);
   TEST_RUN(rmr_bit_4_reaches_a_request_not_yet_risen);
   TEST_RUN(the_vsync_checks_request_waits_the_same_character);
   TEST_RUN(an_acknowledge_leaves_a_request_just_risen);

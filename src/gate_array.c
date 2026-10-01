@@ -46,7 +46,7 @@ void gate_array_write(gate_array_t *gate_array, uint8_t data) {
 
 static void raise_interrupt(gate_array_t *gate_array) {
   gate_array->interrupt_request = true;
-  gate_array->interrupt_raised_this_cycle = true;
+  gate_array->interrupt_raised_this_microsecond = true;
 }
 
 /* R52 counts to 51 and loops; the loop asks for the request (Compendium ch.
@@ -97,6 +97,12 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
      does, has it a microsecond later (ch. 27.6.5). */
   gate_array->hsync_end_to_act_on = gate_array->hsync_end_last_character;
   gate_array->hsync_end_last_character = GATE_ARRAY_NO_HSYNC_END;
+  if (gate_array->acts_on_a_sync_end_at_the_clock &&
+      gate_array->hsync_end_to_act_on != GATE_ARRAY_NO_HSYNC_END) {
+    gate_array_hsync_end_t hsync_end = gate_array->hsync_end_to_act_on;
+    gate_array->hsync_end_to_act_on = GATE_ARRAY_NO_HSYNC_END;
+    act_on_hsync_end(gate_array, hsync_end);
+  }
 
   bool hsync_started = hsync && !gate_array->hsync_previous;
   bool hsync_ended = gate_array->hsync_previous && !hsync;
@@ -153,14 +159,17 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
 
 void gate_array_advance_phase(gate_array_t *gate_array) {
   gate_array->cpu_phase = (uint8_t)((gate_array->cpu_phase + 1) & 3);
-  gate_array->interrupt_raised_this_cycle = false;
+  if (gate_array_character_clock(gate_array)) {
+    gate_array->interrupt_raised_this_microsecond = false;
+  }
   /* On the character's second quarter, which is a NOP's T3 here. "The INT
      signal of the Z80A is positioned at T3 level" (ch. 27.7.2), and an
      instruction whose last T-state goes before it is not warned in time
      and runs one more instruction first. Shaker's D (I) times a DEC DE,
      whose last T-state falls on quarter 0, against a request raised in the
      same microsecond, and prints the answer that misses it: #59, silicon's
-     value on CRTCs 0, 1 and 2, where types 3 and 4 give #58. */
+     value on CRTCs 0, 1 and 2. Types 3 and 4 give #58, the request raised a
+     quarter sooner on those two (cpc.c). */
   if (gate_array->cpu_phase == 1 && gate_array->hsync_end_to_act_on != GATE_ARRAY_NO_HSYNC_END) {
     gate_array_hsync_end_t hsync_end = gate_array->hsync_end_to_act_on;
     gate_array->hsync_end_to_act_on = GATE_ARRAY_NO_HSYNC_END;
@@ -183,17 +192,19 @@ void gate_array_advance_phase(gate_array_t *gate_array) {
    0", where "the next interrupt cannot occur before 52 lines"; or "bit 5 of
    R52=31 is eliminated (which has no effect) and R52 changes to 32", where
    it "cannot occur before 20 lines". Counted on the quarter an acknowledge
-   is heard on, the count goes first. Shaker's B (R) times forty-eight
-   instructions through this window and this order answers every one of
-   them as silicon does.
+   is heard on, or on the one before it where the chip acts at the clock,
+   the count goes first. Shaker's B (R) times forty-eight instructions
+   through this window and this order answers every one of them as silicon
+   does.
 
-   A request raised on the very cycle the acknowledge is heard is not
+   A request raised in the microsecond the acknowledge is heard in is not
    withdrawn with it, where RMR's bit 4 does withdraw one: the acknowledge
    answers the interrupt the processor was offered, and the counter has
-   since asked for another. No outside evidence settles it; a test holds
-   each half where it stands. */
+   since asked for another. That is the very cycle behind a Gate Array, and
+   the one before it where the chip acts at the clock. No outside evidence
+   settles it; a test holds each half where it stands. */
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array) {
-  if (!gate_array->interrupt_raised_this_cycle) {
+  if (!gate_array->interrupt_raised_this_microsecond) {
     gate_array->interrupt_request = false;
   }
   gate_array->r52 &= 0x1F;

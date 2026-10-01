@@ -97,9 +97,12 @@ typedef struct {
      (Compendium ch. 27.6.1). */
   gate_array_hsync_end_t hsync_end_last_character; /* carried to the next */
   gate_array_hsync_end_t hsync_end_to_act_on;      /* done on its quarter 1 */
-  bool interrupt_raised_this_cycle;                /* by that, until the next CPU cycle */
-  uint8_t hsyncs_until_vsync_check;                /* the two-HSYNC delay after a VSYNC
-                                                      starts (ch. 27.3.2); 0 = not armed */
+  bool interrupt_raised_this_microsecond;          /* by that, until the next character clock */
+  /* Whether an end is acted on at the character clock that hands it over
+     instead, a quarter sooner; set by a board for the chip it is (cpc.c). */
+  bool acts_on_a_sync_end_at_the_clock;
+  uint8_t hsyncs_until_vsync_check; /* the two-HSYNC delay after a VSYNC
+                                       starts (ch. 27.3.2); 0 = not armed */
   bool hsync_previous;
   bool vsync_previous;
 
@@ -138,7 +141,8 @@ void gate_array_init(gate_array_t *gate_array);
  * 11 pattern is the PAL's MMR, not ours, and is ignored. */
 void gate_array_write(gate_array_t *gate_array, uint8_t data);
 
-/* One character clock: watch the syncs. */
+/* One character clock: watch the syncs, and act on the end of one handed
+ * over here where the chip is set to act at the clock. */
 void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync);
 
 /* The INT line, held from the moment the counter raises it until the CPU
@@ -152,7 +156,7 @@ static inline bool gate_array_interrupt(const gate_array_t *gate_array) {
  * R52 dies, so the next interrupt comes no closer than 32 lines — or 20,
  * if the counter had already passed 32 (ch. 27.7.1). Called on the cycle
  * the acknowledge's M1 ends, after that cycle's gate_array_advance_phase;
- * a request raised on that same cycle is left standing. */
+ * a request raised in that same microsecond is left standing. */
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array);
 
 /* The composite sync on its way to the monitor, asserted when active. It is
@@ -164,7 +168,8 @@ static inline bool gate_array_csync(const gate_array_t *gate_array) {
 }
 
 /* Move on by one of the CPU's four cycles, counting an HSYNC end for the
- * interrupt generator on the cycle it falls due. */
+ * interrupt generator on the second of them, where the chip is not set to
+ * count it at the clock. */
 void gate_array_advance_phase(gate_array_t *gate_array);
 
 /* Whether a character clock falls on the cycle just reached — the moment
