@@ -451,8 +451,9 @@ static uint8_t vsync_lines(const crtc_t *crtc) {
    types 1 to 4 (ch. 11.4.1). Type 0 decides both while C0 is 0 or 1 and holds
    them, turns a last line unmade at C0=1 into an adjustment, and gives R5 a
    deadline of its own (ch. 10.3.1.2, 12.2, 13.2) — its own chapters'
-   exceptions, which the ASICs' do not share. Types 1 and 2 are left a type
-   0's frame end, and a type 1 its R5 deadline too (below). */
+   exceptions, which the ASICs' do not share. A type 1 is left a type 0's
+   frame end and its R5 deadline too (below); a type 2 keeps a last line of
+   its own (decide_a_type_2s_last_line). */
 static bool takes_the_frame_end_where_the_line_ends(const crtc_t *crtc) {
   return crtc->type == 3 || crtc->type == 4;
 }
@@ -463,17 +464,23 @@ static bool takes_the_frame_end_where_the_line_ends(const crtc_t *crtc) {
    management is considered on each C0 position" (ch. 11.4.1). Shaker's C (P)
    holds it to that, with R5 written at C0=#26 of a last line. Only the line
    that state names is padded, R5's lines following a last line (ch. 12.4.1),
-   so one unmade at C0=0 is not — save a given-up interlace line (below). The
-   state is settled here in a type 0's window, which ch. 12.4.1 does not quite
-   give a type 2: an R9 written at C0=0, which that chapter has come too late
-   for the evaluation, unmakes it here, and its evaluation on an R4 or R9
-   write later in the line is not here, so a row made last so late is neither
-   ended nor padded. An R5 written while C0 names R0 is taken, as on the
-   ASICs, which nothing grades. A type 1 is left a type 0's deadline, ch.
-   11.4.1 notwithstanding, for want of anything Shaker grades that asks for
-   it; an R5 raised from 0 at C0=R0 would also set off "a bug described in
-   chapter 11.6" on that chip, which is not here. */
+   so one unmade at C0=0 is not — save a given-up interlace line (below) —
+   and one an R4 or R9 write makes last later in the line is. An R5 written
+   while C0 names R0 is taken, as on the ASICs, which nothing grades. A type
+   1 is left a type 0's deadline, ch. 11.4.1 notwithstanding, for want of
+   anything Shaker grades that asks for it; an R5 raised from 0 at C0=R0
+   would also set off "a bug described in chapter 11.6" on that chip, which
+   is not here. */
 static bool asks_r5_to_the_end_of_the_last_line(const crtc_t *crtc) { return crtc->type == 2; }
+
+/* Whether a last line unmade at C0=1 is spent on an adjustment, which is a
+   type 0's exception (ch. 10.3.1.2, 12.2) left to a type 1 with that type's
+   frame end. A type 2's cannot be unmade — "when the 'Last Line' state has
+   become true, it can no longer be canceled during the current line" (ch.
+   12.4.1) — and the two ASICs settle theirs where the line ends. */
+static bool spends_an_unmade_last_line_on_an_adjustment(const crtc_t *crtc) {
+  return crtc->type == 0 || crtc->type == 1;
+}
 
 /* A line that never reaches C0=1 leaves C9's management disabled, and then
    "all of the CRTC counters are frozen as long as R0=0" (ch. 13.2.1) — the
@@ -797,16 +804,68 @@ static void enter_character(crtc_t *crtc) {
       crtc->the_line_end_before_is_kept = true;
     }
     crtc->line_end_rooms[0] = *crtc;
-    /* One latch in the copy belongs to the character rather than to the
-       line: this tick is about to spend the R3 write it records, and a
-       line's end is not an R3 write, so the copy carries none back. */
+    /* Two latches in the copy belong to the character rather than to the
+       line: this tick is about to spend the R3 write and the R4 or R9 write
+       they record, and a line's end is neither, so the copy carries none
+       back. */
     crtc->line_end_rooms[0].r3_written_for_this_character = false;
+    crtc->line_end_rooms[0].r4_or_r9_written_for_this_character = false;
     crtc->a_line_end_is_kept = true;
     crtc->a_character_was_drawn_since = false;
   }
   crtc->c0 = 0;
   crtc->c0_reached_r0 = true;
   enter_scanline(crtc);
+}
+
+/* Whether an HSYNC begins on this character, where C0 meets R2 with a width
+   asked for (begin_the_hsync). "On CRTC 0, two HSYNC's cannot be contiguous
+   if position C0=R2 is encountered when C3l reaches R3l, and R3l has not been
+   modified on this position" (ch. 15.3.1), which is how a line shorter than
+   its own sync avoids the endless one the other types fall into: at R0=0,
+   R2=0 and an R3l of 1, "on a CRTC 0, the HSYNC will not take place. It will
+   occur on the 3rd C0=0" (ch. 15.3.2). A write to R3 there is the exception,
+   taken as the modification whatever value it carries: an OUT lands a whole
+   byte on R3, and ch. 16.3 states that reading outright for R7, "whatever
+   the value written". */
+static bool hsync_begins_here(const crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  bool blocked = crtc->hsync_ended_here && !crtc->r3_written_for_this_character;
+  bool width_of_nothing_is_sixteen = crtc->type == 2 || crtc->type == 3 || crtc->type == 4;
+  bool a_width_asked = (r[3] & 0x0F) != 0 || width_of_nothing_is_sixteen;
+  return crtc->c0 == r[2] && !crtc->hsync && !blocked && a_width_asked;
+}
+
+/* A type 2 keeps a "Last Line" of its own, which ch. 12.4.1 describes: it is
+   evaluated "at the beginning of the line, on position C0==0" and "during an
+   update of R4 and/or R9, if the 'Last Line Management' state is active",
+   and "when the 'Last Line' state has become true, it can no longer be
+   canceled during the current line". At the head "the comparison uses the
+   updated value of R4, but the previous value of R9 (an update of R9 on
+   C0==0 occurs too late for this evaluation)". A write landing there is read
+   by the head alone, so that such an R9 has "no immediate effect" either way
+   and no write slips a last line past the head's refusals; that is ours. The
+   head refuses "if the previous line was itself a last line" — the latch a
+   line's HSYNC leaves (latch_the_previous_last_line) — and "if a HSYNC starts
+   on position C0==0", which ch. 15.4.4 widens to a sync carried onto it from
+   the line before: "we also have an active HSYNC on C0=0 and the 'Last Line'
+   condition is then not evaluated", and ch. 15.6 has a last line "cancelled
+   if a HSYNC is placed on position C0=0". The management is "normally
+   active, except when C4==0 and C9==0, that is to say when the current line
+   is a first line of a frame", and a write reaches the state only "outside
+   HSYNC". A C0 come round to 0 by overflowing ends no line (enter_character),
+   so it is taken for no head, and the line it is in goes on; that is ours. */
+static void decide_a_type_2s_last_line(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  bool in_the_hsync = crtc->hsync || hsync_begins_here(crtc);
+  if (crtc->c0 == 0 && crtc->c0_reached_r0) {
+    crtc->last_line = crtc->c4 == r[4] && crtc->c9 == crtc->r9_on_the_character_before &&
+                      !crtc->previous_last_line && !in_the_hsync;
+    crtc->last_line_management = crtc->c4 != 0 || crtc->c9 != 0;
+  } else if (crtc->r4_or_r9_written_for_this_character && crtc->last_line_management &&
+             !in_the_hsync && crtc->c4 == r[4] && crtc->c9 == r[9]) {
+    crtc->last_line = true;
+  }
 }
 
 /* Decided while C0 is 0 or 1, and this type "no longer repeats this test on
@@ -828,8 +887,7 @@ static void enter_character(crtc_t *crtc) {
    it reaches neither: "If R4 and/or R9 are modified mid-line when C0 > 1
    while the last line state is true (and there are no additional lines via
    vertical adjustment), this does not change C4 and C9, which will remain at
-   0" (ch. 12.2). A comparison standing again on an R4 or R9 update is type
-   2's rule (ch. 12.4.1).
+   0" (ch. 12.2). A type 2 decides by rules of its own, above.
 
    R8 reaches this comparison as it reaches the converse below, by moving
    the parity the row's limit is read up to, and the chapter names only R4
@@ -837,6 +895,10 @@ static void enter_character(crtc_t *crtc) {
    puts, answered the same way and graded by nothing. */
 static void decide_last_line(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
+  if (crtc->type == 2) {
+    decide_a_type_2s_last_line(crtc);
+    return;
+  }
   if (crtc->c0 < 2 || (crtc->c0 == 2 && !crtc->last_line)) {
     crtc->last_line = crtc->c4 == r[4] && row_is_on_its_last_scanline(crtc);
   }
@@ -864,7 +926,7 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
      and the Compendium does not say whether the chip does: it names this
      comparison only where a row ends and where VMA' is captured, and one
      comparator makes it so everywhere. */
-  if (crtc->c0 == 2 && crtc->last_line && !takes_the_frame_end_where_the_line_ends(crtc) &&
+  if (crtc->c0 == 2 && crtc->last_line && spends_an_unmade_last_line_on_an_adjustment(crtc) &&
       (crtc->c4 != r[4] || !row_is_on_its_last_scanline(crtc))) {
     /* "The current line becomes the 'first' adjustment line" (ch. 10.3.1.2),
        and a line already begun is past the disarm below (ch. 13.2.6). The
@@ -1081,22 +1143,10 @@ static void authorize_vsync(crtc_t *crtc) {
    16.4.1). Each width is counted off where the counter it rides advances, so
    the ends are in enter_character and enter_scanline rather than here. */
 static void begin_the_hsync(crtc_t *crtc) {
-  const uint8_t *r = crtc->registers;
-  /* "On CRTC 0, two HSYNC's cannot be contiguous if position C0=R2 is
-     encountered when C3l reaches R3l, and R3l has not been modified on this
-     position" (ch. 15.3.1), which is how a line shorter than its own sync
-     avoids the endless one the other types fall into: at R0=0, R2=0 and an
-     R3l of 1, "on a CRTC 0, the HSYNC will not take place. It will occur on
-     the 3rd C0=0" (ch. 15.3.2). A write to R3 there is the exception, and
-     the sync it lets through carries the old count on: "a new HSYNC-CRTC
-     begins without C3l being zeroed", which is where a R2.JIT HSYNC begins
-     (ch. 15.3.3). The write is taken as the modification whatever value it
-     carries: an OUT lands a whole byte on R3, and ch. 16.3 states that
-     reading outright for R7, "whatever the value written". */
-  bool blocked = crtc->hsync_ended_here && !crtc->r3_written_for_this_character;
-  bool width_of_nothing_is_sixteen = crtc->type == 2 || crtc->type == 3 || crtc->type == 4;
-  bool a_width_asked = (r[3] & 0x0F) != 0 || width_of_nothing_is_sixteen;
-  if (crtc->c0 == r[2] && !crtc->hsync && !blocked && a_width_asked) {
+  /* The sync an R3 write lets through carries the old count on: "a new
+     HSYNC-CRTC begins without C3l being zeroed", which is where a R2.JIT
+     HSYNC begins (ch. 15.3.3). */
+  if (hsync_begins_here(crtc)) {
     crtc->hsync = true;
     if (!crtc->hsync_ended_here) {
       crtc->c3l = 0;
@@ -1232,6 +1282,30 @@ static void begin_syncs(crtc_t *crtc) {
   crtc->r7_was_written_in_the_hsync = false;
   begin_the_hsync(crtc);
   begin_the_vsync(crtc, a_sync_is_in_progress);
+}
+
+/* "The last character of the HSYNC is used to determine whether the current
+   line must be considered as a last line for the following line ... At this
+   position, if C4==R4 and C9==R9, then the 'Previous Last Line' state is
+   activated, otherwise 'Previous Last Line' is cleared and 'Last Line
+   Management' is re-authorized" (ch. 12.4.1). A line with no HSYNC moves
+   neither. The chapter puts that character at "C0=R2+R3-1, within the limit
+   of R0, as a HSYNC can overflow onto the following line", which may bound
+   it by R0 or let it fall on the next line; the second is taken here. The
+   character is foreseen from R3 as it stands, so an R3 written to land after
+   it, moving the sync's end, has the latch taken again on the new last
+   character, the later taking standing over the earlier and a management
+   the earlier gave back outlasting it. Both are ours, and nothing grades
+   either. */
+static void latch_the_previous_last_line(crtc_t *crtc) {
+  const uint8_t *r = crtc->registers;
+  if (crtc->type != 2 || !crtc->hsync || ((crtc->c3l + 1) & 0x0F) != (r[3] & 0x0F)) {
+    return;
+  }
+  crtc->previous_last_line = crtc->c4 == r[4] && crtc->c9 == r[9];
+  if (!crtc->previous_last_line) {
+    crtc->last_line_management = true;
+  }
 }
 
 /* The other character the R1 border is raised on: where C0 meets R0 having
@@ -1457,6 +1531,7 @@ static void decide_on_the_character(crtc_t *crtc) {
   move_video_pointer(crtc);
   authorize_vsync(crtc);
   begin_syncs(crtc);
+  latch_the_previous_last_line(crtc);
   latch_status_border(crtc);
   throw_display_latches(crtc);
 }
@@ -1467,6 +1542,10 @@ uint64_t crtc_tick(crtc_t *crtc) {
   /* Cleared after the phases rather than before them, a write being made
      between two ticks and read by the second of the two. */
   crtc->r3_written_for_this_character = false;
+  crtc->r4_or_r9_written_for_this_character = false;
+  /* And R9 as this character leaves it, which a type 2's line head on the
+     next character compares C9 with. */
+  crtc->r9_on_the_character_before = crtc->registers[9];
   return pins_of(crtc);
 }
 
@@ -1822,11 +1901,13 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
           /* What is taken back is the line's ending, not the write that
              cancelled it: the copy was taken before the host touched the
              chip, so the register file and the register a write is aimed at
-             cross over as they stand rather than as they stood. */
+             cross over as they stand rather than as they stood, and the R9 a
+             line head reads as the one before it with them. */
           for (unsigned which = 0; which < sizeof crtc->registers; which++) {
             room->registers[which] = crtc->registers[which];
           }
           room->address_register = crtc->address_register;
+          room->r9_on_the_character_before = crtc->r9_on_the_character_before;
           *crtc = *room;
           crtc->a_line_end_is_kept = false;
           crtc->the_line_end_before_is_kept = false;
@@ -1887,6 +1968,9 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
       }
       if (crtc->address_register == 3) {
         crtc->r3_written_for_this_character = true;
+      }
+      if (crtc->address_register == 4 || crtc->address_register == 9) {
+        crtc->r4_or_r9_written_for_this_character = true;
       }
       if (crtc->address_register == 1 && crtc->registers[1] == crtc->c0) {
         /* "The condition C0=R1 is considered immediately on a line" (ch.

@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-8 of them printed self-graded lines, 45 in all: 43 agree with Longshot's
-silicon and 2 do not. That is 96% of what this reader can score, and no
-measure at all of the other 62 groups.
+7 of them printed self-graded lines, 43 in all: 43 agree with Longshot's
+silicon and 0 do not. That is 100% of what this reader can score, and no
+measure at all of the other 63 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -117,7 +117,7 @@ C (3)       CRTC 1   : PARITY SWITCH STATUS                                     
 C (4)       CRTC 1   : IVM ON/OFF                                                            another CRTC type's
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   recorded, ungraded
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         recorded, ungraded
-C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded
+C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, cut off at the cap
 C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                recorded, ungraded
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 recorded, ungraded
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
@@ -189,7 +189,5 @@ E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                      
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
 E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        another CRTC type's
-E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   2 graded, 2 wrong
-    ! HSYNC R9=7, AFTER HSYNC R9=0 THEN 0, R7=1,   DELAY:#0000 WRONG:EXP:#09
-    ! HSYNC R4=38,AFTER HSYNC R4=0 THEN 00, R7=1,   DELAY:#0000 WRONG:EXP:#09
+E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   recorded, ungraded, cut off at the cap
 E (COPY)    RESET CPC                                                                        recorded, ungraded

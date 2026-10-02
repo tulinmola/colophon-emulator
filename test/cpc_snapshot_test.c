@@ -219,6 +219,24 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
   TEST_EQUAL(restored.crtc.address_register, 9);
 }
 
+/* Nor is a restore a write a program made on a character: the chip must not
+   read it as one on the first tick back, where an R3 would let a sync
+   through and an R4 or R9 make a type 2's last line, and the R9 a type 2's
+   next line head compares with is the one restored. */
+static void a_restore_is_no_write_on_a_character(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x43 + 9] = 5; /* R9 */
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.crtc.r3_written_for_this_character);
+  TEST_CHECK(!restored.crtc.r4_or_r9_written_for_this_character);
+  TEST_EQUAL(restored.crtc.r9_on_the_character_before, 5);
+}
+
 /* A snapshot restores the memory map, not just the registers behind it. */
 static void the_memory_map_comes_back_with_it(void) {
   load_a_running_program();
@@ -266,6 +284,7 @@ int main(void) {
   TEST_RUN(a_half_done_instruction_cannot_be_saved);
   TEST_RUN(machines_restored_from_one_snapshot_agree);
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
+  TEST_RUN(a_restore_is_no_write_on_a_character);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
   return TEST_REPORT("cpc snapshot");

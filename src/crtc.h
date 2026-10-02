@@ -281,13 +281,29 @@
  * notwithstanding, for want of anything the disc grades that asks for it —
  * an R5 raised from 0 at C0=R0 would also set off a bug of that chip's own
  * (ch. 11.6), which is not here. A type 2 asks R5 of its last line to the
- * line's end (crtc.c), of the line it settled as the last in a type 0's
- * window, where ch. 12.4.1 has an R9 written at C0=0 come too late to
- * unmake it and an R4 or R9 written later in the line able to make it. The
- * sixth is the border R6 asks for. Where R6 is 0 a frame's first line is a
- * conflict on types 0 and 2 and comes out an alternation of bordered and
- * displayed bytes, cancellable until C0 meets R1 and definitive after it
- * (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the
+ * line's end (crtc.c), and settles that line by ch. 12.4.1's rules rather
+ * than a type 0's: at the line's head, with R4 as it lands there and R9 as
+ * it stood, refused where the last character of the line before's HSYNC
+ * found the comparison true, and to a line an HSYNC begins on or runs over
+ * at its head (ch. 15.4.4, 15.6); and later in the line by an R4 or R9
+ * write outside the HSYNC, on any line but a frame's first until its HSYNC
+ * has ended on a mismatch. A write landing on the head is read by
+ * the head alone, which is ours. Shaker's E (7) names silicon's value beside
+ * any of its timings this chip gets wrong, and names none; its readings of
+ * its own carry no value of silicon's. One rule of that chapter is not here:
+ * R4 and R9 moved before or during the R5 lines are the values compared
+ * through them, so an R9 moved there leaves C9 counting on after them, where
+ * here the frame begins again when they are spent, C4 and C9 at 0, whatever
+ * the two hold. Where the chapter puts the HSYNC's last character "within
+ * the limit of R0", it is read as falling on the next line where the sync
+ * runs over, which nothing grades. And ch. 20.3.3's rule is not here either:
+ * a type 2 takes R12/R13 into VMA' where C0 meets R1 on its last line, so an
+ * offset written later is too late for the next frame (ch. 13.4.1), where
+ * here it is taken at the next frame's first character, as a type 0 takes
+ * it. The sixth is the border R6 asks for. Where R6 is 0 a frame's first
+ * line is a conflict on types 0 and 2 and comes out an alternation of
+ * bordered and displayed bytes, cancellable until C0 meets R1 and definitive
+ * after it (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the
  * condition C4=R6 being required" and gives the border up with the
  * register, except where the write was made while C4 stood at 0, which keeps it
  * for the frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict and
@@ -684,8 +700,22 @@ typedef struct crtc_t {
      and once more at C0=2 where it is not yet true, which is where a write
      made at C0=1 lands (ch. 10.3.1.2, 12.2). The two ASICs decide it again
      where the line ends, and that is the answer the frame ends on (ch.
-     12.5). */
+     12.5). A type 2 decides it at the head and wherever R4 or R9 is written,
+     by rules of its own (ch. 12.4.1). */
   bool last_line;
+  /* The two states a type 2 keeps beside it (ch. 12.4.1). "Previous Last
+     Line" is the comparison the last character of a line's HSYNC found, and
+     it refuses the next line's head; "Last Line Management" lets an R4 or R9
+     write make a last line where the head did not. It stands on every line
+     but a frame's first, which waits for its sync's last character to find
+     the comparison false. */
+  bool previous_last_line;
+  bool last_line_management;
+  /* R9 as the character before held it, which is what a type 2's line head
+     compares C9 with: "an update of R9 on C0==0 occurs too late for this
+     evaluation" (ch. 12.4.1). */
+  uint8_t r9_on_the_character_before;
+
   bool vertical_adjustment_armed;
   /* Whether an adjustment has actually begun, as against being armed for
      one: "the additional management being in progress, it can no longer be
@@ -879,6 +909,8 @@ typedef struct crtc_t {
   /* Whether R3 was written in time to be read on that character, which is
      the modification that same sentence exempts. */
   bool r3_written_for_this_character;
+  /* And whether R4 or R9 was, read by a type 2's last line (ch. 12.4.1). */
+  bool r4_or_r9_written_for_this_character;
   bool vsync;
   /* A type 2's VSYNC begun while its HSYNC is in progress, which counts its
      lines and holds another off as any VSYNC does, "but without the VSYNC
