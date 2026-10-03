@@ -493,6 +493,7 @@ static bool spends_an_unmade_last_line_on_an_adjustment(const crtc_t *crtc) {
    same boundary, so nothing here is felt. */
 static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
+  crtc->line_before_ended_its_padding = false;
   /* The disarm is read at C0=3 because a write made at C0=2 lands there, and
      a line of three characters has no C0=3 to read it at — so it is read
      here, where that write has landed just the same. The chip parts its
@@ -625,6 +626,7 @@ static void enter_scanline(crtc_t *crtc) {
     if (crtc->interlace_line_given || (r5_lines_spent && !interlace_line_falls_here)) {
       crtc->vertical_adjustment_armed = false;
       begin_frame(crtc);
+      crtc->line_before_ended_its_padding = true;
     } else {
       crtc->interlace_line_given = crtc->interlace_line_given || interlace_line_falls_here;
       crtc->c5 = next_c5;
@@ -707,6 +709,7 @@ static void enter_scanline(crtc_t *crtc) {
     }
   } else if (crtc->last_line || frame_begins_again) {
     begin_frame(crtc);
+    crtc->line_before_ended_its_padding = frame_begins_again;
   } else {
     count_a_line_on(crtc);
   }
@@ -859,6 +862,7 @@ static void decide_a_type_2s_last_line(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   bool in_the_hsync = crtc->hsync || hsync_begins_here(crtc);
   if (crtc->c0 == 0 && crtc->c0_reached_r0) {
+    crtc->line_before_was_last = crtc->last_line;
     crtc->last_line = crtc->c4 == r[4] && crtc->c9 == crtc->r9_on_the_character_before &&
                       !crtc->previous_last_line && !in_the_hsync;
     crtc->last_line_management = crtc->c4 != 0 || crtc->c9 != 0;
@@ -1060,15 +1064,112 @@ static bool the_pointer_is_left_on_this_scanline(const crtc_t *crtc) {
   return row_is_on_its_last_scanline(crtc);
 }
 
+/* R12/R13, the address a frame begins at, in the fourteen bits the
+   pointers have. */
+static uint16_t the_offset(const crtc_t *crtc) {
+  return (uint16_t)(((crtc->registers[12] << 8) | crtc->registers[13]) & 0x3FFF);
+}
+
+/* Whether a type 2's padding ends with the line being drawn, the frame
+   beginning after it: the R5 lines spent with no interlace line asked for, or
+   the interlace line given, unless given up, which cancels its "Last Line"
+   condition (ch. 11.9) — enter_scanline's count, read where C0 meets R1 with R5
+   and R8 as they then stand rather than as the line's end will find them. */
+static bool a_type_2s_padding_ends_with_this_line(const crtc_t *crtc) {
+  if (!crtc->vertical_adjustment_in_progress) {
+    return false;
+  }
+  bool r5_lines_spent = ((crtc->c5 + 1) & C5_BITS) == crtc->registers[5];
+  bool interlace_line_kept =
+      crtc->interlace_line_given && !gives_up_interlace_on_its_interlace_line(crtc);
+  return interlace_line_kept || (r5_lines_spent && !interlace_line_asked_for(crtc));
+}
+
+/* A type 2 takes the offset into VMA' alone, and where C0 meets R1 rather than
+   at the frame's head: "VMA' itself is affected by R12/R13 when C0 reach R1 on
+   the last frame line", and "the last line status determines whether VMA' will
+   be assigned with VMA (false status) or R12/R13 (true status)"; VMA takes
+   VMA' at every C0=0, the frame's first line's included, "On the first line,
+   when C0=0, VMA is affected by VMA'" (ch. 17.4.3). So an offset written once
+   C0 has passed R1 on the last line is too late for the next frame (ch.
+   13.4.1, 20.3.3), a line made last only later than R1 hands the next frame
+   whatever the latch then holds (ch. 12.4.2's note: the assignment "depends on
+   the 'last line' state when C0==R1"), and where R1 stands beyond R0 "neither
+   pointer is updated with R12/R13 anymore". Where R1 is 0 the comparison is
+   made at the line's head before the head's own last-line evaluation and
+   before VMA=VMA' — "it occurs after processing the C0=R1 evaluation when R1=0
+   ... The VMA'=VMA or R12/R13 assignment (depending on status) therefore takes
+   place before VMA=VMA' assignment on position C0=0" — so a frame's last line
+   takes VMA as it ran on from the line before and the line after it takes the
+   offset. That load at C0=0 is cut short: of its two operations, "VMA'=VMA'
+   AND (R12 x 256 + R13)" and "VMA'=VMA' OR (R12 x 256 + R13)", "only the first
+   logical operation (AND) is performed". The chapter tells it of the offset a
+   program writes after the last line's head, and ch. 20.3.3 has the head take
+   R12/R13 there whole; every load made at a head is taken to be cut short
+   here, and one at a C0 come round to 0 by overflowing, no head, to be whole,
+   which is ours. A load made where C0 meets R1 elsewhere stays open, in
+   crtc_access, to an R12 or R13 written during that same character, as ch.
+   20.3.3's figure draws it.
+
+   Where padding follows the last line, the line the frame ends on is the
+   padding's last, and that line takes the offset as well — "VMA' itself is
+   affected by R12/R13 when C0 reach R1 on the last frame line" — while the
+   padding's rows hand VMA on as any row does: "the C9=R9 management considers
+   the video pointer (VMA'=VMA) when C0=R1" (ch. 11.2.3, for types 1 and 2), its
+   table advancing the pointer a row at a time through the padding (ch. 11.2.1).
+   Ch. 11.9 has "the last line of a frame" be one that "can be one of the
+   adjustment lines displayed via R5", and gives the interlace line on this type
+   the "Last Line" condition, which R8=0 written while it is displayed cancels.
+   A photograph bears it out: Shaker's B (RETURN) on a real type 2
+   (https://shaker.logonsystem.eu/tests, "R5 STORIES") draws the frame after
+   twenty-four lines of padding from an R12 written too late for the last line
+   itself. That padding's last line ends a row as well, R9 having been moved to
+   meet C9 inside it, which is how ch. 12.1's sentence for this type glosses the
+   last line: VMA' "is itself updated with R12/R13 when C0=R1 from the last line
+   (when C9=R9)". That the load reads a padding's last line's state wherever its
+   C9 stands is ours. So is a padding made to end only after C0 has passed R1
+   handing the next frame whatever the latch then holds, as ch. 12.4.2 has a
+   last line made so late do, and an interlace line given up only then leaving
+   the offset it took to the line after it. The line ch. 19.6.3 turns into "an
+   additional line" at a frame's head, a new line 0 following it, is read as the
+   interlace line it is and takes the offset as that line does, given up after
+   R1 leaving it to the frame's second line likewise, save on a line a padding
+   already holds, which enter_scanline lets come first: ours too. */
+static void move_a_type_2s_video_pointer(crtc_t *crtc, uint16_t offset) {
+  if (crtc->c0 == crtc->registers[1]) {
+    bool at_a_head = crtc->c0 == 0 && crtc->c0_reached_r0;
+    bool a_padding_holds_the_line =
+        crtc->vertical_adjustment_in_progress && crtc->vertical_adjustment_armed;
+    bool begins_the_frame_again = crtc->frame_begins_again && !a_padding_holds_the_line;
+    bool ends_the_frame = at_a_head
+                              ? crtc->line_before_was_last || crtc->line_before_ended_its_padding
+                              : crtc->last_line || begins_the_frame_again ||
+                                    a_type_2s_padding_ends_with_this_line(crtc);
+    if (ends_the_frame) {
+      crtc->vma_ = at_a_head ? (uint16_t)(crtc->vma_ & offset) : offset;
+      crtc->offset_taken_where_c0_met_r1 = !at_a_head;
+    } else if (the_pointer_is_left_on_this_scanline(crtc)) {
+      crtc->vma_ = crtc->vma;
+    }
+  }
+  if (crtc->c0 == 0) {
+    crtc->vma = crtc->vma_;
+  }
+}
+
 /* VMA reloads from the VMA' latch where a scanline begins, and on the
    frame's first character both take R12/R13 — type 0 reloads when C4, C9
    and C0 stand at zero (ch. 20.3.1), where a type 1 reloads VMA alone and
-   goes on doing it all through the row C4 spends at 0 (ch. 20.3.2, below). VMA' then captures VMA
-   where C0 reaches R1 on the scanline the predicate above names, so the next row starts R1
-   characters further on (ch. 20.3.3). */
+   goes on doing it all through the row C4 spends at 0 (ch. 20.3.2, below).
+   VMA' then captures VMA where C0 reaches R1 on the scanline the predicate
+   above names, so the next row starts R1 characters further on (ch.
+   20.3.3). A type 2 takes the offset its own way, above. */
 static void move_video_pointer(crtc_t *crtc) {
-  const uint8_t *r = crtc->registers;
-  uint16_t offset = (uint16_t)(((r[12] << 8) | r[13]) & 0x3FFF);
+  uint16_t offset = the_offset(crtc);
+  if (crtc->type == 2) {
+    move_a_type_2s_video_pointer(crtc, offset);
+    return;
+  }
   if (crtc->c0 == 0) {
     if (crtc->type != 1 && crtc->c4 == 0 && crtc->c9 == 0) {
       crtc->vma_ = offset;
@@ -1097,7 +1198,7 @@ static void move_video_pointer(crtc_t *crtc) {
       crtc->vma = offset;
     }
   }
-  if (crtc->c0 == r[1] && the_pointer_is_left_on_this_scanline(crtc)) {
+  if (crtc->c0 == crtc->registers[1] && the_pointer_is_left_on_this_scanline(crtc)) {
     crtc->vma_ = crtc->vma;
   }
 }
@@ -1537,6 +1638,7 @@ static void decide_on_the_character(crtc_t *crtc) {
 }
 
 uint64_t crtc_tick(crtc_t *crtc) {
+  crtc->offset_taken_where_c0_met_r1 = false;
   enter_character(crtc);
   decide_on_the_character(crtc);
   /* Cleared after the phases rather than before them, a write being made
@@ -1971,6 +2073,15 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
       }
       if (crtc->address_register == 4 || crtc->address_register == 9) {
         crtc->r4_or_r9_written_for_this_character = true;
+      }
+      if ((crtc->address_register == 12 || crtc->address_register == 13) &&
+          crtc->offset_taken_where_c0_met_r1) {
+        /* Ch. 20.3.3 draws an OUT R12 whose write falls on the R1 character
+           itself still in time for the next frame, and only one falling on
+           the character after too late: a type 2 compares C0 with R1 early
+           in the character, an R1 written there arriving "too late" (ch.
+           17.4.3), and takes R12/R13 late in it. */
+        crtc->vma_ = the_offset(crtc);
       }
       if (crtc->address_register == 1 && crtc->registers[1] == crtc->c0) {
         /* "The condition C0=R1 is considered immediately on a line" (ch.

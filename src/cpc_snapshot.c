@@ -140,7 +140,10 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
 
   /* Through the chip's own bus, so its writable-bit masks apply and a
      snapshot cannot install a value no 6845 could hold. Selecting each
-     register in turn clobbers the selection, so that goes back last. */
+     register in turn clobbers the selection, so that goes back last. The
+     load of R12/R13 a type 2 may have made on the character just drawn is
+     closed first, or it would take the restored pair as a late write. */
+  cpc->crtc.offset_taken_where_c0_met_r1 = false;
   for (int index = 0; index < 18; index++) {
     crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, (uint8_t)index));
     crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, bytes[AT_CRTC_REGISTERS + index]));

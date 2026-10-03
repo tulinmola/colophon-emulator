@@ -865,6 +865,421 @@ static void a_type_2_without_a_sync_keeps_both_its_states(void) {
   }
 }
 
+/* A type 2 takes the offset into VMA' where C0 meets R1 on the frame's last
+   line, not at the next frame's head: "VMA' itself is affected by R12/R13
+   when C0 reach R1 on the last frame line" (ch. 17.4.3), and "if the update
+   of the R12/R13 registers is immediate, the consideration of the new line
+   can no longer take place when C0 exceeds R1" (ch. 20.3.3). That
+   chapter's figure puts the edge to the character: an OUT R12 whose write
+   falls on C0=39 or on C0=40, the R1 character itself, begins the next
+   frame, and one falling on C0=41 does not, where a type 0 takes it at the
+   frame's head whenever it lands. The figure writes R12; that R13 is taken
+   the same way is ours. */
+static void a_type_2_takes_its_offset_where_c0_meets_r1_on_its_last_line(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t register_written; /* R12 or R13 */
+    uint8_t value;
+    uint8_t character; /* C0 the write is made on, on the frame's last line */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{2, 13, 0x40, 39, 0x1040},
+               {2, 13, 0x40, 40, 0x1040},
+               {2, 12, 0x30, 40, 0x3000},
+               {2, 13, 0x40, 41, 0x1000},
+               {0, 13, 0x40, 41, 0x1040}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 6);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(12, 0x10);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == 38 && crtc.c9 == 7);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* "This assignment of R12/R13 depends on the 'last line' state when C0==R1
+   (and not on the equality C4==R4 and C9==R9 which positions this state).
+   This implies that changing R9 before equality C0=R1 does not prevent this
+   assignment" (ch. 12.4.2, note 1). The frame's last line keeps the offset
+   for the next frame though R9 is moved off C9 before C0 reaches R1; a row's
+   last line made the frame's by an R4 written to land before C0 reaches R1
+   hands the next frame the offset, and made so after it, the line has
+   already passed VMA on to the latch as any row's last line does, so the
+   next frame begins two rows of forty on. */
+static void a_type_2_hands_the_next_frame_the_state_its_last_line_had_at_r1(void) {
+  static const struct {
+    uint8_t row;              /* C4 of the line written on, C9 being 7 */
+    uint8_t register_written; /* R4 or R9 */
+    uint8_t value;
+    uint8_t character; /* C0 the write is made on */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{38, 9, 5, 20, 0x1000}, {1, 4, 1, 20, 0x1000}, {1, 4, 1, 55, 0x1050}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(12, 0x10);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == cases[index].row && crtc.c9 == 7);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* Where R1 is 0 the comparison is made at the line's head, and before both
+   the head's own last-line evaluation and VMA=VMA': "The frame's last-line
+   state evaluation takes place when C0=0 but it occurs after processing the
+   C0=R1 evaluation when R1=0 ... The VMA'=VMA or R12/R13 assignment
+   (depending on status) therefore takes place before VMA=VMA' assignment on
+   position C0=0" (ch. 17.4.3). R1 goes to 0 on row 38's sixth line. Its
+   seventh line ends no row, and begins where the row did, at 0x0123 + 38 x
+   40 = 0x0713; its eighth, the frame's last, its line before being no last
+   line, takes VMA as it ran on through that line, 64 characters on, 0x0753.
+   And the next frame's first line takes the offset with only the first of
+   the load's two operations, "VMA'=VMA' AND (R12 x 256 + R13)". The chapter
+   tells that of an offset written after the last line's head: R13 moved
+   from 0 to 0x23 there gives 0x0730 AND 0x0123, 0x0120, the row having begun
+   at 0x0100 + 1520. That an offset written long before is cut short the same
+   way, 0x0753 AND 0x0123 = 0x0103, is ours, and so is the load made at the
+   head being closed to an offset written during that same character, which
+   the frame's next line shows. Where eight lines of padding follow, they
+   begin from 0x0103; their row ends at the head of their last line, which
+   hands on VMA as it ran on, 0x0143; and the next frame's head, its line
+   before having ended the padding, takes R13 as moved to 0x21 among them,
+   0x0143 AND 0x0121, 0x0101. */
+static void a_type_2_takes_its_offset_at_the_head_where_r1_is_0(void) {
+  static const struct {
+    uint8_t r13;                     /* as the frame runs */
+    bool r13_moved_on_the_last_line; /* to 0x23, after its head */
+    uint8_t r5;
+    uint16_t last_line_begins_at;
+    uint16_t next_frame_begins_at;
+  } cases[] = {{0x23, false, 0, 0x0753, 0x0103},
+               {0x00, true, 0, 0x0730, 0x0120},
+               {0x23, false, 8, 0x0753, 0x0101}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(5, cases[index].r5);
+    write_register(12, 0x01);
+    write_register(13, cases[index].r13);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 30 && crtc.c4 == 38 && crtc.c9 == 5);
+    write_register(1, 0);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, 6);
+    TEST_EQUAL(crtc.vma, cases[index].last_line_begins_at - 64);
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, 7);
+    TEST_EQUAL(crtc.vma, cases[index].last_line_begins_at);
+    TICK_UNTIL(crtc.c0 == 10);
+    if (cases[index].r13_moved_on_the_last_line) {
+      write_register(13, 0x23);
+    }
+    if (cases[index].r5 != 0) {
+      TICK_UNTIL(crtc.c0 == 10 && crtc.c4 == 39 && crtc.c9 == 3);
+      write_register(13, 0x21);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+    write_register(13, 0x45);
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, 1);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* A C0 come round to 0 by overflowing is no line's head (crtc.c), so where R1
+   is 0 the comparison made there reads the line's own last-line state and
+   takes the offset whole, 0x0145 where R13 is moved to 0x45 with R1 and R0;
+   the next frame's head then cuts it with itself, which leaves it as it was,
+   where a cut made at the overflow would have left 0x0123 AND 0x0145, 0x0101.
+   VMA takes the latch there too, as at any C0 of 0. Ours, and graded by
+   nothing. */
+static void a_type_2_takes_its_offset_whole_where_c0_comes_round_to_0(void) {
+  run_a_type_2(46, 38, 7);
+  write_register(12, 0x01);
+  write_register(13, 0x23);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 55 && crtc.c4 == 38 && crtc.c9 == 7);
+  write_register(1, 0);
+  write_register(0, 50);
+  write_register(13, 0x45);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_CHECK(!crtc.c0_reached_r0);
+  TEST_EQUAL(crtc.vma, 0x0145);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c0_reached_r0);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.vma, 0x0145);
+}
+
+/* Where R1 is 0 the head reads the last-line state of the line before (ch.
+   17.4.3); that it is the state that line ended on, and not the latch its sync
+   left, is ours. Row 38's last line is made the frame's last by an R4 written
+   after its sync, whose last character found it no last line; it begins at
+   0x0713 + 64, as R1 at 0 has its row end take VMA, and the next frame's head,
+   the line before having ended a last line, still takes the offset: 0x0753 AND
+   0x0123, 0x0103. */
+static void a_type_2_reads_at_an_r1_of_0_the_state_its_line_before_ended_on(void) {
+  run_a_type_2(46, 39, 7);
+  write_register(12, 0x01);
+  write_register(13, 0x23);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 30 && crtc.c4 == 38 && crtc.c9 == 5);
+  write_register(1, 0);
+  TICK_UNTIL(crtc.c0 == 55 && crtc.c4 == 38 && crtc.c9 == 7);
+  TEST_EQUAL(crtc.vma_, 0x0753);
+  write_register(4, 38);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.vma, 0x0103);
+}
+
+/* Where padding follows the frame's last line, the padding's last line is
+   the frame's last for the pointer and takes the offset too, "when C0 reach
+   R1 on the last frame line" (ch. 17.4.3), the padding's rows handing VMA on
+   as any row does (ch. 11.2.1, 11.2.3) — as Shaker's B (RETURN) is
+   photographed doing on a real type 2, its frame drawn from an R12 written
+   too late for the last line itself. An offset written after C0 has passed
+   R1 on the last line still begins the next frame, after one line of padding,
+   seven or eight; after sixteen, two rows, the second row begins a row on
+   from the offset the last line took; and the next frame's rows go on from
+   its first as any frame's do. Ch. 11.9 calls a line of the padding the
+   frame's last; that the load reads it where its C9 has not reached R9, as
+   on every line here, and that it is open to an offset written during its R1
+   character as the last line is, are ours. */
+static void a_type_2_takes_its_offset_on_the_last_line_of_its_padding(void) {
+  static const struct {
+    uint8_t r5;
+    uint8_t row;       /* C4 of the line R13 is written on */
+    uint8_t line;      /* and C9 */
+    uint8_t character; /* and C0 */
+    uint8_t value;
+    uint16_t second_padding_row_begins_at; /* 0 where there is none */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{1, 38, 7, 50, 0x40, 0, 0x1040},
+               {7, 38, 7, 50, 0x40, 0, 0x1040},
+               {8, 38, 7, 50, 0x40, 0, 0x1040},
+               {16, 38, 7, 50, 0x40, 0x1028, 0x1040},
+               {7, 39, 6, 40, 0x80, 0, 0x1080}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(5, cases[index].r5);
+    write_register(12, 0x10);
+    write_register(13, 0x00);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == cases[index].row &&
+               crtc.c9 == cases[index].line);
+    write_register(13, cases[index].value);
+    if (cases[index].second_padding_row_begins_at != 0) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 40 && crtc.c9 == 0);
+      TEST_EQUAL(crtc.vma, cases[index].second_padding_row_begins_at);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 1 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at + 40);
+  }
+}
+
+/* The padding's last line is the one enter_scanline ends it on, R5 read as it
+   stands where C0 meets R1: R5 taken to 0 at the padding's fourth line runs C5
+   round its five bits, thirty-two lines in all, and R5 dropped under C5 at its
+   ninth runs C5 round to the new R5, thirty-six; each frame begins from an R12
+   written too late for the last line, and the padding's rows before its last
+   hand VMA on, the one beginning at its seventeenth line two rows on from the
+   frame's offset. R5 moved to end the padding on a line whose R1 is past hands
+   the next frame the offset the last line took, which is ours. */
+static void a_type_2s_padding_ends_where_r5_moved_inside_it_ends_it(void) {
+  static const struct {
+    uint8_t c5;        /* the padding line R5 is moved on */
+    uint8_t character; /* and the C0 it is moved at */
+    uint8_t r5;
+    uint16_t next_frame_begins_at;
+  } cases[] = {{3, 10, 0, 0x2000}, {8, 10, 4, 0x2000}, {3, 50, 4, 0x1000}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(5, 16);
+    write_register(12, 0x10);
+    write_register(13, 0x00);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.vertical_adjustment_in_progress && crtc.c5 == cases[index].c5 &&
+               crtc.c0 == cases[index].character);
+    write_register(5, cases[index].r5);
+    TICK_UNTIL(crtc.c0 == 51);
+    write_register(12, 0x20);
+    if (cases[index].character < 40) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.vertical_adjustment_in_progress && crtc.c5 == 16);
+      TEST_EQUAL(crtc.vma, 0x1050);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* The first line a type 2 turns into an additional line and begins again, "a
+   new line 0 will follow the old line 0" (ch. 19.6.3), is read as the interlace
+   line it is, which holds the "Last Line" condition on this type (ch. 11.9):
+   with the mode written before C0 meets R1 the line takes an R12 written on it
+   and the new line 0 begins there; written after, the new line 0 begins where
+   the old one did; with R1 at 0 the new line's head cuts the offset into the
+   latch as the head after any last line does, 0x0123 AND 0x0145, 0x0101; and
+   with the mode given up again after R1 the line begins no frame again but has
+   taken the offset, and the frame's second line begins there. Ours, and graded
+   by nothing. */
+static void a_type_2_line_begun_again_takes_the_offset_as_the_interlace_line(void) {
+  static const struct {
+    uint8_t r1;       /* written on C0=5, with R12/R13 */
+    uint8_t taken_up; /* the C0 R8=3 is written on */
+    uint8_t given_up; /* the C0 R8=0 is written on after it, or 0 */
+    uint16_t next_line_begins_at;
+  } cases[] = {{40, 10, 0, 0x3003}, {40, 50, 0, 0x0123}, {0, 10, 0, 0x0101}, {40, 10, 50, 0x3003}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(12, 0x01);
+    write_register(13, 0x23);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame);
+    TEST_EQUAL(crtc.vma, 0x0123);
+    TICK_UNTIL(crtc.c0 == 5);
+    write_register(1, cases[index].r1);
+    write_register(12, cases[index].r1 == 0 ? 0x01 : 0x30);
+    write_register(13, cases[index].r1 == 0 ? 0x45 : 0x03);
+    TICK_UNTIL(crtc.c0 == cases[index].taken_up);
+    write_register(8, 3);
+    if (cases[index].given_up != 0) {
+      TICK_UNTIL(crtc.c0 == cases[index].given_up);
+      write_register(8, 0);
+    }
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 0);
+    TEST_EQUAL(crtc.c9, cases[index].given_up != 0 ? 1 : 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_line_begins_at);
+  }
+}
+
+/* A line ch. 19.6.3 begins again yields only to a padding already holding it,
+   which enter_scanline lets come first. A frame's first row reached inside a
+   padding, R4 at 127 and rows of one line so that C4 comes round to 0 under the
+   padding's lines (ch. 11.2.3), is padding still: the mode written on its first
+   line under an odd frame begins no frame again there, so the line takes no R12
+   written on it and hands VMA on at its row's end as the padding's rows do. A
+   frame's head that R5 written at its C0=0 arms, where no padding holds it, is
+   begun again all the same, a type 2 asking R5 again at the end of its last
+   line alone (enter_scanline), and the line takes the offset. Ours. */
+static void a_type_2s_line_begun_again_yields_only_to_a_padding_holding_it(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(4, 127);
+  write_register(5, 4);
+  write_register(6, 100);
+  write_register(7, 120);
+  write_register(9, 0);
+  write_register(12, 0x10);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 5 && crtc.vertical_adjustment_in_progress && crtc.c4 == 0 && crtc.c9 == 0 &&
+             crtc.parity_frame);
+  write_register(12, 0x30);
+  TICK_UNTIL(crtc.c0 == 10);
+  write_register(8, 3);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_CHECK(crtc.vertical_adjustment_in_progress);
+  TEST_EQUAL(crtc.vma, 0x1028);
+
+  run_a_type_2(46, 0, 0);
+  write_register(6, 50);
+  write_register(12, 0x10);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.last_line && crtc.parity_frame);
+  write_register(5, 2);
+  TICK_UNTIL(crtc.c0 == 5);
+  TEST_CHECK(crtc.vertical_adjustment_armed);
+  write_register(12, 0x30);
+  TICK_UNTIL(crtc.c0 == 10);
+  write_register(8, 3);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+  TEST_EQUAL(crtc.vma, 0x3000);
+}
+
+/* The interlace line asked for after the R5 lines is read where C0 meets R1
+   from R8 as it then stands, as the line's end will read it: the condition
+   "is evaluated on the last line of a frame, when C0=R0", and "it is
+   therefore possible to update R8 on one of the lines displayed via R5" (ch.
+   11.9). R8 taken to 0 on the second and last R5 line before its R1 makes
+   that line the padding's last, and the next frame begins from an R12
+   written on the line before, too late for the frame's last line; taken to 0
+   after R1, the line ends the padding all the same but has not taken the
+   offset, and the next frame begins from the one the last line took, which
+   is ours. */
+static void a_type_2s_padding_reads_r8_where_c0_meets_r1(void) {
+  static const struct {
+    uint8_t character; /* C0 R8=0 is written on */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{5, 0x2000}, {50, 0x1000}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(5, 2);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 1);
+    write_register(12, 0x10);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 50 && crtc.vertical_adjustment_in_progress && crtc.c5 == 0 &&
+               crtc.interlace_line_owed);
+    write_register(12, 0x20);
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c5 == 1);
+    write_register(8, 0);
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
 /* Ch. 12.4.2's case study, the line-to-line rupture: a frame of one row
    whose every line is a frame of its own, so that R12 and R13 are read on
    each. R4 and R9 at 0 make every line last but for the refusal above, and
@@ -907,6 +1322,33 @@ static void a_type_2_ruptures_line_to_line_by_moving_r9_through_its_sync(void) {
         write_register(9, 0);
       }
     }
+  }
+}
+
+/* And what the rupture is for: "all displayed lines to start with C4=0 and
+   C9=0, so that registers R12 and R13, modified before C0==R1, are taken
+   into account" (ch. 12.4.2). Each line, a last line, hands the next the
+   offset it was given before C0 reached R1; the third line's, given at C0=50,
+   is too late for the fourth, which begins where the third did. */
+static void a_type_2_ruptured_line_to_line_takes_an_offset_on_each_line(void) {
+  static const struct {
+    uint8_t character; /* C0 the R13 write is made on */
+    uint16_t next_line_begins_at;
+  } lines[] = {{10, 0x10}, {10, 0x11}, {50, 0x11}, {10, 0x13}};
+  run_a_type_2(1, 0, 7);
+  TICK_UNTIL(crtc.c0 == 6 && crtc.c4 == 0 && crtc.c9 == 7);
+  write_register(9, 0);
+  for (unsigned line = 0; line < sizeof lines / sizeof *lines; line++) {
+    TICK_UNTIL(crtc.c0 == 0);
+    crtc_tick(&crtc);
+    TICK_UNTIL(crtc.c0 == 2);
+    write_register(9, 1);
+    TICK_UNTIL(crtc.c0 == 6);
+    write_register(9, 0);
+    TICK_UNTIL(crtc.c0 == lines[line].character);
+    write_register(13, (uint8_t)(0x10 + line));
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.vma, lines[line].next_line_begins_at);
   }
 }
 
@@ -999,23 +1441,26 @@ static void a_run_opened_past_r4_is_the_same_length_on_the_types_that_open_one(v
 }
 
 /* And the pointer a row hands the next one is left alone through a frame's
-   padding on the two ASICs, where every other type moves it on the first of
-   those lines. "The video pointer is updated before the start of the
-   additional lines (VMA'=VMA) when C0=R1. Additional management just set's C9
-   to 0 and compare's C9 with R5 to deactivate this management, without
-   updating the video pointer" (ch. 11.2.6), against ch. 11.2.2's own table for
-   a type 0, which walks its pointer a row's worth at that line.
+   padding on the two ASICs, where the other types move it inside it. "The
+   video pointer is updated before the start of the additional lines
+   (VMA'=VMA) when C0=R1. Additional management just set's C9 to 0 and
+   compare's C9 with R5 to deactivate this management, without updating the
+   video pointer" (ch. 11.2.6), against ch. 11.2.1's own table, which walks a
+   type 0's pointer a row's worth on the line where the padding's count meets
+   R9, and a type 1's and a type 2's at every row the padding completes.
 
-   The two part only because these two end a row wherever C9 has reached or
-   passed R9: every one of the padding lines meets that, so a predicate reading
-   the row's end alone would leave the pointer a row further on for each of the
-   sixteen. The registers below are ch. 11.2.2's own.
+   The ASICs part from that only because they end a row wherever C9 has
+   reached or passed R9: every one of the padding lines meets that, so a
+   predicate reading the row's end alone would leave the pointer a row further
+   on for each of the sixteen. The registers below are ch. 11.2.1's own.
 
-   Types 1 and 2 leave it four times, which is neither of those rules but their
-   own: they count the padding on C5 and the row goes on counting beside it,
-   "regardless of the value of R4 each time C9=R9, as long as C5 has not
-   reached R5" (ch. 11.1), so a row of four lines ends four times in sixteen
-   and hands the pointer on at each. */
+   Types 1 and 2 leave it four times, which is neither of those rules but
+   their own: they count the padding on C5 and the row goes on counting
+   beside it, "regardless of the value of R4 each time C9=R9, as long as C5
+   has not reached R5" (ch. 11.1), so a row of four lines ends four times in
+   sixteen and hands the pointer on at each — save that a type 2's fourth,
+   the padding's last line and so the frame's, takes the offset instead
+   (crtc.c). */
 static void the_two_asics_leave_the_pointer_alone_through_the_padding(void) {
   static const struct {
     uint8_t type;
@@ -3014,6 +3459,70 @@ static void stand_on_the_head_of_the_interlace_line(uint8_t type, uint8_t r5, ui
     crtc_tick(&crtc);
   }
   TICK_UNTIL(crtc.c0 == 0 && crtc.interlace_line_given);
+}
+
+/* And where interlace adds its line after the padding's R5 lines, that line
+   is the frame's last rather than the R5 lines' own last: eight R5 lines end
+   a row and hand VMA on, so the interlace line begins forty on from the
+   frame's offset of 0, and the frame after it begins from the offset that
+   line took. */
+static void a_type_2s_interlace_line_is_the_last_its_pointer_knows(void) {
+  stand_on_the_head_of_the_interlace_line(2, 8, 1);
+  TEST_EQUAL(crtc.vma, 0x28);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+  TEST_EQUAL(crtc.vma, 0);
+}
+
+/* Given up while it is displayed, the interlace line is no last line: "if
+   the interlace mode is disabled (R8=0) while the 'Interlace' line is
+   displayed, then the 'Last Line' condition is cancelled" (ch. 11.9). Given
+   up before C0 meets R1, it takes no R12 written on it, and the line after
+   it, the frame going on, begins from the offset the frame's last line took;
+   given up after, it has taken that R12 already, and the line after begins
+   there, which is ours. */
+static void a_type_2s_interlace_line_given_up_is_no_last_line(void) {
+  static const struct {
+    uint8_t character; /* C0 R8=0 is written on */
+    uint16_t next_line_begins_at;
+  } cases[] = {{10, 0x0000}, {50, 0x3000}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    stand_on_the_head_of_the_interlace_line(2, 0, 1);
+    TEST_EQUAL(crtc.vma, 0);
+    TICK_UNTIL(crtc.c0 == 5);
+    write_register(12, 0x30);
+    TICK_UNTIL(crtc.c0 == cases[index].character);
+    write_register(8, 0);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 39);
+    TEST_EQUAL(crtc.c9, 1);
+    TEST_EQUAL(crtc.vma, cases[index].next_line_begins_at);
+  }
+}
+
+/* A frozen line of one character, R0 at 0, is no line the padding ended on,
+   though the line before it was: with R1 at 0 the next frame's head cuts the
+   offset into the latch once, and the frozen heads after it, each comparing
+   C0 with R1 again, take nothing more of an R13 moved among them. The freeze
+   on a type 2 is ours (crtc.h). */
+static void a_type_2s_frozen_line_ended_no_padding(void) {
+  run_a_type_2(46, 38, 7);
+  write_register(5, 1);
+  write_register(12, 0x01);
+  write_register(13, 0x23);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 63 && crtc.c4 == 39 && crtc.vertical_adjustment_in_progress);
+  write_register(1, 0);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+  uint16_t cut_once = crtc.vma_;
+  TEST_EQUAL(cut_once, 0x0123);
+  write_register(0, 0);
+  write_register(13, 0x00);
+  for (int tick = 0; tick < 8; tick++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.vma_, cut_once);
 }
 
 /* The other half of ch. 19.6.3's "noticeable bug on the management of the
@@ -6134,7 +6643,9 @@ static void an_r6_of_zero_is_taken_back_only_before_r1(void) {
    would make it a type 1 in this; its opening sentence names C9 with the
    other two, and that is what stands here. Nothing outside this file chooses
    between them: dropping the C9 from the shared rule leaves both Shaker
-   records and both demo records passing, and only these rows notice. */
+   records and both demo records passing, and only these rows notice. A type
+   2 has the offset from the last line of the frame before (ch. 17.4.3), so
+   the rows read are the second frame's. */
 static void a_type_1_takes_its_offset_all_through_the_first_row(void) {
   static const struct {
     uint8_t type;
@@ -6146,6 +6657,7 @@ static void a_type_1_takes_its_offset_all_through_the_first_row(void) {
     for (int reg = 0; reg < 14; reg++) {
       write_register(reg, values[reg]);
     }
+    TEST_CHECK(run_to_row(1));
     TEST_CHECK(run_to_row(0));
     while (crtc.c9 != 1) { /* the row's second line, C4 still 0 */
       crtc_tick(&crtc);
@@ -6179,17 +6691,20 @@ static void a_type_1_takes_its_offset_all_through_the_first_row(void) {
    updated. VMA' is frozen on the last known pointer ... We have therefore,
    when R1>R0, a first line character which contains the pointer defined in
    R12/R13 and on the following, the last pointer updated in VMA'" (ch.
-   17.4.2). The other four fill both at a frame's head, so every row of
+   17.4.2). Types 0, 3 and 4 fill both at a frame's head, so every row of
    theirs opens on R12/R13 and "all the lines displayed become identical"
-   (ch. 17.4.1, which is headed for types 0, 3 and 4; a type 2 is answered as
-   they are on the strength of ch. 20.3.3, where "when counters C4, C9 and C0
-   change to 0, pointers (VMA' & VMS) are initialized with R12/R13", the
-   second name being the chapter's own slip for VMA). */
-static void a_type_1_leaves_its_latch_frozen_where_c0_cannot_reach_r1(void) {
+   (ch. 17.4.1). A type 2 fills its latch from R12/R13 only where C0 meets R1
+   on a last line, so it takes the offset nowhere and draws every row from
+   the frozen latch: "When R1>R0, neither pointer is updated with R12/R13
+   anymore. All lines are identical in this situation" (ch. 17.4.3). Ch.
+   20.3.3 opens on a type 0's rule, "when counters C4, C9 and C0 change to 0,
+   pointers (VMA' & VMS) are initialized with R12/R13", and goes on to give a
+   type 2 its own; ch. 17.4.3 is the one taken. */
+static void types_1_and_2_leave_their_latch_frozen_where_c0_cannot_reach_r1(void) {
   static const struct {
     uint8_t type;
     bool draws_rows_from_the_frozen_latch;
-  } cases[] = {{0, false}, {1, true}, {2, false}, {3, false}, {4, false}};
+  } cases[] = {{0, false}, {1, true}, {2, true}, {3, false}, {4, false}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x10, 0};
     crtc_init(&crtc, cases[index].type);
@@ -6201,8 +6716,8 @@ static void a_type_1_leaves_its_latch_frozen_where_c0_cannot_reach_r1(void) {
     write_register(1, 64); /* R0 + 1, past C0's reach from here on */
     TEST_CHECK(run_to_row(0));
     /* What the latch holds going into the frame: a capture from before R1
-       was moved on the one chip that no longer fills it at a frame's head,
-       and R12/R13 on the four that do. */
+       was moved on the two chips that do not fill it at a frame's head, and
+       R12/R13 on the three that do. */
     uint16_t frozen = crtc.vma_;
     TEST_EQUAL(frozen != 0x1000, cases[index].draws_rows_from_the_frozen_latch);
     TEST_CHECK(run_to_row(1));
@@ -6958,6 +7473,20 @@ int main(void) {
   TEST_RUN(a_type_2_keeps_its_last_line_while_c0_runs_round);
   TEST_RUN(a_type_2_without_a_sync_keeps_both_its_states);
   TEST_RUN(a_type_2_ruptures_line_to_line_by_moving_r9_through_its_sync);
+  TEST_RUN(a_type_2_ruptured_line_to_line_takes_an_offset_on_each_line);
+  TEST_RUN(a_type_2_takes_its_offset_where_c0_meets_r1_on_its_last_line);
+  TEST_RUN(a_type_2_hands_the_next_frame_the_state_its_last_line_had_at_r1);
+  TEST_RUN(a_type_2_takes_its_offset_at_the_head_where_r1_is_0);
+  TEST_RUN(a_type_2_takes_its_offset_whole_where_c0_comes_round_to_0);
+  TEST_RUN(a_type_2_reads_at_an_r1_of_0_the_state_its_line_before_ended_on);
+  TEST_RUN(a_type_2_takes_its_offset_on_the_last_line_of_its_padding);
+  TEST_RUN(a_type_2s_interlace_line_is_the_last_its_pointer_knows);
+  TEST_RUN(a_type_2s_interlace_line_given_up_is_no_last_line);
+  TEST_RUN(a_type_2s_frozen_line_ended_no_padding);
+  TEST_RUN(a_type_2s_padding_ends_where_r5_moved_inside_it_ends_it);
+  TEST_RUN(a_type_2_line_begun_again_takes_the_offset_as_the_interlace_line);
+  TEST_RUN(a_type_2s_line_begun_again_yields_only_to_a_padding_holding_it);
+  TEST_RUN(a_type_2s_padding_reads_r8_where_c0_meets_r1);
   TEST_RUN(the_two_asics_still_add_the_interlace_line_to_an_even_frame);
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
@@ -7070,7 +7599,7 @@ int main(void) {
   TEST_RUN(a_type_1_gives_up_its_r6_border_with_the_register);
   TEST_RUN(an_r6_of_zero_is_taken_back_only_before_r1);
   TEST_RUN(a_type_1_takes_its_offset_all_through_the_first_row);
-  TEST_RUN(a_type_1_leaves_its_latch_frozen_where_c0_cannot_reach_r1);
+  TEST_RUN(types_1_and_2_leave_their_latch_frozen_where_c0_cannot_reach_r1);
   TEST_RUN(a_type_1_carries_its_offset_into_the_added_lines);
   TEST_RUN(an_r4_moved_at_a_lines_end_takes_the_carry_away);
   TEST_RUN(the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0);

@@ -222,16 +222,22 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
 /* Nor is a restore a write a program made on a character: the chip must not
    read it as one on the first tick back, where an R3 would let a sync
    through and an R4 or R9 make a type 2's last line, and the R9 a type 2's
-   next line head compares with is the one restored. */
+   next line head compares with is the one restored. Nor may a type 2's load
+   of R12/R13 on the character just drawn take the restored ones as a late
+   write. */
 static void a_restore_is_no_write_on_a_character(void) {
   load_a_running_program();
   power_on(&cpc, ram, sizeof ram);
   const char *problem = NULL;
   TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
-  bytes[0x43 + 9] = 5; /* R9 */
+  bytes[0x43 + 9] = 5;     /* R9 */
+  bytes[0x43 + 12] = 0x30; /* R12 */
 
   power_on(&restored, other_ram, sizeof other_ram);
+  restored.crtc.offset_taken_where_c0_met_r1 = true;
+  restored.crtc.vma_ = 0x0123;
   TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.vma_, 0x0123);
   TEST_CHECK(!restored.crtc.r3_written_for_this_character);
   TEST_CHECK(!restored.crtc.r4_or_r9_written_for_this_character);
   TEST_EQUAL(restored.crtc.r9_on_the_character_before, 5);
