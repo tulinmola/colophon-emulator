@@ -281,46 +281,52 @@
  * notwithstanding, for want of anything the disc grades that asks for it —
  * an R5 raised from 0 at C0=R0 would also set off a bug of that chip's own
  * (ch. 11.6), which is not here. A type 2 asks R5 of its last line to the
- * line's end (crtc.c), and settles that line by ch. 12.4.1's rules rather
- * than a type 0's: at the line's head, with R4 as it lands there and R9 as
- * it stood, refused where the last character of the line before's HSYNC
- * found the comparison true, and to a line an HSYNC begins on or runs over
- * at its head (ch. 15.4.4, 15.6); and later in the line by an R4 or R9
- * write outside the HSYNC, on any line but a frame's first until its HSYNC
- * has ended on a mismatch. A write landing on the head is read by
- * the head alone, which is ours. Shaker's E (7) names silicon's value beside
- * any of its timings this chip gets wrong, and names none; its readings of
- * its own carry no value of silicon's. One rule of that chapter is not here:
- * R4 and R9 moved before or during the R5 lines are the values compared
- * through them, so an R9 moved there leaves C9 counting on after them, where
- * here the frame begins again when they are spent, C4 and C9 at 0, whatever
- * the two hold. Where the chapter puts the HSYNC's last character "within
- * the limit of R0", it is read as falling on the next line where the sync
- * runs over, which nothing grades. The sixth is the border R6 asks for. Where
- * R6 is 0 a frame's first line is a conflict on types 0 and 2 and comes out an
- * alternation of bordered and displayed bytes, cancellable until C0 meets R1
- * and definitive after it (ch. 18.3.2); a type 1 borders outright on an R6 of 0
- * "without the condition C4=R6 being required" and gives the border up with the
- * register, except where the write was made while C4 stood at 0, which keeps it
- * for the frame (ch. 18.2.3, 18.3.3); and types 3 and 4 have no conflict and
- * test R6 where a line begins rather than through it (ch. 18.2.4, 18.3.4). No
- * line the disc grades moves on any of the three — what grades them is those
- * chapters and tests of our own, and Shaker says its piece there in pictures.
- * The seventh is where types 1 and 2 read their offset. A type 1's R12/R13
- * reach VMA itself, and reach it at the head of every line the frame's first
- * character row spends with C4 at 0, where types 0, 3 and 4 load both
- * pointers once and only where C4, C9 and C0 stand together at 0 (ch.
- * 17.4.1, 17.4.2, 20.3.1, 20.3.2, 20.3.4). C4 at 0 is a type 1's plainest
- * case and not its rule. Ch. 11.2.4 keeps the same update through the C4 of 1
- * a run of additional lines gives it, where the run opened with C4 at 0 — "if
- * C4=0 before the additional management" — and that is here, along with the
- * exception it ends on: an R4 moved at C0=R0 above 0 takes the carry away.
- * Ch. 11.6 keeps the update past C4 altogether where the border on a row's
- * last line is missed, and that is not here. The disc grades none of a type
- * 1's part in words and says it in a picture: its E (2), "CRTC 1 VMA TRT
- * C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME", settles on "YOU'VE WON THIS
- * STAGE" with the carry and on "IF YOU CAN READ THIS...YOUR EMULATOR HAS A
- * PROBLEM" without it, and nothing else on the disc moves either way.
+ * line's end (crtc.c), and settles that line by ch. 12.4.1's rules rather than
+ * a type 0's: at the line's head, with R4 and R9 as the writes made before it
+ * left them, refused where the last character of the line before's HSYNC found
+ * the comparison true, and to a line an HSYNC begins on or runs over at its
+ * head (ch. 15.4.4, 15.6); and by an R4 or R9 write made outside the HSYNC, on
+ * any line but a frame's first until its HSYNC has ended on a mismatch. A write
+ * is judged there on the character it is made on rather than the one after,
+ * where this chip reads a written register, as two photographs of Shaker 2.6 on
+ * a real type 2 have it (crtc.c); an R4 written during the head's own character
+ * has the head compare again with R9 as it found it, and that either register
+ * written there can still make the line last is ours. Shaker's E (7) names
+ * silicon's value beside any of its timings this chip gets wrong, and names
+ * none; its readings of its own carry no value of silicon's. One rule of that
+ * chapter is not here: R4 and R9 moved before or during the R5 lines are the
+ * values compared through them, so an R9 moved there leaves C9 counting on
+ * after them, where here the frame begins again when they are spent, C4 and C9
+ * at 0, whatever the two hold. Where the chapter puts the HSYNC's last
+ * character "within the limit of R0", it is read as falling on the next line
+ * where the sync runs over, which nothing grades; and the reading there is
+ * taken before a write made during that character, which is ours, the sync
+ * refusing such a write besides as silicon does (crtc.c), so it reaches
+ * neither. The sixth is the border R6 asks for. Where R6 is 0 a frame's first
+ * line is a conflict on types 0 and 2 and comes out an alternation of bordered
+ * and displayed bytes, cancellable until C0 meets R1 and definitive after it
+ * (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the condition
+ * C4=R6 being required" and gives the border up with the register, except where
+ * the write was made while C4 stood at 0, which keeps it for the frame (ch.
+ * 18.2.3, 18.3.3); and types 3 and 4 have no conflict and test R6 where a line
+ * begins rather than through it (ch. 18.2.4, 18.3.4). No line the disc grades
+ * moves on any of the three — what grades them is those chapters and tests of
+ * our own, and Shaker says its piece there in pictures. The seventh is where
+ * types 1 and 2 read their offset. A type 1's R12/R13 reach VMA itself, and
+ * reach it at the head of every line the frame's first character row spends
+ * with C4 at 0, where types 0, 3 and 4 load both pointers once and only where
+ * C4, C9 and C0 stand together at 0 (ch. 17.4.1, 17.4.2, 20.3.1, 20.3.2,
+ * 20.3.4). C4 at 0 is a type 1's plainest case and not its rule. Ch. 11.2.4
+ * keeps the same update through the C4 of 1 a run of additional lines gives it,
+ * where the run opened with C4 at 0 — "if C4=0 before the additional
+ * management" — and that is here, along with the exception it ends on: an R4
+ * moved at C0=R0 above 0 takes the carry away. Ch. 11.6 keeps the update past
+ * C4 altogether where the border on a row's last line is missed, and that is
+ * not here. The disc grades none of a type 1's part in words and says it in a
+ * picture: its E (2), "CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT
+ * FRAME", settles on "YOU'VE WON THIS STAGE" with the carry and on "IF YOU CAN
+ * READ THIS...YOUR EMULATOR HAS A PROBLEM" without it, and nothing else on the
+ * disc moves either way.
  *
  * A type 2 takes no load for a frame's head being one. VMA' takes R12/R13 where
  * C0 meets R1 on a line its last-line state names, and VMA takes VMA' at the
@@ -330,30 +336,31 @@
  * on to give a type 2 its own, which is the one taken. So an offset written
  * once the R1 character has passed on the last line is too late for the next
  * frame (ch. 13.4.1) — one written during that character is still in time, as
- * ch. 20.3.3's figure draws it — a line made last only after R1 hands the next
- * frame whatever the latch then holds (ch. 12.4.2), and where R1 stands beyond
- * R0 no line takes the offset at all. With R1 at 0 the comparison is made at a
- * head, before the head's own last-line evaluation and before VMA takes VMA',
- * so the line after the last line is where the offset is taken, and the load
- * made at its head performs the AND of its two operations alone (ch. 17.4.3).
- * The chapter tells that of an offset written after the last line's head, and
- * ch. 20.3.3 has the head take R12/R13 there whole; that every load made at a
- * head is cut short is ours, and so is such a load being closed to an offset
- * written during its own character. Where padding follows the last line, the
- * padding's last line is the frame's last — "the last line of a frame ... can
- * be one of the adjustment lines displayed via R5", and on this type the
- * interlace line holds the "Last Line" condition (ch. 11.9) — and takes the
- * offset too, the padding's rows handing VMA on as any row does (ch. 11.2.1,
- * 11.2.3): Shaker's B (RETURN) photographed on a real type 2 draws its frame
- * from an R12 written too late for the last line itself, after twenty-four
- * lines of padding. That the load reads that line's state where its C9 has not
- * reached R9, which ch. 12.1's "(when C9=R9)" leaves open and the photograph
- * cannot show, is ours; so is a padding made to end only after R1 handing the
- * next frame whatever the latch then holds, and reading the line ch. 19.6.3
- * turns into an additional line as the interlace line, which takes the offset
- * save where a padding already holds it, the mode given up after R1 leaving
- * that offset to the line after it. No graded line moves on any of it; Shaker's
- * A (O), "R1 STORIES", moves R1 past R0 on row 24's last line and repeats on
+ * ch. 20.3.3's figure draws it — a line made last only by a write on the R1
+ * character or later hands the next frame whatever the latch then holds (ch.
+ * 12.4.2), and where R1 stands beyond R0 no line takes the offset at all. With
+ * R1 at 0 the comparison is made at a head, before the head's own last-line
+ * evaluation and before VMA takes VMA', so the line after the last line is
+ * where the offset is taken, and the load made at its head performs the AND of
+ * its two operations alone (ch. 17.4.3). The chapter tells that of an offset
+ * written after the last line's head, and ch. 20.3.3 has the head take R12/R13
+ * there whole; that every load made at a head is cut short is ours, and so is
+ * such a load being closed to an offset written during its own character. Where
+ * padding follows the last line, the padding's last line is the frame's last —
+ * "the last line of a frame ... can be one of the adjustment lines displayed
+ * via R5", and on this type the interlace line holds the "Last Line" condition
+ * (ch. 11.9) — and takes the offset too, the padding's rows handing VMA on as
+ * any row does (ch. 11.2.1, 11.2.3): Shaker's B (RETURN) photographed on a real
+ * type 2 draws its frame from an R12 written too late for the last line itself,
+ * after twenty-four lines of padding. That the load reads that line's state
+ * where its C9 has not reached R9, which ch. 12.1's "(when C9=R9)" leaves open
+ * and the photograph cannot show, is ours; so is a padding made to end only by
+ * a write on the R1 character or later handing the next frame whatever the
+ * latch then holds, and reading the line ch. 19.6.3 turns into an additional
+ * line as the interlace line, which takes the offset save where a padding
+ * already holds it, the mode given up on the R1 character or later leaving that
+ * offset to the line after it. No graded line moves on any of it; Shaker's A
+ * (O), "R1 STORIES", moves R1 past R0 on row 24's last line and repeats on
  * every row the label it keeps at the latch's address there,
  * "CRTC-VMA'=#C000+(80x24)", where a type 0 repeats the screen's first row, and
  * a real type 2 is photographed drawing the same.
@@ -757,10 +764,14 @@ typedef struct crtc_t {
      or R13 written during that same character still reaches (ch.
      20.3.3). */
   bool offset_taken_where_c0_met_r1;
-  /* R9 as the character before held it, which is what a type 2's line head
-     compares C9 with: "an update of R9 on C0==0 occurs too late for this
-     evaluation" (ch. 12.4.1). */
-  uint8_t r9_on_the_character_before;
+  /* R9 as a type 2's line head found it, which an R4 written during the
+     head's own character has the head compare C9 with again: "the
+     comparison uses the updated value of R4, but the previous value of R9"
+     (ch. 12.4.1). */
+  uint8_t r9_at_the_line_head;
+  /* And whether that head was refused, the line before having been last or
+     an HSYNC standing on it, which the comparison made again keeps. */
+  bool line_head_refused;
 
   bool vertical_adjustment_armed;
   /* Whether an adjustment has actually begun, as against being armed for
@@ -955,8 +966,6 @@ typedef struct crtc_t {
   /* Whether R3 was written in time to be read on that character, which is
      the modification that same sentence exempts. */
   bool r3_written_for_this_character;
-  /* And whether R4 or R9 was, read by a type 2's last line (ch. 12.4.1). */
-  bool r4_or_r9_written_for_this_character;
   bool vsync;
   /* A type 2's VSYNC begun while its HSYNC is in progress, which counts its
      lines and holds another off as any VSYNC does, "but without the VSYNC

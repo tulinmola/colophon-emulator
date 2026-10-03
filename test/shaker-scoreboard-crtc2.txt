@@ -189,5 +189,5 @@ E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                      
 E (4)       CRTC 3/4 : C4 OVERFLOW                                                           another CRTC type's
 E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
 E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        another CRTC type's
-E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   recorded, ungraded, cut off at the cap
+E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   recorded, ungraded
 E (COPY)    RESET CPC                                                                        recorded, ungraded
