@@ -9,16 +9,45 @@
 
 static gate_array_t gate_array;
 
-/* One HSYNC: assert, then end it — R52 counts the end. */
+/* One of the CPU's cycles, as cpc_tick runs it: the character clock falls on
+   quarter 0. */
+static void advance(bool hsync, bool vsync) {
+  gate_array_advance_phase(&gate_array);
+  if (gate_array_character_clock(&gate_array)) {
+    gate_array_tick(&gate_array, hsync, vsync);
+  }
+}
+
+/* On to the next character clock and through it to quarter 1, where the
+   interrupt generator counts. */
+static void character(bool hsync, bool vsync) {
+  do {
+    advance(hsync, vsync);
+  } while (!gate_array_character_clock(&gate_array));
+  advance(hsync, vsync);
+}
+
+/* One HSYNC: assert, end it, and give the line one character more. The
+   interrupt generator acts on the end a character after it (ch. 27.6.1),
+   so a pulse that stopped at the end would leave every test here reading
+   the moment before. */
 static void pulse_hsync(void) {
-  gate_array_tick(&gate_array, true, false);
-  gate_array_tick(&gate_array, false, false);
+  character(true, false);
+  character(false, false);
+  character(false, false);
 }
 
 static void pulse_hsyncs(int count) {
   for (int pulse = 0; pulse < count; pulse++) {
     pulse_hsync();
   }
+}
+
+/* A character whose two bytes carry the same display enable, which is what
+   the chip reports unless one of the rules that part them is in play. */
+static void draw_character(bool display, uint8_t byte0, uint8_t byte1,
+                           uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
+  gate_array_video(&gate_array, display, display, byte0, byte1, samples);
 }
 
 static void reset_state(void) {
@@ -51,6 +80,135 @@ static void rmr_owns_roms_and_mode(void) {
   TEST_EQUAL(gate_array.mode, 0); /* not yet: a mode waits for the HSYNC */
   pulse_hsync();
   TEST_EQUAL(gate_array.mode, 1);
+}
+
+/* The end of an HSYNC is counted a character later, and the interrupt it
+   asks for rises then: "an interrupt always starts 1 µsec after the end of
+   the HSYNC regardless of the CRTC", and the diagrams below that put it
+   R3+1 microseconds after C0 reaches R2 — 15 for an R3 of 14, 9 for 8, 2
+   for 1 (ch. 27.6.1, 27.6.2). Within that character it rises on quarter 1,
+   a NOP's T3 here, where "the INT signal of the Z80A is positioned at T3
+   level" (ch. 27.7.2). */
+static void the_request_rises_a_character_after_the_hsync(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(51);
+  TEST_CHECK(!gate_array.interrupt_request);
+
+  character(true, false);
+  character(false, false); /* the end R52 counts */
+  TEST_EQUAL(gate_array.r52, 51);
+  TEST_CHECK(!gate_array.interrupt_request);
+  do {
+    advance(false, false);
+  } while (!gate_array_character_clock(&gate_array));
+  TEST_CHECK(!gate_array.interrupt_request); /* the character, on quarter 0 */
+  advance(false, false);
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(gate_array.interrupt_request); /* and on quarter 1 */
+}
+
+/* And a quarter sooner where the board asks for it, which is on the
+   character clock itself: the two ASICs, whose line sync's black ch. 14.9
+   draws ending in the first of the processor's cycles where a type 0's ends
+   in the second (cpc.c). */
+static void a_chip_acting_at_the_clock_raises_the_request_a_quarter_sooner(void) {
+  gate_array_init(&gate_array);
+  gate_array.acts_on_a_sync_end_at_the_clock = true;
+  pulse_hsyncs(51);
+  TEST_CHECK(!gate_array.interrupt_request);
+
+  character(true, false);
+  character(false, false); /* the end R52 counts */
+  TEST_EQUAL(gate_array.r52, 51);
+  TEST_CHECK(!gate_array.interrupt_request);
+  do {
+    advance(false, false);
+  } while (!gate_array_character_clock(&gate_array));
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(gate_array.interrupt_request); /* on quarter 0 */
+}
+
+/* And an interrupt asked for by an HSYNC that has just ended is cancelled
+   with the rest by RMR's bit 4, rather than arriving a character after the
+   program disowned it. */
+static void rmr_bit_4_reaches_a_request_not_yet_risen(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(51);
+  character(true, false);
+  character(false, false);
+  gate_array_write(&gate_array, 0x90); /* RMR with bit 4 */
+  character(false, false);
+  TEST_CHECK(!gate_array.interrupt_request);
+  TEST_EQUAL(gate_array.r52, 0);
+}
+
+/* The one step of R52 an acknowledge can arrive in front of. "If R52 is 31,
+   and the GATE ARRAY receives an end of HSYNC from the CRTC to increment
+   R52, but at the same time it receives the order to eliminate bit 5, what
+   happens?" — either "R52 goes from 31 to 32, then its bit 5 is eliminated,
+   and R52 goes to 0", leaving the next interrupt 52 lines off, or "bit 5 of
+   R52=31 is eliminated (which has no effect) and R52 changes to 32", leaving
+   it 20 (ch. 27.7.1). The chip answers by order alone: an acknowledge heard
+   before the count leaves 32, and one heard after it 0. Both are heard on
+   quarter 1, where the machine hears them, a character apart. Where the
+   processor's acknowledge ends is cpc_timing_test's to pin, and which order
+   an instruction's length leads to is graded only by Shaker's B (R). */
+static void an_acknowledge_races_r52_past_31(void) {
+  reset_state();
+  pulse_hsyncs(31);
+  TEST_EQUAL(gate_array.r52, 31);
+  character(true, false);
+  character(false, false);                        /* the end that will take R52 to 32 */
+  gate_array_interrupt_acknowledged(&gate_array); /* heard first */
+  character(false, false);
+  TEST_EQUAL(gate_array.r52, 32);
+
+  reset_state();
+  pulse_hsyncs(31);
+  character(true, false);
+  character(false, false);
+  character(false, false); /* counted: 32 */
+  TEST_EQUAL(gate_array.r52, 32);
+  gate_array_interrupt_acknowledged(&gate_array); /* heard after */
+  TEST_EQUAL(gate_array.r52, 0);
+}
+
+/* Nor is a step that finds bit 5 already set a race: there is nothing new to
+   take away, and the acknowledge takes it either side of the count. */
+static void only_the_step_past_31_races(void) {
+  for (int heard_after = 0; heard_after <= 1; heard_after++) {
+    reset_state();
+    pulse_hsyncs(40);
+    TEST_EQUAL(gate_array.r52, 40);
+    character(true, false);
+    character(false, false);
+    if (!heard_after) {
+      gate_array_interrupt_acknowledged(&gate_array);
+    }
+    character(false, false);
+    if (heard_after) {
+      gate_array_interrupt_acknowledged(&gate_array);
+    }
+    TEST_EQUAL(gate_array.r52, 9); /* 41 with bit 5 taken away */
+  }
+}
+
+/* Whether an HSYNC end is the frame's check is settled when it ends, though
+   what it does waits: one that ended the character before a VSYNC began is
+   not among the two HSYNCs after it (ch. 27.3.2). */
+static void an_hsync_ending_before_the_vsync_is_not_counted_after_it(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(40);
+  character(true, false);
+  character(false, false); /* the end, not yet acted on */
+  character(false, true);  /* VSYNC begins, and that end is acted on */
+  TEST_EQUAL(gate_array.r52, 41);
+  pulse_hsync(); /* the first after the VSYNC */
+  TEST_EQUAL(gate_array.r52, 42);
+  TEST_CHECK(!gate_array.interrupt_request);
+  pulse_hsync(); /* the second: the check, with bit 5 of 42 set */
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(gate_array.interrupt_request);
 }
 
 static void r52_loops_at_52_and_holds_the_request(void) {
@@ -91,13 +249,54 @@ static void rmr_bit_4_clears_counter_and_request(void) {
   TEST_EQUAL(gate_array.r52, 0);
 }
 
+/* The interrupt the frame's own check raises waits the same character as
+   the one R52 counts out (ch. 27.6.1, 27.3.2). */
+static void the_vsync_checks_request_waits_the_same_character(void) {
+  gate_array_init(&gate_array);
+  pulse_hsyncs(40);
+  character(false, true); /* VSYNC begins */
+  pulse_hsync();          /* counts: R52 = 41 */
+
+  character(true, false);
+  character(false, false); /* the end the check falls on */
+  TEST_EQUAL(gate_array.r52, 41);
+  TEST_CHECK(!gate_array.interrupt_request);
+  character(false, false);
+  TEST_EQUAL(gate_array.r52, 0);
+  TEST_CHECK(gate_array.interrupt_request);
+}
+
+/* And the acknowledge does not reach a request raised in the microsecond it
+   is heard in, where RMR's bit 4 does: it answers the interrupt the processor
+   was offered, and the counter has since asked for another. Behind a Gate
+   Array that is the very cycle, the second of the microsecond; where the
+   chip acts at the clock the request rises a cycle before the acknowledge
+   is heard, and is left standing all the same. */
+static void an_acknowledge_leaves_a_request_just_risen(void) {
+  for (int at_the_clock = 0; at_the_clock < 2; at_the_clock++) {
+    gate_array_init(&gate_array);
+    gate_array.acts_on_a_sync_end_at_the_clock = at_the_clock;
+    pulse_hsyncs(51);
+    character(true, false);
+    character(false, false);
+    character(false, false); /* the count that asks, in this microsecond */
+    TEST_CHECK(gate_array.interrupt_request);
+    TEST_EQUAL(gate_array.cpu_phase, 1);
+    gate_array_interrupt_acknowledged(&gate_array);
+    TEST_CHECK(gate_array.interrupt_request);
+    character(false, false);
+    gate_array_interrupt_acknowledged(&gate_array); /* a microsecond on, it does */
+    TEST_CHECK(!gate_array.interrupt_request);
+  }
+}
+
 static void vsync_check_interrupts_only_from_afar(void) {
   /* Two HSYNCs after a VSYNC begins: interrupt only if bit 5 of R52 is
      set, and R52 returns to 0 either way (Compendium ch. 27.3.2). */
   gate_array_init(&gate_array);
   pulse_hsyncs(40);
-  gate_array_tick(&gate_array, false, true); /* VSYNC begins */
-  pulse_hsync();                             /* counts: R52 = 41 */
+  character(false, true); /* VSYNC begins */
+  pulse_hsync();          /* counts: R52 = 41 */
   TEST_CHECK(!gate_array.interrupt_request);
   pulse_hsync(); /* the check: bit 5 of 41 is set */
   TEST_CHECK(gate_array.interrupt_request);
@@ -105,7 +304,7 @@ static void vsync_check_interrupts_only_from_afar(void) {
 
   gate_array_init(&gate_array);
   pulse_hsyncs(20);
-  gate_array_tick(&gate_array, false, true);
+  character(false, true);
   pulse_hsyncs(2); /* bit 5 of 21 is clear: too close, no interrupt */
   TEST_CHECK(!gate_array.interrupt_request);
   TEST_EQUAL(gate_array.r52, 0);
@@ -122,8 +321,8 @@ static void inks_name_their_pens(void) {
 
 /* Serialise one character, discarding the pipeline's first output. */
 static void serialise(uint8_t byte0, uint8_t byte1, uint8_t samples[16]) {
-  gate_array_video(&gate_array, true, byte0, byte1, samples);
-  gate_array_video(&gate_array, true, 0, 0, samples);
+  draw_character(true, byte0, byte1, samples);
+  draw_character(true, 0, 0, samples);
 }
 
 static void mode_0_paints_two_fat_pixels_a_byte(void) {
@@ -192,15 +391,149 @@ static void mode_3_ignores_four_bits_a_byte(void) {
   }
 }
 
+/* Grimware's byte/pixel table in its own direction: for each mode, what the
+   byte carries from bit 7 down to bit 0 — which pixel of the byte, and which
+   bit of that pixel's pen ("The Gate Array" (Grim), byte/pixel structure).
+   The decoder states the inverse, pen by pen, from the same table; a slip in
+   either transcription shows here as a disagreement. NO_PIXEL names the four
+   bits mode 3 drops. */
+#define NO_PIXEL 0xFF
+static const struct {
+  uint8_t pixel;
+  uint8_t pen_bit;
+} carried_by_bit[4][8] = {
+    {{0, 0}, {1, 0}, {0, 2}, {1, 2}, {0, 1}, {1, 1}, {0, 3}, {1, 3}},
+    {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}},
+    {{0, 0}, {1, 0}, {2, 0}, {3, 0}, {4, 0}, {5, 0}, {6, 0}, {7, 0}},
+    {{0, 0}, {1, 0}, {NO_PIXEL, 0}, {NO_PIXEL, 0}, {0, 1}, {1, 1}, {NO_PIXEL, 0}, {NO_PIXEL, 0}},
+};
+
+/* The pens a byte paints in a mode, and how many pixels the mode names. */
+static uint8_t pens_from_the_structure(uint8_t mode, uint8_t byte, uint8_t pens[8]) {
+  for (uint8_t pixel = 0; pixel < 8; pixel++) {
+    pens[pixel] = 0;
+  }
+  uint8_t pixels = 0;
+  for (uint8_t bit = 0; bit < 8; bit++) {
+    uint8_t pixel = carried_by_bit[mode][bit].pixel;
+    if (pixel == NO_PIXEL) {
+      continue;
+    }
+    if (pixel >= pixels) {
+      pixels = (uint8_t)(pixel + 1);
+    }
+    if (byte & (1 << (7 - bit))) {
+      pens[pixel] |= (uint8_t)(1 << carried_by_bit[mode][bit].pen_bit);
+    }
+  }
+  return pixels;
+}
+
+/* A colour for every pen that is not the pen's own number, so that a sample
+   answers for the palette it was read through as well as for the pen. */
+static uint8_t ink_of_pen(uint8_t pen) { return (uint8_t)(0x1F - pen); }
+
+static void inks_differ_from_their_pens(void) {
+  for (uint8_t pen = 0; pen < 16; pen++) {
+    gate_array_write(&gate_array, pen);
+    gate_array_write(&gate_array, (uint8_t)(0x40 | ink_of_pen(pen)));
+  }
+}
+
+static void every_byte_paints_what_the_structure_says(void) {
+  for (uint8_t mode = 0; mode < 4; mode++) {
+    gate_array_init(&gate_array);
+    inks_differ_from_their_pens();
+    gate_array_write(&gate_array, (uint8_t)(0x8C | mode));
+    pulse_hsync();
+    for (uint16_t value = 0; value < 256; value++) {
+      /* The character's two halves carry different bytes, so a half painted
+         from the other one's byte disagrees. */
+      uint8_t bytes[2] = {(uint8_t)value, (uint8_t)(value ^ 0xFF)};
+      uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+      serialise(bytes[0], bytes[1], samples);
+      for (uint8_t half = 0; half < 2; half++) {
+        uint8_t pens[8];
+        uint8_t pixels = pens_from_the_structure(mode, bytes[half], pens);
+        uint8_t pixel_width = (uint8_t)(GATE_ARRAY_SAMPLES_PER_CHARACTER / 2 / pixels);
+        for (uint8_t pixel = 0; pixel < pixels; pixel++) {
+          for (uint8_t repeat = 0; repeat < pixel_width; repeat++) {
+            uint8_t sample = (uint8_t)(half * (GATE_ARRAY_SAMPLES_PER_CHARACTER / 2) +
+                                       pixel * pixel_width + repeat);
+            TEST_EQUAL(samples[sample], ink_of_pen(pens[pixel]));
+          }
+        }
+      }
+    }
+  }
+}
+
+/* RMR keeps two bits of the mode, so a wider value can only come from
+   outside the chip: a host writing the field, or a snapshot read into it.
+   The serialiser indexes four rows by it and must read no further, and every
+   value wider than the two bits answers as mode 3 did before there was a
+   table to index. */
+static void a_mode_wider_than_rmr_keeps_paints_as_mode_3(void) {
+  gate_array_init(&gate_array);
+  inks_differ_from_their_pens();
+  gate_array_write(&gate_array, 0x8F); /* RMR: mode 3 */
+  pulse_hsync();
+  uint8_t expected[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+  serialise(0x88, 0x30, expected);
+  const uint8_t wider[] = {4, 5, 6, 7, 0x80, 0xFF};
+  for (size_t index = 0; index < sizeof wider / sizeof wider[0]; index++) {
+    gate_array.mode = wider[index];
+    uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+    serialise(0x88, 0x30, samples);
+    for (int sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+      TEST_EQUAL(samples[sample], expected[sample]);
+    }
+  }
+}
+
 static void the_border_fills_a_character_that_is_not_displayed(void) {
   gate_array_init(&gate_array);
   gate_array_write(&gate_array, 0x10); /* PENR: the border */
   gate_array_write(&gate_array, 0x49); /* INKR: colour 9 */
   uint8_t samples[16];
-  gate_array_video(&gate_array, false, 0xFF, 0xFF, samples);
-  gate_array_video(&gate_array, false, 0xFF, 0xFF, samples);
+  draw_character(false, 0xFF, 0xFF, samples);
+  draw_character(false, 0xFF, 0xFF, samples);
   for (int sample = 0; sample < 16; sample++) {
     TEST_EQUAL(samples[sample], 9);
+  }
+}
+
+/* The display enable is read once for each of a character's two bytes, so
+   the border can take one and not the other — which is what two of the
+   CRTC's own rules do with it (ch. 17.6.2, 18.3.2). */
+static void the_border_can_take_one_byte_of_a_character(void) {
+  gate_array_init(&gate_array);
+  inks_name_their_pens();
+  gate_array_write(&gate_array, 0x8E); /* RMR: mode 2, a pixel a bit */
+  pulse_hsync();                       /* which a mode change waits for */
+  gate_array_write(&gate_array, 0x10); /* PENR: the border */
+  gate_array_write(&gate_array, 0x49); /* INKR: colour 9 */
+  uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+
+  /* Displayed first, border second: the bytes are all ones, so a displayed
+     byte reads as pen 1 and a bordered one as the border's own colour. */
+  gate_array_video(&gate_array, true, false, 0xFF, 0xFF, samples);
+  gate_array_video(&gate_array, true, false, 0xFF, 0xFF, samples);
+  for (int sample = 0; sample < 8; sample++) {
+    TEST_EQUAL(samples[sample], 1);
+  }
+  for (int sample = 8; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+    TEST_EQUAL(samples[sample], 9);
+  }
+
+  /* And the other way about. */
+  gate_array_video(&gate_array, false, true, 0xFF, 0xFF, samples);
+  gate_array_video(&gate_array, false, true, 0xFF, 0xFF, samples);
+  for (int sample = 0; sample < 8; sample++) {
+    TEST_EQUAL(samples[sample], 9);
+  }
+  for (int sample = 8; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+    TEST_EQUAL(samples[sample], 1);
   }
 }
 
@@ -210,13 +543,13 @@ static void the_beam_is_blanked_through_the_syncs(void) {
   gate_array_write(&gate_array, 0x49); /* a border that is not black */
   uint8_t samples[16];
   gate_array_tick(&gate_array, true, false); /* the CRTC's HSYNC begins */
-  gate_array_video(&gate_array, false, 0, 0, samples);
-  gate_array_video(&gate_array, false, 0, 0, samples);
+  draw_character(false, 0, 0, samples);
+  draw_character(false, 0, 0, samples);
   for (int sample = 0; sample < 16; sample++) {
     TEST_EQUAL(samples[sample], GATE_ARRAY_BLACK);
   }
   gate_array_tick(&gate_array, false, false); /* and ends */
-  gate_array_video(&gate_array, false, 0, 0, samples);
+  draw_character(false, 0, 0, samples);
   TEST_EQUAL(samples[0], 9);
 }
 
@@ -226,11 +559,11 @@ static void a_character_reaches_the_screen_a_microsecond_late(void) {
   gate_array_write(&gate_array, 0x8E); /* mode 2 */
   pulse_hsync();
   uint8_t samples[16];
-  gate_array_video(&gate_array, true, 0xFF, 0xFF, samples);
+  draw_character(true, 0xFF, 0xFF, samples);
   TEST_EQUAL(samples[0], 0); /* what was in the pipeline before */
-  gate_array_video(&gate_array, true, 0x00, 0x00, samples);
+  draw_character(true, 0x00, 0x00, samples);
   TEST_EQUAL(samples[0], 1); /* the &FF handed over last time */
-  gate_array_video(&gate_array, true, 0x00, 0x00, samples);
+  draw_character(true, 0x00, 0x00, samples);
   TEST_EQUAL(samples[0], 0);
 }
 
@@ -313,6 +646,10 @@ static void the_beam_is_blanked_for_twenty_six_lines(void) {
     run_standard_line(false);
     if (gate_array.black_vsync) {
       blanked++;
+      uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
+      draw_character(true, 0xFF, 0xFF, samples);
+      draw_character(true, 0xFF, 0xFF, samples);
+      TEST_EQUAL(samples[0], GATE_ARRAY_BLACK);
     }
   }
   TEST_EQUAL(blanked, 24); /* plus the line that began it and the one that
@@ -337,7 +674,7 @@ static void suppression_does_not_revoke_a_held_request(void) {
   gate_array_init(&gate_array);
   pulse_hsyncs(52); /* raised, nobody listening */
   pulse_hsyncs(20);
-  gate_array_tick(&gate_array, false, true);
+  character(false, true);
   pulse_hsyncs(2); /* the check suppresses a new request only */
   TEST_CHECK(gate_array.interrupt_request);
 }
@@ -346,16 +683,27 @@ int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(pen_selects_and_ink_paints);
   TEST_RUN(rmr_owns_roms_and_mode);
+  TEST_RUN(an_acknowledge_races_r52_past_31);
+  TEST_RUN(only_the_step_past_31_races);
+  TEST_RUN(an_hsync_ending_before_the_vsync_is_not_counted_after_it);
   TEST_RUN(r52_loops_at_52_and_holds_the_request);
   TEST_RUN(acknowledge_kills_bit_5);
   TEST_RUN(rmr_bit_4_clears_counter_and_request);
+  TEST_RUN(the_request_rises_a_character_after_the_hsync);
+  TEST_RUN(a_chip_acting_at_the_clock_raises_the_request_a_quarter_sooner);
+  TEST_RUN(rmr_bit_4_reaches_a_request_not_yet_risen);
+  TEST_RUN(the_vsync_checks_request_waits_the_same_character);
+  TEST_RUN(an_acknowledge_leaves_a_request_just_risen);
   TEST_RUN(vsync_check_interrupts_only_from_afar);
   TEST_RUN(suppression_does_not_revoke_a_held_request);
   TEST_RUN(mode_0_paints_two_fat_pixels_a_byte);
   TEST_RUN(mode_1_paints_four_pixels_a_byte);
   TEST_RUN(mode_2_paints_a_pixel_a_bit);
   TEST_RUN(mode_3_ignores_four_bits_a_byte);
+  TEST_RUN(every_byte_paints_what_the_structure_says);
+  TEST_RUN(a_mode_wider_than_rmr_keeps_paints_as_mode_3);
   TEST_RUN(the_border_fills_a_character_that_is_not_displayed);
+  TEST_RUN(the_border_can_take_one_byte_of_a_character);
   TEST_RUN(the_beam_is_blanked_through_the_syncs);
   TEST_RUN(a_character_reaches_the_screen_a_microsecond_late);
   TEST_RUN(csync_follows_the_hsync_two_characters_behind);

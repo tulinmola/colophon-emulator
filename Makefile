@@ -57,6 +57,9 @@ SPECTRUM_TIMING_TEST_C = test/spectrum_timing_test.c
 SPECTRUM_INTERRUPT_TEST_C = test/spectrum_interrupt_test.c
 SPECTRUM_SNAPSHOT_TEST_C = test/spectrum_snapshot_test.c
 SPECTRUM_FIRMWARE_TEST_C = test/spectrum_firmware_test.c
+SHAKER_TEST_C = test/shaker_test.c test/shaker_trace.c
+DEMO_TEST_C = test/demo_test.c
+BENCH_C = test/bench.c
 Z80_SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
 Z80_EXERCISER_C = test/z80_exerciser_test.c
 
@@ -73,10 +76,34 @@ EXERCISER_DATA = test/data/ZEXALL
 # Groups of the exerciser to run by default; 0 runs all 67, which takes a while.
 EXERCISER_GROUPS ?= 12
 
+# Which of Shaker's modules to walk, and which group of one. MODULE=E runs
+# that module alone; MODULE=E GROUP=6 runs one group of it and keeps the
+# beam path of every screen it draws, which is a megabyte apiece. A group
+# needs the module it belongs to. SHAKER_TRACE=prefix in the environment
+# writes what each group does as it does it; test/shaker_trace.h has the rest.
+MODULE ?=
+GROUP ?=
+
+# Frames of the demo the benchmark plays; empty takes its own default.
+BENCH_FRAMES ?=
+
+# Frames of the demo the software tier plays; empty takes the whole demo,
+# which is what the record holds.
+DEMO_FRAMES ?=
+
+# Which CRTC the machine is built with, which decides both what Shaker runs
+# and the record it is set against. Only type 0 behaves as itself here;
+# CRTC=N builds a machine a program names a type N and runs the groups that
+# belong to one. The chip answers to all five, and each has a record.
+CRTC ?= 0
+ifeq ($(filter $(CRTC),0 1 2 3 4),)
+$(error CRTC=$(CRTC) names no CRTC; the types are 0 to 4)
+endif
+
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test $(BUILD)/shaker_test $(BUILD)/demo_test $(BUILD)/bench
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
@@ -119,6 +146,18 @@ $(BUILD)/tape_test: $(TAPE_C) $(TAPE_TEST_C) $(HEADERS)
 $(BUILD)/tzx_test: $(TZX_C) $(TZX_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(TZX_C) $(TZX_TEST_C) -o $@
+
+$(BUILD)/bench: $(CPC_CORE_C) $(BENCH_C) $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Itest $(CPC_CORE_C) $(BENCH_C) -o $@
+
+$(BUILD)/demo_test: $(CPC_CORE_C) $(PNG_C) $(DEMO_TEST_C) $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Icli -Itest $(CPC_CORE_C) $(PNG_C) $(DEMO_TEST_C) -o $@
+
+$(BUILD)/shaker_test: $(CPC_CORE_C) $(PNG_C) $(SHAKER_TEST_C) $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Isrc -Icli -Itest $(CPC_CORE_C) $(PNG_C) $(SHAKER_TEST_C) -o $@
 
 $(BUILD)/ula_test: $(ULA_C) $(ULA_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
@@ -218,7 +257,7 @@ BUILT_C = $(ALL_CORES_C) $(PNG_C) $(CLI_C) \
           $(CPC_SNAPSHOT_TEST_C) $(CPC_TIMING_TEST_C) $(CPC_FIRMWARE_TEST_C) \
           $(SPECTRUM_TEST_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(SPECTRUM_TIMING_TEST_C) \
           $(SPECTRUM_INTERRUPT_TEST_C) \
-          $(SPECTRUM_FIRMWARE_TEST_C) \
+          $(SPECTRUM_FIRMWARE_TEST_C) $(SHAKER_TEST_C) $(DEMO_TEST_C) $(BENCH_C) \
           $(Z80_SINGLE_STEP_C) $(Z80_EXERCISER_C)
 
 sources-agree:
@@ -255,6 +294,36 @@ test-firmware: $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
 	@$(BUILD)/cpc_firmware_test roms test/data/discs
 	@$(BUILD)/spectrum_firmware_test roms
 
+# Shaker: Longshot's CRTC acid tests, walked module by module, and what they
+# said set against the copy on record in test/. Passing means nothing moved,
+# and not that the machine is right: most groups state their verdict in a
+# picture, and a group is graded only once its convention has been read off
+# its own output.
+test-shaker: $(BUILD)/shaker_test
+	@sh tools/fetch-roms.sh
+	@sh tools/fetch-discs.sh
+	@mkdir -p $(BUILD)/shaker/crtc$(CRTC)
+	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker/crtc$(CRTC) test/shaker-scoreboard-crtc$(CRTC).txt "$(MODULE)" "$(GROUP)" "$(CRTC)"
+
+# The software tier: a demo played from end to end, every frame kept at the
+# monitor's retrace and hashed. It grades nothing — it says whether anything
+# the machine draws has moved since a human last set those frames against a
+# capture of the demo on real hardware. DEMO_FRAMES shortens a run for a
+# quick look; the record is written from a whole one.
+test-demos: $(BUILD)/demo_test
+	@sh tools/fetch-roms.sh
+	@sh tools/fetch-discs.sh
+	@mkdir -p $(BUILD)/demos/crtc$(CRTC)
+	@$(BUILD)/demo_test roms test/data/discs $(BUILD)/demos/crtc$(CRTC) test/demo-batman-forever-crtc$(CRTC).txt "$(CRTC)" "$(DEMO_FRAMES)"
+
+# How fast the machine runs, on the demo the tier above plays. It asserts
+# nothing: a speed is worth the machine it was measured on, and what it is
+# for is the before and after of one change. BENCH_FRAMES shortens it.
+bench: $(BUILD)/bench
+	@sh tools/fetch-roms.sh
+	@sh tools/fetch-discs.sh
+	@$(BUILD)/bench roms test/data/discs "$(BENCH_FRAMES)"
+
 # The conformance tier: the complete SingleStepTests corpus, fetched on first
 # use. Run it before committing anything that touches the CPU.
 test-single-step: $(BUILD)/z80_single_step_test
@@ -268,7 +337,20 @@ test-exerciser: $(BUILD)/z80_exerciser_test
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexdoc.com $(EXERCISER_GROUPS)
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexall.com $(EXERCISER_GROUPS)
 
-test-all: test test-sanitized test-firmware test-single-step test-exerciser
+# Every CRTC the reader keeps a record for, whatever the command line asked
+# for — type 0 by the prerequisite below, the rest by the loop: the point of
+# the tier is every record, and a type named here would silently grade one of
+# them twice. And the whole demo, for the same reason: a
+# tier that compares a part of a run against a record of a whole one compares
+# nothing at all. Only two types have a demo record, so only those two are
+# played.
+test-all: override CRTC := 0
+test-all: override DEMO_FRAMES :=
+test-all: test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser
+	@for type in 1 2 3 4; do \
+		$(MAKE) --no-print-directory test-shaker CRTC=$$type || exit 1; \
+	done
+	@$(MAKE) --no-print-directory test-demos CRTC=1
 
 format:
 	$(CLANG_FORMAT) -i $(SOURCES) $(HEADERS)
@@ -282,4 +364,4 @@ lint:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all roms discs sources-agree test test-sanitized test-firmware test-single-step test-exerciser test-all format format-check lint clean
+.PHONY: all roms discs sources-agree bench test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser test-all format format-check lint clean

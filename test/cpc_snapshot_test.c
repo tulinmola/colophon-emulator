@@ -22,7 +22,7 @@ static cpc_t cpc;
 static cpc_t restored;
 
 static void power_on(cpc_t *machine, uint8_t *memory, uint32_t size) {
-  cpc_init(machine, memory, size, lower_rom);
+  cpc_init(machine, memory, size, lower_rom, 0);
   cpc_set_upper_rom(machine, 0, upper_rom);
 }
 
@@ -72,7 +72,10 @@ static void a_snapshot_is_refused_unless_it_is_one(void) {
   TEST_CHECK(!cpc_snapshot_load(&cpc, rubbish, sizeof rubbish, &problem));
   TEST_CHECK(problem != NULL);
 
-  memcpy(bytes, "MV - SNA", 8);
+  /* A snapshot's signature is a fixed-width field rather than a string: the
+     bytes go in without the terminator the literal carries. */
+  static const char signature[] = "MV - SNA";
+  memcpy(bytes, signature, sizeof signature - 1);
   memset(bytes + 8, 0, CPC_SNAPSHOT_HEADER_SIZE - 8);
   bytes[0x10] = 1;
   TEST_CHECK(!cpc_snapshot_load(&cpc, bytes, CPC_SNAPSHOT_HEADER_SIZE, &problem));
@@ -216,6 +219,36 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
   TEST_EQUAL(restored.crtc.address_register, 9);
 }
 
+/* Nor is a restore a write a program made on a character: the chip must not
+   read it as one, where an R3 would let a sync through on the first tick
+   back and an R4 or R9 make a type 2's last line of the line it stands on —
+   here one whose C4 and C9 the restored R4 and R9 meet — and an R4 written
+   during a type 2's line head compares with the R9 restored. Nor may a type
+   2's load of R12/R13 on the character just drawn take the restored ones as
+   a late write. */
+static void a_restore_is_no_write_on_a_character(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x43 + 9] = 5;     /* R9 */
+  bytes[0x43 + 12] = 0x30; /* R12 */
+
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 2);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.offset_taken_where_c0_met_r1 = true;
+  restored.crtc.vma_ = 0x0123;
+  restored.crtc.c0 = 10;
+  restored.crtc.c4 = bytes[0x43 + 4];
+  restored.crtc.c9 = 5;
+  restored.crtc.last_line_management = true;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.vma_, 0x0123);
+  TEST_CHECK(!restored.crtc.r3_written_for_this_character);
+  TEST_CHECK(!restored.crtc.last_line);
+  TEST_EQUAL(restored.crtc.r9_at_the_line_head, 5);
+}
+
 /* A snapshot restores the memory map, not just the registers behind it. */
 static void the_memory_map_comes_back_with_it(void) {
   load_a_running_program();
@@ -263,6 +296,7 @@ int main(void) {
   TEST_RUN(a_half_done_instruction_cannot_be_saved);
   TEST_RUN(machines_restored_from_one_snapshot_agree);
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
+  TEST_RUN(a_restore_is_no_write_on_a_character);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
   return TEST_REPORT("cpc snapshot");

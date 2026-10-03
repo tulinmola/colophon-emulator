@@ -8,7 +8,7 @@ The core is a machine, not an application. It has no `main`, it never asks the o
 
 Two rules produce all of that, and they are worth stating before anything else.
 
-**The core allocates nothing.** Every buffer it uses is handed to it: the RAM, the ROM images, the framebuffer, the disc images, the tape. It holds them by pointer and never copies them, so they must outlive the machine and must not move. The tape adds a function to that list — the deck asks the host for the next pulse rather than reading an image itself — and the reader behind it, and its bytes, are the host's to keep alive for as long as the machine runs.
+**The core allocates nothing.** Every buffer it uses is handed to it: the RAM, the ROM images, the framebuffer, the disc images, the tape, and — for a host driving the display chip directly — two chips' worth of room for it to keep the last two line ends in, without which no type can take back an end a write arrives in time to cancel. A machine assembled here holds those rooms inside itself and points the chip at them on every step, because a host that copies a whole machine must not leave the copy reaching into the one it came from. It holds them by pointer and never copies them, so they must outlive the machine and must not move. The tape adds a function to that list — the deck asks the host for the next pulse rather than reading an image itself — and the reader behind it, and its bytes, are the host's to keep alive for as long as the machine runs.
 
 **The core does no I/O.** Nothing in `src/` opens a file or writes to a stream. That is what lets the same C run behind a command line and inside a browser without either host inheriting the other's assumptions.
 
@@ -20,7 +20,7 @@ uint64_t pins = cpc_tick(&cpc);
 
 One call advances the machine by one T-state. The processor runs every time; the chips run on the character clock, which is every fourth. The return value is the bus after the machine has answered.
 
-The processor is not a controller. `z80_tick` takes the current pins and returns the new ones, and the wiring around it decides what those pins mean — which is why the same CPU file has nothing about the CPC in it, and why the machine's 4T alignment is produced by the Gate Array holding a wait line rather than by the processor knowing anything about a CPC.
+The processor is not a controller. `z80_tick` takes the current pins and returns the new ones, and the wiring around it decides what those pins mean — which is why the same CPU file names the CPC only in comments justifying a choice, and why the machine's 4T alignment is produced by the Gate Array holding a wait line rather than by the processor knowing anything about a CPC.
 
 A machine stopped mid-instruction has a program counter that belongs to no instruction anyone can name, so anything that wants an instruction boundary asks for one:
 
@@ -52,11 +52,13 @@ Each machine is built by its own name, and what it asks for is what its board as
 
 ```c
 cpc_t cpc;
-cpc_init(&cpc, ram, ram_size, lower_rom);
+cpc_init(&cpc, ram, ram_size, lower_rom, 0);
 cpc_set_upper_rom(&cpc, 0, basic_rom);
 cpc_connect_monitor(&cpc, framebuffer);
 cpc_set_links(&cpc, true, CPC_MANUFACTURER_AMSTRAD);
 ```
+
+A CPC's last argument is which of the five CRTCs the machine is built with. Only type 0 behaves as itself. What a program can read of the chip follows the number given, and so does each of the other exceptions the video section of [the machine page](machine.en.md) sets out; in everything else the chip is a type 0 whatever it is built as.
 
 A Spectrum wants one ROM and has no links at all:
 
@@ -88,7 +90,7 @@ A host that sets the registers behind the memory map from outside — restoring 
 
 ## What is a chip and what is a machine
 
-A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `crtc.c`, `ppi.c`, `psg.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word. Nor does a chip hold a machine's data. The key matrix is a grid of switches and nothing more — how many lines a machine wires to it, which key sits where, and what is printed on the keycap all live with the machine whose keyboard it is, and the chip declares only how much room to reserve for them. A comment may name a machine to justify a decision, and two in `z80.c` do — why the processor implements the NMOS parity bug, and why it leaves the general case of interrupt mode 0 alone — but that is the comment explaining a choice, not the code making one.
+A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `ppi.c`, `psg.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word, and `crtc.c` has it only inside a quotation from its source. Nor does a chip hold a machine's data. The key matrix is a grid of switches and nothing more — how many lines a machine wires to it, which key sits where, and what is printed on the keycap all live with the machine whose keyboard it is, and the chip declares only how much room to reserve for them. A comment may name a machine to justify a decision, and three in `z80.c` do — why the processor implements the NMOS parity bug, why it leaves the general case of interrupt mode 0 alone, and why its acknowledge samples WAIT where it does — but that is the comment explaining a choice, not the code making one.
 
 Each machine's wiring gets a file of its own, and that file is the only one that knows what its chips are soldered into: its memory map, its I/O decode, and whatever else its board did — a CPC's file also holds the video address wiring, the motor line running from a port of its own to the drives, and the clock that divides between the chips, none of which a Spectrum has. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it. Nor is the disc: the controller is the µPD765 the Spectrum +3 also used, the drive answers the Shugart lines any such controller reads, and the medium is the shape any of them finds, so all three would go into a second machine as they are.
 

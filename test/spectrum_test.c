@@ -214,7 +214,8 @@ static void an_odd_port_reaches_nothing_and_floats(void) {
    first interrupt of all is where that can be pinned against arithmetic:
    IM 1 takes eight T-states, EI four and HALT four, so the processor
    reaches an instruction boundary at sixteen. Acceptance begins there and
-   the acknowledge cycle puts IORQ on the bus on its second T-state.
+   the acknowledge cycle puts IORQ on the bus in the first of its two wait
+   states, its third T-state (Zilog UM0080, Figure 9).
 
    Later frames cannot be pinned this way — the handler's own length is not
    a multiple of the halted processor's four-T-state cycle, so acceptance
@@ -238,7 +239,7 @@ static void the_first_interrupt_is_accepted_sixteen_tstates_in(void) {
       break;
     }
   }
-  TEST_EQUAL(acknowledged_at, 17);
+  TEST_EQUAL(acknowledged_at, 18);
 }
 
 static void the_border_reaches_the_framebuffer(void) {

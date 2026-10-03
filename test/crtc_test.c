@@ -4,7 +4,9 @@
  * The registers carry the values the CPC firmware programs — the numbers
  * the Compendium builds its standard frame from (ch. 6.1.5) — and the
  * outputs are recorded for two whole frames: 312 scanlines of 64 characters,
- * 19968 characters each frame, sync for sync.
+ * 19968 characters each frame, sync for sync. A type 2 is given an R2
+ * wherever it is to end a frame, because left at 0 its sync begins on every
+ * line's head and it ends none (ch. 12.4.1, 15.6).
  */
 #include <string.h>
 
@@ -17,6 +19,23 @@ static crtc_t crtc;
 #define FRAME_TICKS 19968
 #define SCANLINE 64
 
+/* Tick until the counters stand where a test wants them, and fail rather than
+   spin if they never do. A change that stops a frame ever ending would
+   otherwise hang the suite instead of failing it, which reads as a slow test
+   and costs a measurement: an unbounded wait cannot tell a wrong answer from
+   no answer. Four frames is past any arrangement here. */
+#define TICK_UNTIL(standing)                                                                       \
+  do {                                                                                             \
+    long waited = 0;                                                                               \
+    while (!(standing)) {                                                                          \
+      crtc_tick(&crtc);                                                                            \
+      if (++waited > 4L * FRAME_TICKS) {                                                           \
+        TEST_FAIL("the chip never stood at %s", #standing);                                        \
+        break;                                                                                     \
+      }                                                                                            \
+    }                                                                                              \
+  } while (0)
+
 static void write_register(int reg, uint8_t value) {
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, (uint8_t)reg));
   crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, value));
@@ -24,7 +43,7 @@ static void write_register(int reg, uint8_t value) {
 
 static void program_standard(void) {
   static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   for (int reg = 0; reg < 14; reg++) {
     write_register(reg, values[reg]);
   }
@@ -49,12 +68,13 @@ static void run_characters(int count) {
   }
 }
 
-/* Whole scanlines from wherever C0 stands, which is a line start in every
-   test that has not moved R0. */
+/* Whole scanlines from wherever C0 stands. C0 names the character just
+   drawn, so a run leaves the alignment it found. */
 static void run_scanlines(int count) { run_characters(count * SCANLINE); }
 
-/* Stop on the first character of the row named, however long the chip takes
-   to get there; 4000 scanlines is a dozen frames and a failed loop. */
+/* Stop having drawn the first character of the row named, however long the
+   chip takes to get there; 4000 scanlines is a dozen frames and a failed
+   loop. */
 static bool run_to_row(uint8_t row) {
   for (int character = 0; character < 4000 * SCANLINE; character++) {
     if (crtc.c4 == row && crtc.c9 == 0 && crtc.c0 == 0) {
@@ -67,6 +87,13 @@ static bool run_to_row(uint8_t row) {
 
 /* Scanlines from one frame start to the next. */
 static long frame_scanlines(void) {
+  /* The counters name the character just drawn, and at power-on they name
+     none — which is why the frame's first character cannot be told from the
+     state before it by C0, C4 and C9 alone. Runs to that character, then
+     counts the ticks back round to it. */
+  while (!crtc.has_drawn_a_character || crtc.c0 != 0 || crtc.c4 != 0 || crtc.c9 != 0) {
+    crtc_tick(&crtc);
+  }
   long ticks = 0;
   do {
     crtc_tick(&crtc);
@@ -75,8 +102,114 @@ static long frame_scanlines(void) {
   return ticks / SCANLINE;
 }
 
+/* What the next VSYNC to rise looked like: the character C0 named when it
+   rose, the row it fell in and the raster address that row had reached,
+   whether the chip called the frame odd, and how many characters it stayed
+   up counting the one it rose on. */
+typedef struct {
+  uint8_t character;
+  uint8_t row;
+  uint8_t raster;
+  bool odd_frame;
+  long characters;
+} vsync_seen;
+
+/* Gives up after four frames. */
+static bool next_vsync(vsync_seen *seen) {
+  for (long tick = 0; tick < 4L * FRAME_TICKS; tick++) {
+    bool standing = crtc.vsync;
+    uint64_t pins = crtc_tick(&crtc);
+    if (standing || (pins & CRTC_VSYNC) == 0) {
+      continue;
+    }
+    seen->character = crtc.c0;
+    seen->row = crtc.c4;
+    seen->raster = crtc_ra(pins);
+    seen->odd_frame = crtc.parity_frame;
+    seen->characters = 1;
+    while (crtc.vsync && seen->characters < 18L * SCANLINE) {
+      crtc_tick(&crtc);
+      if (crtc.vsync) {
+        seen->characters++;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+/* A scanline as the Compendium's counting tables print one: the row, the
+   counter, and the raster address the chip put on RA (ch. 19.8.1). */
+typedef struct {
+  uint8_t c4;
+  uint8_t c9;
+  uint8_t raster;
+} recorded_line;
+
+/* An R8 UPDATE where those tables mark one: a value written inside the line
+   at the given index. */
+typedef struct {
+  int line;
+  uint8_t value;
+} r8_update;
+
+#define MAX_RECORDED_LINES 24
+
+/* Records the head of each of the next scanlines, entering on the character
+   C0 names 0 and leaving on the one after the last line recorded. The
+   raster address is read a character into the line, where it is the same as
+   at its head: C9 moves only where a line ends. */
+static void record_lines(recorded_line *lines, int count, const r8_update *updates,
+                         int update_count) {
+  for (int index = 0; index < count; index++) {
+    lines[index].c4 = crtc.c4;
+    lines[index].c9 = crtc.c9;
+    lines[index].raster = crtc_ra(crtc_tick(&crtc));
+    for (int update = 0; update < update_count; update++) {
+      if (updates[update].line == index) {
+        write_register(8, updates[update].value);
+      }
+    }
+    run_characters(SCANLINE - 1);
+  }
+}
+
+/* Against a table transcribed from the Compendium: C4, C9, C9-VMA a row.
+   Reports the first line that parts company and stops, because after one
+   the rest say the same thing again. */
+static void check_lines(const char *table, const recorded_line *got, const uint8_t (*want)[3],
+                        int count) {
+  for (int index = 0; index < count; index++) {
+    if (got[index].c4 == want[index][0] && got[index].c9 == want[index][1] &&
+        got[index].raster == want[index][2]) {
+      continue;
+    }
+    TEST_FAIL("%s, line %d: C4=%u C9=%u C9-VMA=%u, where the table says %u, %u, %u", table, index,
+              got[index].c4, got[index].c9, got[index].raster, want[index][0], want[index][1],
+              want[index][2]);
+    return;
+  }
+}
+
+/* Stands on the first character of a frame of the parity asked for, with the
+   standard values but for R9. Callers name the parity through the two
+   wrappers below rather than by a bare true or false. */
+static void stand_on_a_frame(bool odd_frame, uint8_t r9) {
+  program_standard();
+  write_register(9, r9);
+  frame_scanlines();
+  if (crtc.parity_frame != odd_frame) {
+    frame_scanlines();
+  }
+  TEST_CHECK(crtc.parity_frame == odd_frame);
+  TEST_CHECK(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+}
+
+static void stand_on_an_even_frame(uint8_t r9) { stand_on_a_frame(false, r9); }
+static void stand_on_an_odd_frame(uint8_t r9) { stand_on_a_frame(true, r9); }
+
 static void reset_state(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   TEST_EQUAL(crtc.c0, 0);
   TEST_EQUAL(crtc.c9, 0);
   TEST_EQUAL(crtc.c4, 0);
@@ -86,13 +219,13 @@ static void reset_state(void) {
 }
 
 static void select_wears_five_bits(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0xEC));
   TEST_EQUAL(crtc.address_register, 0x0C);
 }
 
 static void writes_wear_the_documented_widths(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   write_register(4, 0xFF);
   TEST_EQUAL(crtc.registers[4], 0x7F);
   write_register(12, 0xFF);
@@ -104,20 +237,4525 @@ static void writes_wear_the_documented_widths(void) {
   write_register(20, 0x55); /* no such register */
 }
 
-static void type0_reads_r12_to_r17_and_nothing_else(void) {
-  program_standard();
-  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 12));
-  TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x30);
-  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 4));
-  TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
-  /* A status read: type 0 has no status register, the bus stays floating —
-     whatever the machine drove passes through. */
-  uint64_t floating = crtc_set_data(0, 0x77) | CRTC_CS | CRTC_RW;
-  TEST_EQUAL(crtc_data(crtc_access(&crtc, floating)), 0x77);
+/* Ch. 21.2.2: types 1 and 2 read the cursor and the light pen and nothing
+   besides — "an attempt to read another register (0 to 255) returns the
+   value 0" — where type 0 reads the display start as well (ch. 21.2.1).
+   Reading R12 is therefore what parts a type 0 from the rest, and register
+   31 what parts a type 1 from a type 2: on a type 1 it "returns a non-zero
+   value (I got 127 or 255)", a register UMC defined and this model never
+   used. Both are how a program names the chip in front of it (ch. 28.1.9). */
+static void each_type_answers_the_read_port_its_own_way(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t at_r12; /* the display start, which only a type 0 gives back */
+    uint8_t at_r31; /* and the register that parts a type 1 from a type 2 */
+  } cases[] = {{0, 0x30, 0x00}, {1, 0x00, 0xFF}, {2, 0x00, 0x00}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0x18};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    write_register(14, 0x2A);
+    write_register(15, 0x55);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 12));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), cases[index].at_r12);
+    /* Each half of a pointer is its own register, so a type that answers
+       one answers the other. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 13));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)),
+               cases[index].at_r12 == 0 ? 0x00 : 0x18);
+    /* The cursor registers read back on every type; no board here wires the
+       pin that would fill the light pen's pair, so those stay empty. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 14));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x2A);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 15));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x55);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 16));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 17));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 4));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 31));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), cases[index].at_r31);
+    /* Only the low five bits of a number are read, so 108 names R12 and 124
+       names R31 (ch. 21.2.1). */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 108));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), cases[index].at_r12);
+  }
+}
+
+/* An R5 written under a frame's padding ends that padding at once on the two
+   ASICs. "If R5 is modified with a value below C9+1, then the line is
+   considered the last and additional management ends", and "whether with R5 or
+   R9, it is impossible to overflow C9" (ch. 11.3.3) — the same comparison
+   their row's own limit takes.
+
+   The other three answer it three ways and none of them is this one. Types 0
+   and 2 test for equality, so an R5 under the count is never met and the
+   counter spends its whole five-bit round getting back to it. A type 1 does
+   not come back at all on an R5 of nothing: it latches a state the register
+   cannot clear and holds the frame open while C4 walks its seven bits round
+   (ch. 11.3.2), which is the longest answer in the table below by a factor of
+   fifteen. An R5 raised rather than dropped is the same on every type, the
+   count meeting the new value where it always would.
+
+   Shaker's C (E) grades three of these: an R5 that lands on the count ends the
+   run wherever it is read, and the two that land under it were what parted
+   this chip from silicon. */
+static void an_r5_under_the_count_ends_the_padding_on_the_asics(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r5;        /* the padding asked for */
+    uint8_t rewritten; /* what R5 is rewritten to, on that line */
+    unsigned on_line;  /* which line of the padding carries the write */
+    long microseconds; /* and how long from it to the frame after */
+  } cases[] = {
+      /* Landing on the count ends the run where it is read, on every type. */
+      {0, 2, 1, 0, 64},
+      {1, 2, 1, 0, 64},
+      {2, 2, 1, 0, 64},
+      {3, 2, 1, 0, 64},
+      {4, 2, 1, 0, 64},
+      /* Landing under it ends the run on the two ASICs and on no other. */
+      {3, 1, 0, 0, 64},
+      {4, 1, 0, 0, 64},
+      {3, 3, 1, 1, 64},
+      {4, 3, 1, 1, 64},
+      /* Where types 0 and 2 walk the five bits round to meet it again. */
+      {0, 1, 0, 0, 2048},
+      {2, 1, 0, 0, 2048},
+      /* And a type 1 holds the frame open until C4 has walked seven. */
+      {1, 1, 0, 0, 29952},
+      /* Raised rather than dropped, the count meets it as it always would. */
+      {0, 2, 4, 0, 256},
+      {3, 2, 4, 0, 256},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 10);
+    write_register(5, cases[index].r5);
+    write_register(6, 25);
+    write_register(9, 3);
+    for (long tick = 0; tick < 200L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TICK_UNTIL(crtc.vertical_adjustment_in_progress);
+    TICK_UNTIL(crtc.c0 == 0);
+    for (unsigned line = 0; line < cases[index].on_line; line++) {
+      TICK_UNTIL(crtc.c0 == 63);
+      TICK_UNTIL(crtc.c0 == 0);
+    }
+    write_register(5, cases[index].rewritten);
+    long microseconds = 0;
+    for (long tick = 0; tick < 4L * FRAME_TICKS; tick++) {
+      crtc_tick(&crtc);
+      microseconds++;
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+    TEST_EQUAL(microseconds, cases[index].microseconds);
+  }
+}
+
+/* The two ASICs raise a frame sync only at a frame's own corner. "VSYNC starts
+   when C4=R7 and C9=C0=0", and "if R7 is modified with the value of C4 while
+   C0>0 and/or C9>0, it will not trigger CRTC VSYNC" (ch. 16.4.4) — which ch.
+   19.7.1 gives as the exception to every other type: "VSYNC occurs when C4 is
+   equal to R7 on any position of C0 (except on CRTC's 3 and 4, which dictate
+   that C4=C9=C0=0)". So an equality a program makes by hand in the middle of a
+   row is spent on those two, and the sync it asked for waits for the corner of
+   the frame after.
+
+   Nothing on any record grades it: the group that detects a row counter's
+   overflow does so by watching this very pin, and neither this rule nor the
+   reentrancy its chapter denies these chips moves one of its lines. What
+   stands behind it is those two sentences. */
+static void the_two_asics_raise_a_sync_only_at_a_frames_corner(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t c9;         /* the line the equality is made on */
+    bool at_the_corner; /* or on the character it was made */
+  } cases[] = {
+      /* In the middle of a row, which only the line of the corner refuses. */
+      {0, 3, false},
+      {1, 3, false},
+      {2, 3, false},
+      {3, 3, true},
+      {4, 3, true},
+      /* And on a row's own first line, where only the character refuses it. */
+      {0, 0, false},
+      {1, 0, false},
+      {2, 0, false},
+      {3, 0, true},
+      {4, 0, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    /* Away from the corner: the middle of a line, on the row's chosen one. */
+    TICK_UNTIL(crtc.c0 == 20 && crtc.c9 == cases[index].c9 && crtc.c4 == 10);
+    bool was = crtc.vsync;
+    write_register(7, crtc.c4);
+    long waited = 0;
+    bool rose_at_a_corner = false;
+    for (long tick = 0; tick < 2L * FRAME_TICKS; tick++) {
+      crtc_tick(&crtc);
+      waited++;
+      if (crtc.vsync && !was) {
+        rose_at_a_corner = crtc.c0 == 0 && crtc.c9 == 0;
+        break;
+      }
+      was = crtc.vsync;
+    }
+    TEST_EQUAL(rose_at_a_corner, cases[index].at_the_corner);
+    /* Three types take it on the character the write landed on; the two that
+       wait for a corner cannot do so inside the line, or the row. */
+    TEST_CHECK(cases[index].at_the_corner ? waited > SCANLINE : waited <= 2);
+  }
+}
+
+/* The two ASICs decide a frame's end where the line ends, from R4 and R9 as
+   they then stand. "The modification of register 4 is considered immediately
+   at the end of the line": "if R4 is updated with a value less than C4, then
+   there is overflow of the C4 counter", and "if R4 is updated with the value
+   of C4 ... if we were on the last line (C9=R9), then C9 goes to 0, C4=0"
+   (ch. 12.5). R9 goes the same way, ch. 10.3.4.1's table giving the next
+   line 0 in both C9 and C4 for an R9 of 0 written on any line of a frame's
+   last row.
+   A type 0 decides while C0 is 0 or 1 and holds it: "if R4 and/or R9 are
+   modified mid-line when C0 > 1 while the last line state is true ... this
+   does not change C4 and C9, which will remain at 0" (ch. 12.2), and the same
+   table gives it "C9=C9+1 (4), unmodified" for the R9 case. The writes land
+   at C0=40, past a type 0's decision and inside the line, but for one at C0=1:
+   a type 0 spends a last line unmade there on an adjustment, which is its own
+   chapters' exception (ch. 10.3.1.2, 12.2), and an ASIC takes the overflow
+   ch. 12.5 gives it.
+
+   Shaker's E (4) grades the first case twelve times on each ASIC record, and
+   the program behind it was read to learn what it grades: the VSYNC an R7 of
+   2 asks for, on the line after the write, which only a C4 gone on to 2 can
+   raise. */
+static void the_two_asics_take_the_frames_end_where_the_line_ends(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t character;        /* C0 the write is made on */
+    uint8_t r4;               /* R4 as the row finds it */
+    uint8_t row;              /* C4 where the write is made */
+    uint8_t line;             /* and C9 */
+    uint8_t register_written; /* R4 or R9 */
+    uint8_t value;            /* and what with */
+    uint8_t next_c4;          /* where the line after stands */
+    uint8_t next_c9;
+    bool row_ends_the_frame; /* and, where given, where the row's end goes */
+  } cases[] = {
+      /* R4 under C4 on the frame's last line: overflow, or the frame held. */
+      {3, 40, 1, 1, 7, 4, 0, 2, 0, false},
+      {4, 40, 1, 1, 7, 4, 0, 2, 0, false},
+      {0, 40, 1, 1, 7, 4, 0, 0, 0, false},
+      /* The same write at C0=1, which a type 0 would spend on an adjustment. */
+      {3, 1, 1, 1, 7, 4, 0, 2, 0, false},
+      /* R4 given C4's value on a row's last line: the frame ends there. */
+      {3, 40, 10, 5, 7, 4, 5, 0, 0, false},
+      {4, 40, 10, 5, 7, 4, 5, 0, 0, false},
+      {0, 40, 10, 5, 7, 4, 5, 6, 0, false},
+      /* And on a line before it: "C9=C9+1, C4 will go to 0 when C9 will
+         return to 0". */
+      {3, 40, 10, 5, 3, 4, 5, 5, 4, true},
+      /* R9 of 0 on line 3 of the frame's last row, ch. 10.3.4.1's case 4. */
+      {3, 40, 5, 5, 3, 9, 0, 0, 0, false},
+      {4, 40, 5, 5, 3, 9, 0, 0, 0, false},
+      {0, 40, 5, 5, 3, 9, 0, 5, 4, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, cases[index].r4);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == cases[index].row &&
+               crtc.c9 == cases[index].line);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, cases[index].next_c9);
+    if (cases[index].row_ends_the_frame) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c9 == 0 && crtc.c4 != cases[index].row);
+      TEST_EQUAL(crtc.c4, 0);
+    }
+  }
+}
+
+/* And the padding after it: an R5 asked for late in a frame's last line is
+   taken on a type 2 and the two ASICs, and not on a type 0. "R5 management is
+   considered on each C0 position" on types 1 to 4 (ch. 11.4.1), where of a
+   type 0 "the R5>0 update after position C0>2 on the last line of the frame
+   is not considered because its evaluation is completed" (ch. 11.4.2). Three
+   lines asked for at C0=40: a type 2 and the ASICs pad the frame by three, a
+   type 0 begins the next, and so does a type 1, left a type 0's deadline
+   (crtc.c). A type 2 asks its last line, not the row's own comparison: with
+   R9 moved off C9 at C0=25, after the "Last Line" state was settled — which
+   "can no longer be modified during the current line" (ch. 12.4.1) — an R5 of
+   1 at C0=38 still pads it by one, as Shaker's C (P) has silicon do. */
+static void a_type_2_and_the_two_asics_take_r5_on_any_character_of_a_last_line(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r9_moved_to; /* at C0=25, or 7 to leave it */
+    uint8_t r5;          /* at C0=40, or at C0=38 where R9 moves */
+    unsigned lines_before_the_next_frame;
+  } cases[] = {{0, 7, 3, 0}, {1, 7, 3, 0}, {2, 7, 3, 3}, {3, 7, 3, 3}, {4, 7, 3, 3}, {2, 6, 1, 1}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 10);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    bool r9_moves = cases[index].r9_moved_to != 7;
+    if (r9_moves) {
+      TICK_UNTIL(crtc.c0 == 25 && crtc.c4 == 10 && crtc.c9 == 7);
+      write_register(9, cases[index].r9_moved_to);
+      TICK_UNTIL(crtc.c0 == 38);
+    } else {
+      TICK_UNTIL(crtc.c0 == 40 && crtc.c4 == 10 && crtc.c9 == 7);
+    }
+    write_register(5, cases[index].r5);
+    unsigned lines = 0;
+    TICK_UNTIL(crtc.c0 == 0);
+    while (!(crtc.c4 == 0 && crtc.c9 == 0) && lines < 40) {
+      lines++;
+      TICK_UNTIL(crtc.c0 == 1);
+      TICK_UNTIL(crtc.c0 == 0);
+    }
+    TEST_EQUAL(lines, cases[index].lines_before_the_next_frame);
+  }
+
+  /* And only the line that is last: a last line unmade at C0=0 — "if C4<>R4
+     or C9<>R9 during this C0==0 evaluation, then the 'Last Line' state is
+     false" (ch. 12.4.1), R4 written to land there — is not padded on a type 2,
+     R5's lines following a last line. With R5 at 1 the frame runs on through
+     the next row, eight lines, and is padded after that. */
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(4, 10);
+  write_register(5, 1);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 7);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 63 && crtc.c4 == 10 && crtc.c9 == 6);
+  write_register(4, 11);
+  unsigned lines = 0;
+  TICK_UNTIL(crtc.c0 == 1);
+  TICK_UNTIL(crtc.c0 == 0);
+  while (!(crtc.c4 == 0 && crtc.c9 == 0) && lines < 40) {
+    lines++;
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+  }
+  TEST_EQUAL(lines, 9);
+}
+
+/* A type 2 well into a run of frames of R4+1 rows of R9+1 lines, its HSYNC
+   six characters long from the R2 given — on C0=46 to 51 where that is 46, the
+   sync Shaker's E (7) gives it. */
+static void run_a_type_2(uint8_t r2, uint8_t r4, uint8_t r9) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, r2);
+  write_register(3, 6);
+  write_register(4, r4);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, r9);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+}
+
+/* "The 'Last Line' state is evaluated in two circumstances: at the beginning of
+   the line, on position C0==0; during an update of R4 and/or R9, if the 'Last
+   Line Management' state is active", and that state is "normally active, except
+   when C4==0 and C9==0 ... In other words, if one is not on a first line, a
+   modification of R4 and/or R9 outside HSYNC can allow satisfying the condition
+   C4==R4 and C9==R9" (ch. 12.4.1); "an update of R4 or R9 is ignored if it
+   occurs during a HSYNC to set the 'Last Line' state to true" (ch. 15.6). A
+   first line has its management back from the last character of its sync where
+   that finds the comparison false. Each write is judged on the character it is
+   made on (crtc.c), and the sync runs from C0=46 to 51. */
+static void a_type_2_makes_a_last_line_where_r4_or_r9_is_written(void) {
+  static const struct {
+    uint8_t r4; /* as the frame runs */
+    uint8_t r9;
+    uint8_t row;              /* C4 where the write is made */
+    uint8_t line;             /* and C9 */
+    uint8_t character;        /* C0 it is made on */
+    uint8_t register_written; /* R4 or R9 */
+    uint8_t value;            /* and what with */
+    uint8_t next_c4;          /* where the line after stands */
+    uint8_t next_c9;
+  } cases[] = {
+      /* Before the sync, on the character before its first, after it and on
+         the line's last character, a row's last line is made the frame's. */
+      {38, 7, 1, 7, 20, 4, 1, 0, 0},
+      {38, 7, 1, 7, 45, 4, 1, 0, 0},
+      {38, 7, 1, 7, 52, 4, 1, 0, 0},
+      {38, 7, 1, 7, 63, 4, 1, 0, 0},
+      {1, 7, 1, 3, 20, 9, 3, 0, 0},
+      /* On the sync's first character and its last, it is not. */
+      {38, 7, 1, 7, 46, 4, 1, 2, 0},
+      {38, 7, 1, 7, 51, 4, 1, 2, 0},
+      /* A frame's first line is not made last before its sync and is after
+         it, the sync's last character having found C9 off R9; the row's
+         other lines are not first lines, and nor is the line after a refused
+         one, though no sync's last character has found it a mismatch. */
+      {0, 7, 0, 0, 20, 9, 0, 1, 0},
+      {0, 7, 0, 0, 55, 9, 0, 0, 0},
+      {0, 7, 0, 3, 20, 9, 3, 0, 0},
+      {0, 0, 1, 0, 20, 4, 1, 0, 0},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, cases[index].r4, cases[index].r9);
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == cases[index].row &&
+               crtc.c9 == cases[index].line);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, cases[index].next_c9);
+  }
+}
+
+/* Where in a line a write of R4 or R9 is read, from two photographs of Shaker
+   2.6 on a real type 2 (https://shaker.logonsystem.eu/tests, C7 and AU). C (7)
+   runs a frame of 39 rows of eight with its HSYNC from C0=46 to 59 and, on the
+   line C4 and C9 both stand at 4, writes R4 with 4 at a character and R9 with 4
+   ten characters later: the frame ends after the line where R9 is written at
+   C0=45 and at 60 to 63, and not where it is written at 46 to 59 or on the next
+   line, which is then a row's second line, C9 at 5. A (U) writes R4 with 1 on a
+   row's last line with C4 at 1: at C0=#3F the frame ends after the line, and
+   during the next line's head, C4 having moved on to 2, it does not, C4 running
+   on. Every boundary is a write's own character. */
+static void a_type_2_reads_a_write_of_r4_or_r9_on_its_own_character(void) {
+  static const struct {
+    uint8_t r4_at;   /* C0 R4=4 is written on, R9=4 ten characters later */
+    uint8_t next_c4; /* where the line after it stands */
+    uint8_t next_c9;
+  } c7[] = {{35, 0, 0}, {36, 5, 0}, {49, 5, 0}, {50, 0, 0}, {53, 0, 0}, {54, 4, 5}};
+  for (unsigned index = 0; index < sizeof c7 / sizeof *c7; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(3, 14);
+    TICK_UNTIL(crtc.c0 == c7[index].r4_at && crtc.c4 == 4 && crtc.c9 == 4);
+    write_register(4, 4);
+    for (int character = 0; character < 10; character++) {
+      crtc_tick(&crtc);
+    }
+    write_register(9, 4);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, c7[index].next_c4);
+    TEST_EQUAL(crtc.c9, c7[index].next_c9);
+  }
+  static const struct {
+    bool on_the_next_head; /* rather than at C0=#3F of the row's last line */
+    uint8_t next_c4;
+    uint8_t next_c9;
+  } au[] = {{false, 0, 0}, {true, 2, 1}};
+  for (unsigned index = 0; index < sizeof au / sizeof *au; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(3, 14);
+    TICK_UNTIL(crtc.c0 == 0x3F && crtc.c4 == 1 && crtc.c9 == 7);
+    if (au[index].on_the_next_head) {
+      crtc_tick(&crtc);
+    }
+    write_register(4, 1);
+    if (au[index].on_the_next_head) {
+      TICK_UNTIL(crtc.c0 == 1);
+    }
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, au[index].next_c4);
+    TEST_EQUAL(crtc.c9, au[index].next_c9);
+  }
+}
+
+/* The sync's last character gives the management back only where it finds the
+   comparison false — "otherwise 'Previous Last Line' is cleared and 'Last Line
+   Management' is re-authorized" (ch. 12.4.1) — and no other character of the
+   sync moves it. A write made on the character before that last one makes
+   nothing itself, being inside the sync, and is read by the latch; the same
+   write made again after the sync shows what the latch left. On a row's last
+   line the management stands through a latch that finds the comparison true,
+   and the second write makes the line last; on a frame's first line such a
+   latch gives none, and the second write makes nothing. */
+static void a_type_2_takes_its_management_back_only_on_a_mismatch(void) {
+  static const struct {
+    uint8_t r4;               /* as the frame runs, R9 being 7 */
+    uint8_t row;              /* C4 where the writes are made */
+    uint8_t line;             /* and C9 */
+    uint8_t register_written; /* R4 or R9, at C0=50 and again at 55 */
+    uint8_t value;
+    uint8_t next_c4; /* where the line after stands, C9 being 0 */
+  } cases[] = {{38, 1, 7, 4, 1, 0}, {0, 0, 0, 9, 0, 1}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, cases[index].r4, 7);
+    TICK_UNTIL(crtc.c0 == 50 && crtc.c4 == cases[index].row && crtc.c9 == cases[index].line);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 55);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* "At the beginning of a line (C0==0), the comparison uses the updated value of
+   R4, but the previous value of R9 (an update of R9 on C0==0 occurs too late
+   for this evaluation)" (ch. 12.4.1). Each write is made during a line's head:
+   R4 moved there unmakes the frame's last line, and R9 moved there does not; R9
+   moved onto the C9 of the row's line before the last makes that line last, as
+   a write later in the line would, which is ours (crtc.c). */
+static void a_type_2_reads_r9_at_a_line_head_as_it_stood(void) {
+  static const struct {
+    uint8_t line; /* C9 of the line on whose head the write is made */
+    uint8_t register_written;
+    uint8_t value;
+    uint8_t next_c4; /* where the line after it stands */
+  } cases[] = {{7, 4, 39, 39}, {7, 9, 5, 0}, {6, 9, 6, 0}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 38 && crtc.c9 == cases[index].line);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* And what the head compares again where R4 is written during it is what the
+   head itself found: R9 as it stood there — moved off C9 on the frame's last
+   line and R4 then written with C4's value, the line stays last — and the
+   head's refusal — on the line after a last one, R4 and R9 at 0, R4 written
+   with 0 there leaves the line refused, and C4 counts on. */
+static void a_type_2s_head_compared_again_keeps_what_it_found(void) {
+  run_a_type_2(46, 38, 7);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 38 && crtc.c9 == 7);
+  write_register(9, 5);
+  write_register(4, 38);
+  TICK_UNTIL(crtc.c0 == 1);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+
+  run_a_type_2(46, 0, 0);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.previous_last_line);
+  write_register(4, 0);
+  TICK_UNTIL(crtc.c0 == 1);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 1);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* "Previous Last Line: remembers whether the 'Last Line' condition was true
+   on the last position of the previous HSYNC", and a head that finds it set
+   makes no last line: "a line that remains continuously a 'Last Line' cannot
+   be recognized indefinitely as such" (ch. 12.4.1). With R4 and R9 at 0 the
+   line after a last line counts on — "if C9==R9, C9 will transition back to
+   0 and C4 will be incremented unconditionally" (ch. 12.4.2) — and C4 walks
+   its seven bits back round to 0, where a head with nothing to refuse it
+   ends the frame again: 129 lines from one refused line to the next. A sync
+   one character wide latches on that character, the one it begins on. */
+static void a_type_2_refuses_the_line_after_a_last_line(void) {
+  static const uint8_t widths[] = {6, 1};
+  for (unsigned index = 0; index < sizeof widths; index++) {
+    run_a_type_2(46, 0, 0);
+    write_register(3, widths[index]);
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 127);
+    static const uint8_t rows[] = {0, 0, 1, 2};
+    for (unsigned line = 0; line < sizeof rows; line++) {
+      TICK_UNTIL(crtc.c0 == 1);
+      TICK_UNTIL(crtc.c0 == 0);
+      TEST_EQUAL(crtc.c4, rows[line]);
+      TEST_EQUAL(crtc.c9, 0);
+    }
+    long lines = 0;
+    do {
+      TICK_UNTIL(crtc.c0 == 1);
+      TICK_UNTIL(crtc.c0 == 0);
+      lines++;
+    } while (crtc.c4 != 2 && lines < 400);
+    TEST_EQUAL(lines, 129);
+  }
+}
+
+/* The latch is the sync's last character, C0=R2+R3-1 (ch. 12.4.1), and it reads
+   R4 and R9 as a write made on the character before leaves them: R4 or R9 taken
+   to 0 at C0=50 of the frame's last line is seen there, the other following at
+   its end, and the next frame's head is a last line too; taken to 0 at C0=51,
+   the sync's last character itself, it is not, the latch being taken before a
+   write made during its own character, which is ours, and the sync refusing
+   that write besides, as silicon does (crtc.c); and that head is refused.
+   Shaker's E (7) makes the first of these writes, and its "HSYNC R9=7, AFTER
+   HSYNC R9=0" lines read silicon's value with the latch a character either way,
+   so nothing on the disc settles the character beyond the chapter's word. */
+static void a_type_2_latches_on_the_last_character_of_its_sync(void) {
+  static const struct {
+    uint8_t register_written; /* R4 or R9, the other at C0=62 */
+    uint8_t character;        /* C0 the write is made on */
+    uint8_t c4;               /* C4 of the line after the next head */
+  } cases[] = {{4, 50, 0}, {4, 51, 1}, {9, 50, 0}, {9, 51, 1}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == 38 && crtc.c9 == 7);
+    write_register(cases[index].register_written, 0);
+    TICK_UNTIL(crtc.c0 == 62);
+    write_register(cases[index].register_written == 4 ? 9 : 4, 0);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 0);
+    crtc_tick(&crtc);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].c4);
+    TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* And a head an HSYNC stands on makes none either: "A 'Last Line' condition
+   effective on position C0=0 is cancelled if a HSYNC is placed on position
+   C0=0. Also, C4 increments instead of going to 0 at the end of the frame"
+   (ch. 15.6). Ch. 12.4.1 names a sync that "starts on position C0==0", and
+   ch. 15.4.4 one carried there from the line before: "we also have an active
+   HSYNC on C0=0 and the 'Last Line' condition is then not evaluated". Nothing
+   else makes one here, so the frame does not end and C4 runs on past R4, as
+   ch. 15.6 has it where it sets R2=0 and R3=6, "C4 overflows", and where it
+   sets R2=50 and R3=15, "C4 continuously overflows". A sync of fourteen ends
+   on C0=63 and leaves the frame's end alone; ch. 15.6 has that frame scroll
+   for want of its VSYNC, which is another matter. */
+static void a_type_2_whose_sync_stands_on_its_line_head_ends_no_frame(void) {
+  static const struct {
+    uint8_t r2;
+    uint8_t r3;
+    uint8_t next_c4; /* where the line after the frame's last stands */
+  } cases[] = {{0, 6, 39}, {50, 15, 39}, {50, 14, 0}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(cases[index].r2, 38, 7);
+    write_register(3, cases[index].r3);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 38 && crtc.c9 == 7);
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* "When the 'Last Line' state has become true, it can no longer be canceled
+   during the current line" (ch. 12.4.1), and a C0 sent the long way round by an
+   R0 moved under it comes to 0 inside the line, which is no head here: the
+   frame still ends where the line does, at the new R0. A write made on that 0
+   is read as any write later in the line is: on a row's last line an R4 given
+   C4's value there makes the line last, and on the frame's last line an R4
+   moved off C4 there leaves it last, as no head's comparison would. That
+   reading is ours; the nearest the documentation comes is ch. 17.1's "if C0
+   returns to 0 because it reached 255 having overflowed, this does not
+   authorize the display", which is about the display. */
+static void a_type_2_keeps_its_last_line_while_c0_runs_round(void) {
+  static const struct {
+    uint8_t row;          /* C4 of the line R0 is moved under, C9 being 7 */
+    bool r4_written_on_0; /* on the overflowed 0 */
+    uint8_t r4;           /* and with what */
+  } cases[] = {{38, false, 0}, {1, true, 1}, {38, true, 39}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    TICK_UNTIL(crtc.c0 == 55 && crtc.c4 == cases[index].row && crtc.c9 == 7);
+    write_register(0, 50);
+    if (cases[index].r4_written_on_0) {
+      TICK_UNTIL(crtc.c0 == 0 && !crtc.c0_reached_r0);
+      write_register(4, cases[index].r4);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c0_reached_r0);
+    TEST_EQUAL(crtc.c4, 0);
+    TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* "If no HSYNC occurs during a line (R2>R0), the 'Previous Last Line' state
+   is not updated and the 'Last Line Management' state cannot be re-evaluated
+   ... Thus, if a 'Last Line' condition has already been activated before the
+   suppression of the HSYNC, this state can remain active indefinitely" (ch.
+   12.4.1). R4 and R9 taken to 0 on a frame's last line, and the sync taken
+   away before it begins there, leave every line after it a last line, the
+   latch having last found a mismatch; taken away after it has ended, the
+   latch found that line last, so every head after it is refused, the one C4
+   comes round to as well. */
+static void a_type_2_without_a_sync_keeps_both_its_states(void) {
+  static const struct {
+    uint8_t character;     /* C0 of the writes, on the frame's last line */
+    uint8_t c4_on_line[3]; /* where the lines after it stand, C9 being 0 */
+  } cases[] = {{20, {0, 0, 0}}, {55, {0, 1, 2}}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == 38 && crtc.c9 == 7);
+    write_register(2, 100);
+    write_register(4, 0);
+    write_register(9, 0);
+    for (unsigned line = 0; line < 3; line++) {
+      TICK_UNTIL(crtc.c0 == 0);
+      TEST_EQUAL(crtc.c4, cases[index].c4_on_line[line]);
+      TEST_EQUAL(crtc.c9, 0);
+      crtc_tick(&crtc);
+    }
+    if (cases[index].c4_on_line[1] != 0) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0);
+      TICK_UNTIL(crtc.c0 == 1);
+      TICK_UNTIL(crtc.c0 == 0);
+      TEST_EQUAL(crtc.c4, 1);
+    }
+  }
+}
+
+/* A type 2 takes the offset into VMA' where C0 meets R1 on the frame's last
+   line, not at the next frame's head: "VMA' itself is affected by R12/R13
+   when C0 reach R1 on the last frame line" (ch. 17.4.3), and "if the update
+   of the R12/R13 registers is immediate, the consideration of the new line
+   can no longer take place when C0 exceeds R1" (ch. 20.3.3). That
+   chapter's figure puts the edge to the character: an OUT R12 whose write
+   falls on C0=39 or on C0=40, the R1 character itself, begins the next
+   frame, and one falling on C0=41 does not, where a type 0 takes it at the
+   frame's head whenever it lands. The figure writes R12; that R13 is taken
+   the same way is ours. */
+static void a_type_2_takes_its_offset_where_c0_meets_r1_on_its_last_line(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t register_written; /* R12 or R13 */
+    uint8_t value;
+    uint8_t character; /* C0 the write is made on, on the frame's last line */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{2, 13, 0x40, 39, 0x1040},
+               {2, 13, 0x40, 40, 0x1040},
+               {2, 12, 0x30, 40, 0x3000},
+               {2, 13, 0x40, 41, 0x1000},
+               {0, 13, 0x40, 41, 0x1040}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 6);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(12, 0x10);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == 38 && crtc.c9 == 7);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* "This assignment of R12/R13 depends on the 'last line' state when C0==R1 (and
+   not on the equality C4==R4 and C9==R9 which positions this state). This
+   implies that changing R9 before equality C0=R1 does not prevent this
+   assignment" (ch. 12.4.2, note 1). The frame's last line keeps the offset for
+   the next frame though R9 is moved off C9 before C0 reaches R1; a row's last
+   line made the frame's by an R4 written before C0 reaches R1 hands the next
+   frame the offset, and made so after it, the line has already passed VMA on to
+   the latch as any row's last line does, so the next frame begins two rows of
+   forty on. */
+static void a_type_2_hands_the_next_frame_the_state_its_last_line_had_at_r1(void) {
+  static const struct {
+    uint8_t row;              /* C4 of the line written on, C9 being 7 */
+    uint8_t register_written; /* R4 or R9 */
+    uint8_t value;
+    uint8_t character; /* C0 the write is made on */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{38, 9, 5, 20, 0x1000}, {1, 4, 1, 20, 0x1000}, {1, 4, 1, 55, 0x1050}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(12, 0x10);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == cases[index].row && crtc.c9 == 7);
+    write_register(cases[index].register_written, cases[index].value);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* Where R1 is 0 the comparison is made at the line's head, and before both
+   the head's own last-line evaluation and VMA=VMA': "The frame's last-line
+   state evaluation takes place when C0=0 but it occurs after processing the
+   C0=R1 evaluation when R1=0 ... The VMA'=VMA or R12/R13 assignment
+   (depending on status) therefore takes place before VMA=VMA' assignment on
+   position C0=0" (ch. 17.4.3). R1 goes to 0 on row 38's sixth line. Its
+   seventh line ends no row, and begins where the row did, at 0x0123 + 38 x
+   40 = 0x0713; its eighth, the frame's last, its line before being no last
+   line, takes VMA as it ran on through that line, 64 characters on, 0x0753.
+   And the next frame's first line takes the offset with only the first of
+   the load's two operations, "VMA'=VMA' AND (R12 x 256 + R13)". The chapter
+   tells that of an offset written after the last line's head: R13 moved
+   from 0 to 0x23 there gives 0x0730 AND 0x0123, 0x0120, the row having begun
+   at 0x0100 + 1520. That an offset written long before is cut short the same
+   way, 0x0753 AND 0x0123 = 0x0103, is ours, and so is the load made at the
+   head being closed to an offset written during that same character, which
+   the frame's next line shows. Where eight lines of padding follow, they
+   begin from 0x0103; their row ends at the head of their last line, which
+   hands on VMA as it ran on, 0x0143; and the next frame's head, its line
+   before having ended the padding, takes R13 as moved to 0x21 among them,
+   0x0143 AND 0x0121, 0x0101. */
+static void a_type_2_takes_its_offset_at_the_head_where_r1_is_0(void) {
+  static const struct {
+    uint8_t r13;                     /* as the frame runs */
+    bool r13_moved_on_the_last_line; /* to 0x23, after its head */
+    uint8_t r5;
+    uint16_t last_line_begins_at;
+    uint16_t next_frame_begins_at;
+  } cases[] = {{0x23, false, 0, 0x0753, 0x0103},
+               {0x00, true, 0, 0x0730, 0x0120},
+               {0x23, false, 8, 0x0753, 0x0101}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(5, cases[index].r5);
+    write_register(12, 0x01);
+    write_register(13, cases[index].r13);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 30 && crtc.c4 == 38 && crtc.c9 == 5);
+    write_register(1, 0);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, 6);
+    TEST_EQUAL(crtc.vma, cases[index].last_line_begins_at - 64);
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, 7);
+    TEST_EQUAL(crtc.vma, cases[index].last_line_begins_at);
+    TICK_UNTIL(crtc.c0 == 10);
+    if (cases[index].r13_moved_on_the_last_line) {
+      write_register(13, 0x23);
+    }
+    if (cases[index].r5 != 0) {
+      TICK_UNTIL(crtc.c0 == 10 && crtc.c4 == 39 && crtc.c9 == 3);
+      write_register(13, 0x21);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+    write_register(13, 0x45);
+    TICK_UNTIL(crtc.c0 == 1);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, 1);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* A C0 come round to 0 by overflowing is no line's head (crtc.c), so where R1
+   is 0 the comparison made there reads the line's own last-line state and
+   takes the offset whole, 0x0145 where R13 is moved to 0x45 with R1 and R0;
+   the next frame's head then cuts it with itself, which leaves it as it was,
+   where a cut made at the overflow would have left 0x0123 AND 0x0145, 0x0101.
+   VMA takes the latch there too, as at any C0 of 0. Ours, and graded by
+   nothing. */
+static void a_type_2_takes_its_offset_whole_where_c0_comes_round_to_0(void) {
+  run_a_type_2(46, 38, 7);
+  write_register(12, 0x01);
+  write_register(13, 0x23);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 55 && crtc.c4 == 38 && crtc.c9 == 7);
+  write_register(1, 0);
+  write_register(0, 50);
+  write_register(13, 0x45);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_CHECK(!crtc.c0_reached_r0);
+  TEST_EQUAL(crtc.vma, 0x0145);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c0_reached_r0);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.vma, 0x0145);
+}
+
+/* Where R1 is 0 the head reads the last-line state of the line before (ch.
+   17.4.3); that it is the state that line ended on, and not the latch its sync
+   left, is ours. Row 38's last line is made the frame's last by an R4 written
+   after its sync, whose last character found it no last line; it begins at
+   0x0713 + 64, as R1 at 0 has its row end take VMA, and the next frame's head,
+   the line before having ended a last line, still takes the offset: 0x0753 AND
+   0x0123, 0x0103. */
+static void a_type_2_reads_at_an_r1_of_0_the_state_its_line_before_ended_on(void) {
+  run_a_type_2(46, 39, 7);
+  write_register(12, 0x01);
+  write_register(13, 0x23);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 30 && crtc.c4 == 38 && crtc.c9 == 5);
+  write_register(1, 0);
+  TICK_UNTIL(crtc.c0 == 55 && crtc.c4 == 38 && crtc.c9 == 7);
+  TEST_EQUAL(crtc.vma_, 0x0753);
+  write_register(4, 38);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.vma, 0x0103);
+}
+
+/* Where padding follows the frame's last line, the padding's last line is
+   the frame's last for the pointer and takes the offset too, "when C0 reach
+   R1 on the last frame line" (ch. 17.4.3), the padding's rows handing VMA on
+   as any row does (ch. 11.2.1, 11.2.3) — as Shaker's B (RETURN) is
+   photographed doing on a real type 2, its frame drawn from an R12 written
+   too late for the last line itself. An offset written after C0 has passed
+   R1 on the last line still begins the next frame, after one line of padding,
+   seven or eight; after sixteen, two rows, the second row begins a row on
+   from the offset the last line took; and the next frame's rows go on from
+   its first as any frame's do. Ch. 11.9 calls a line of the padding the
+   frame's last; that the load reads it where its C9 has not reached R9, as
+   on every line here, and that it is open to an offset written during its R1
+   character as the last line is, are ours. */
+static void a_type_2_takes_its_offset_on_the_last_line_of_its_padding(void) {
+  static const struct {
+    uint8_t r5;
+    uint8_t row;       /* C4 of the line R13 is written on */
+    uint8_t line;      /* and C9 */
+    uint8_t character; /* and C0 */
+    uint8_t value;
+    uint16_t second_padding_row_begins_at; /* 0 where there is none */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{1, 38, 7, 50, 0x40, 0, 0x1040},
+               {7, 38, 7, 50, 0x40, 0, 0x1040},
+               {8, 38, 7, 50, 0x40, 0, 0x1040},
+               {16, 38, 7, 50, 0x40, 0x1028, 0x1040},
+               {7, 39, 6, 40, 0x80, 0, 0x1080}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(5, cases[index].r5);
+    write_register(12, 0x10);
+    write_register(13, 0x00);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c4 == cases[index].row &&
+               crtc.c9 == cases[index].line);
+    write_register(13, cases[index].value);
+    if (cases[index].second_padding_row_begins_at != 0) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 40 && crtc.c9 == 0);
+      TEST_EQUAL(crtc.vma, cases[index].second_padding_row_begins_at);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 1 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at + 40);
+  }
+}
+
+/* The padding's last line is the one enter_scanline ends it on, R5 read as it
+   stands where C0 meets R1: R5 taken to 0 at the padding's fourth line runs C5
+   round its five bits, thirty-two lines in all, and R5 dropped under C5 at its
+   ninth runs C5 round to the new R5, thirty-six; each frame begins from an R12
+   written too late for the last line, and the padding's rows before its last
+   hand VMA on, the one beginning at its seventeenth line two rows on from the
+   frame's offset. R5 moved to end the padding on a line whose R1 is past hands
+   the next frame the offset the last line took, which is ours. */
+static void a_type_2s_padding_ends_where_r5_moved_inside_it_ends_it(void) {
+  static const struct {
+    uint8_t c5;        /* the padding line R5 is moved on */
+    uint8_t character; /* and the C0 it is moved at */
+    uint8_t r5;
+    uint16_t next_frame_begins_at;
+  } cases[] = {{3, 10, 0, 0x2000}, {8, 10, 4, 0x2000}, {3, 50, 4, 0x1000}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(46, 38, 7);
+    write_register(5, 16);
+    write_register(12, 0x10);
+    write_register(13, 0x00);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.vertical_adjustment_in_progress && crtc.c5 == cases[index].c5 &&
+               crtc.c0 == cases[index].character);
+    write_register(5, cases[index].r5);
+    TICK_UNTIL(crtc.c0 == 51);
+    write_register(12, 0x20);
+    if (cases[index].character < 40) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.vertical_adjustment_in_progress && crtc.c5 == 16);
+      TEST_EQUAL(crtc.vma, 0x1050);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* The first line a type 2 turns into an additional line and begins again, "a
+   new line 0 will follow the old line 0" (ch. 19.6.3), is read as the interlace
+   line it is, which holds the "Last Line" condition on this type (ch. 11.9):
+   with the mode written before C0 meets R1 the line takes an R12 written on it
+   and the new line 0 begins there; written after, the new line 0 begins where
+   the old one did; with R1 at 0 the new line's head cuts the offset into the
+   latch as the head after any last line does, 0x0123 AND 0x0145, 0x0101; and
+   with the mode given up again after R1 the line begins no frame again but has
+   taken the offset, and the frame's second line begins there. Ours, and graded
+   by nothing. */
+static void a_type_2_line_begun_again_takes_the_offset_as_the_interlace_line(void) {
+  static const struct {
+    uint8_t r1;       /* written on C0=5, with R12/R13 */
+    uint8_t taken_up; /* the C0 R8=3 is written on */
+    uint8_t given_up; /* the C0 R8=0 is written on after it, or 0 */
+    uint16_t next_line_begins_at;
+  } cases[] = {{40, 10, 0, 0x3003}, {40, 50, 0, 0x0123}, {0, 10, 0, 0x0101}, {40, 10, 50, 0x3003}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(12, 0x01);
+    write_register(13, 0x23);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame);
+    TEST_EQUAL(crtc.vma, 0x0123);
+    TICK_UNTIL(crtc.c0 == 5);
+    write_register(1, cases[index].r1);
+    write_register(12, cases[index].r1 == 0 ? 0x01 : 0x30);
+    write_register(13, cases[index].r1 == 0 ? 0x45 : 0x03);
+    TICK_UNTIL(crtc.c0 == cases[index].taken_up);
+    write_register(8, 3);
+    if (cases[index].given_up != 0) {
+      TICK_UNTIL(crtc.c0 == cases[index].given_up);
+      write_register(8, 0);
+    }
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 0);
+    TEST_EQUAL(crtc.c9, cases[index].given_up != 0 ? 1 : 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_line_begins_at);
+  }
+}
+
+/* A line ch. 19.6.3 begins again yields only to a padding already holding it,
+   which enter_scanline lets come first. A frame's first row reached inside a
+   padding, R4 at 127 and rows of one line so that C4 comes round to 0 under the
+   padding's lines (ch. 11.2.3), is padding still: the mode written on its first
+   line under an odd frame begins no frame again there, so the line takes no R12
+   written on it and hands VMA on at its row's end as the padding's rows do. A
+   frame's head that R5 written at its C0=0 arms, where no padding holds it, is
+   begun again all the same, a type 2 asking R5 again at the end of its last
+   line alone (enter_scanline), and the line takes the offset. Ours. */
+static void a_type_2s_line_begun_again_yields_only_to_a_padding_holding_it(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(4, 127);
+  write_register(5, 4);
+  write_register(6, 100);
+  write_register(7, 120);
+  write_register(9, 0);
+  write_register(12, 0x10);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 5 && crtc.vertical_adjustment_in_progress && crtc.c4 == 0 && crtc.c9 == 0 &&
+             crtc.parity_frame);
+  write_register(12, 0x30);
+  TICK_UNTIL(crtc.c0 == 10);
+  write_register(8, 3);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_CHECK(crtc.vertical_adjustment_in_progress);
+  TEST_EQUAL(crtc.vma, 0x1028);
+
+  run_a_type_2(46, 0, 0);
+  write_register(6, 50);
+  write_register(12, 0x10);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.last_line && crtc.parity_frame);
+  write_register(5, 2);
+  TICK_UNTIL(crtc.c0 == 5);
+  TEST_CHECK(crtc.vertical_adjustment_armed);
+  write_register(12, 0x30);
+  TICK_UNTIL(crtc.c0 == 10);
+  write_register(8, 3);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+  TEST_EQUAL(crtc.vma, 0x3000);
+}
+
+/* The interlace line asked for after the R5 lines is read where C0 meets R1
+   from R8 as it then stands, as the line's end will read it: the condition
+   "is evaluated on the last line of a frame, when C0=R0", and "it is
+   therefore possible to update R8 on one of the lines displayed via R5" (ch.
+   11.9). R8 taken to 0 on the second and last R5 line before its R1 makes
+   that line the padding's last, and the next frame begins from an R12
+   written on the line before, too late for the frame's last line; taken to 0
+   after R1, the line ends the padding all the same but has not taken the
+   offset, and the next frame begins from the one the last line took, which
+   is ours. */
+static void a_type_2s_padding_reads_r8_where_c0_meets_r1(void) {
+  static const struct {
+    uint8_t character; /* C0 R8=0 is written on */
+    uint16_t next_frame_begins_at;
+  } cases[] = {{5, 0x2000}, {50, 0x1000}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(5, 2);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 1);
+    write_register(12, 0x10);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 50 && crtc.vertical_adjustment_in_progress && crtc.c5 == 0 &&
+               crtc.interlace_line_owed);
+    write_register(12, 0x20);
+    TICK_UNTIL(crtc.c0 == cases[index].character && crtc.c5 == 1);
+    write_register(8, 0);
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
+  }
+}
+
+/* Ch. 12.4.2's case study, the line-to-line rupture: a frame of one row whose
+   every line is a frame of its own, so that R12 and R13 are read on each. R4
+   and R9 at 0 make every line last but for the refusal above, and that is got
+   round by moving R9 off C9 through the sync's last character and back after
+   it: "by modifying R9 during HSYNC to make the 'Last Line' condition false, it
+   becomes possible to reactivate the management of this condition ... Once
+   HSYNC is finished, setting R9 back to the value of C9 (thus 0) restores the
+   real limit of counter C9 and makes the condition C4==R4 and C9==R9 true
+   again". The chapter's own figures: R2=1 and R3=6, the sync on C0=1 to 6, R9
+   taken to 0 at C0=7 of the frame's last line, and to 1 at C0=3 and back to 0
+   at C0=7 of every line after, each the character the write is made on
+   (crtc.c). Without that, the line after the frame's last is refused and C4
+   goes on to 1; and with the sync placed after the first write, "it would not
+   have been necessary to modify R9 during the HSYNC of the second line for the
+   'Last Line' state to remain armed for the third line" — and the third is
+   refused, the fourth standing at C4=1. */
+static void a_type_2_ruptures_line_to_line_by_moving_r9_through_its_sync(void) {
+  static const struct {
+    uint8_t r2;
+    bool r9_moved;         /* through the sync of every line after the first */
+    uint8_t c4_on_line[4]; /* where the lines after it stand, C9 being 0 */
+  } cases[] = {
+      {1, true, {0, 0, 0, 0}},
+      {1, false, {0, 1, 2, 3}},
+      {20, false, {0, 0, 1, 2}},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    run_a_type_2(cases[index].r2, 0, 7);
+    TICK_UNTIL(crtc.c0 == 7 && crtc.c4 == 0 && crtc.c9 == 7);
+    write_register(9, 0);
+    for (unsigned line = 0; line < 4; line++) {
+      TICK_UNTIL(crtc.c0 == 0);
+      TEST_EQUAL(crtc.c4, cases[index].c4_on_line[line]);
+      TEST_EQUAL(crtc.c9, 0);
+      crtc_tick(&crtc);
+      if (cases[index].r9_moved) {
+        TICK_UNTIL(crtc.c0 == 3);
+        write_register(9, 1);
+        TICK_UNTIL(crtc.c0 == 7);
+        write_register(9, 0);
+      }
+    }
+  }
+}
+
+/* And what the rupture is for: "all displayed lines to start with C4=0 and
+   C9=0, so that registers R12 and R13, modified before C0==R1, are taken
+   into account" (ch. 12.4.2). Each line, a last line, hands the next the
+   offset it was given before C0 reached R1; the third line's, given at C0=50,
+   is too late for the fourth, which begins where the third did. */
+static void a_type_2_ruptured_line_to_line_takes_an_offset_on_each_line(void) {
+  static const struct {
+    uint8_t character; /* C0 the R13 write is made on */
+    uint16_t next_line_begins_at;
+  } lines[] = {{10, 0x10}, {10, 0x11}, {50, 0x11}, {10, 0x13}};
+  run_a_type_2(1, 0, 7);
+  TICK_UNTIL(crtc.c0 == 7 && crtc.c4 == 0 && crtc.c9 == 7);
+  write_register(9, 0);
+  for (unsigned line = 0; line < sizeof lines / sizeof *lines; line++) {
+    TICK_UNTIL(crtc.c0 == 0);
+    crtc_tick(&crtc);
+    TICK_UNTIL(crtc.c0 == 3);
+    write_register(9, 1);
+    TICK_UNTIL(crtc.c0 == 7);
+    write_register(9, 0);
+    TICK_UNTIL(crtc.c0 == lines[line].character);
+    write_register(13, (uint8_t)(0x10 + line));
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.vma, lines[line].next_line_begins_at);
+  }
+}
+
+/* The interlace line is padding too, and the two ASICs still add it when the
+   line's end asks whether padding follows: "the additional line is added at the end of
+   the frame (after the R5 lines if necessary) if one of the two 'Interlace'
+   modes is activated (R8=3 or 1) and if ParityFrame is even" (ch. 19.6.4).
+   With the sync mode alone, so that no row is halved, a frame of 39 rows of
+   eight comes out 313 lines on its even field and 312 on its odd one. */
+static void the_two_asics_still_add_the_interlace_line_to_an_even_frame(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 1);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    for (int frame = 0; frame < 4; frame++) {
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+      bool even = !crtc.parity_frame;
+      long lines = 0;
+      do {
+        TICK_UNTIL(crtc.c0 == 1);
+        TICK_UNTIL(crtc.c0 == 0);
+        lines++;
+      } while (!(crtc.c4 == 0 && crtc.c9 == 0) && lines < 400);
+      TEST_EQUAL(lines, even ? 313 : 312);
+    }
+  }
+}
+
+/* A run opened with the row counter already past R4 is the neighbouring case
+   to the one above, and it is where the comparison could most easily have been
+   let loose: on the two ASICs that run's count is never zeroed at its opening,
+   so a limit read as reached-or-passed could end it a line in where it should
+   spend R5. It does not — the padding comes out the same length on every type
+   that opens one as it did before that reading was given them — and this is
+   what says so.
+
+   "C4 standing past R4 does not disqualify the line: the overflow rule is
+   written 'excluding vertical adjustment', and an adjustment that finishes
+   returns C4 to 0 from wherever it had climbed" (ch. 11.2.2, 12.1, 12.2). A
+   type 1, which counts its padding on C5, spends all of R5 there; the three
+   that count it on C9 have the counter already above the limit and spend what
+   is left of it. A type 2 opens no run past R4 at all (crtc.c): its counter
+   goes round through 0 to R4 and is padded there, all of R5 on C5. */
+static void a_run_opened_past_r4_is_the_same_length_on_the_types_that_open_one(void) {
+  static const struct {
+    uint8_t type;
+    unsigned padding_lines;
+    bool opens_past_r4;
+  } cases[] = {{0, 2, true}, {1, 6, true}, {2, 6, false}, {3, 2, true}, {4, 2, true}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 10);
+    write_register(5, 6);
+    write_register(6, 25);
+    write_register(9, 3);
+    for (long tick = 0; tick < 200L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 4 && crtc.c9 == 0);
+    write_register(4, 2); /* the counter is now past R4, where it stands */
+    unsigned padding_lines = 0;
+    bool opened = false;
+    bool came_round = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS; tick++) {
+      crtc_tick(&crtc);
+      came_round = came_round || (!opened && crtc.c4 == 0);
+      if (crtc.vertical_adjustment_in_progress && crtc.c0 == 0) {
+        padding_lines++;
+        opened = true;
+      }
+      if (opened && !crtc.vertical_adjustment_in_progress) {
+        break;
+      }
+    }
+    TEST_CHECK(opened);
+    TEST_EQUAL(padding_lines, cases[index].padding_lines);
+    TEST_EQUAL(came_round, !cases[index].opens_past_r4);
+  }
+}
+
+/* And the pointer a row hands the next one is left alone through a frame's
+   padding on the two ASICs, where the other types move it inside it. "The
+   video pointer is updated before the start of the additional lines
+   (VMA'=VMA) when C0=R1. Additional management just set's C9 to 0 and
+   compare's C9 with R5 to deactivate this management, without updating the
+   video pointer" (ch. 11.2.6), against ch. 11.2.1's own table, which walks a
+   type 0's pointer a row's worth on the line where the padding's count meets
+   R9, and a type 1's and a type 2's at every row the padding completes.
+
+   The ASICs part from that only because they end a row wherever C9 has
+   reached or passed R9: every one of the padding lines meets that, so a
+   predicate reading the row's end alone would leave the pointer a row further
+   on for each of the sixteen. The registers below are ch. 11.2.1's own.
+
+   Types 1 and 2 leave it four times, which is neither of those rules but
+   their own: they count the padding on C5 and the row goes on counting
+   beside it, "regardless of the value of R4 each time C9=R9, as long as C5
+   has not reached R5" (ch. 11.1), so a row of four lines ends four times in
+   sixteen and hands the pointer on at each — save that a type 2's fourth,
+   the padding's last line and so the frame's, takes the offset instead
+   (crtc.c). */
+static void the_two_asics_leave_the_pointer_alone_through_the_padding(void) {
+  static const struct {
+    uint8_t type;
+    unsigned captures; /* times the pointer is left behind inside the padding */
+  } cases[] = {{0, 1}, {1, 4}, {2, 4}, {3, 0}, {4, 0}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 10);
+    write_register(5, 16);
+    write_register(6, 25);
+    write_register(9, 3);
+    for (long tick = 0; tick < 200L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    unsigned captures = 0;
+    unsigned padding_lines = 0;
+    uint16_t pointer = crtc.vma_;
+    for (long waited = 0; waited <= 4L * FRAME_TICKS; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+      if (crtc.vertical_adjustment_in_progress) {
+        captures += crtc.vma_ != pointer ? 1 : 0;
+        padding_lines += crtc.c0 == 0 ? 1 : 0;
+      }
+      pointer = crtc.vma_;
+    }
+    TEST_EQUAL(padding_lines, 16u); /* R5 of them, and the run reached its end */
+    TEST_EQUAL(captures, cases[index].captures);
+  }
+}
+
+/* A counter the two ASICs find above its limit comes home; on the other three
+   it walks the five bits round. "It is impossible to 'overflow' C9 on these
+   CRTC's. It is not a simple equality test which takes place, but a 'more
+   complex' comparison performed by the ASIC: If current-C9 > R9 then
+   next-C9=0" (ch. 10.3.4.1), where a type 0 "will count to its maximum value
+   (31) before looping back to 0" (ch. 10.3.1.1). The chapter works the case:
+   "if C9 was 4, and R9 is changed with 1 (whereas it was 7 before), then C9
+   will go to 0 (and C4=C4+1 or 0 depending on the value of C4 and R4)".
+
+   Shaker's A (U) is what grades it, and it came right on both ASIC records
+   when the comparison stopped being an equality; two of C (O)'s lines came
+   with it. */
+static void a_counter_above_its_limit_comes_home_on_the_asics(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t c9_on_the_next_line; /* where the row stands a line after the write */
+    bool the_row_advanced;       /* and whether the row went with it */
+  } cases[] = {{0, 5, false}, {1, 5, false}, {2, 5, false}, {3, 0, true}, {4, 0, true}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, 7);
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    /* To the fifth line of a row, which is the chapter's own C9 of 4. The
+       character is any of them: R9 is read at a line's end and this row is
+       nowhere near R4, so no window the earlier characters open can reach it. */
+    TICK_UNTIL(crtc.c9 == 4 && crtc.c0 == 10);
+    uint8_t row = crtc.c4;
+    write_register(9, 1);
+    /* And on to the next line's head. */
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c9, cases[index].c9_on_the_next_line);
+    /* "and C4=C4+1 or 0 depending on the value of C4 and R4" — this row is
+       neither R4 nor the frame's last, so the chapter's first case is the one
+       that applies and the counter moves on. */
+    TEST_EQUAL(crtc.c4 != row, cases[index].the_row_advanced);
+  }
+}
+
+/* The two ASICs read through a table of eight rather than by register number.
+   "For CRTC's 3 and 4, only the 3 least significant bits of the selected
+   register number are considered to read a register", so "reading register 4
+   therefore also means reading register 12 (8+4) or 20 (16+4)", and "since bit
+   3 of the register number is forced to 1, reading registers R2 and R3 is
+   equivalent to reading R10 and R11" (ch. 21.2.3, 21.3.4). Those last two are
+   the ASIC's status bytes and not registers at all. Both ports answer alike:
+   "the port at &BE00 behaves like the one at &BF00" (ch. 28.1.8).
+
+   This is what lets a program name these two chips, which Shaker does before
+   it chooses what to run: reading the display start back is what parts them
+   from a type 2, and until they answered it the disc named both of them a
+   type 2 and ran a type 2's tests on them (ch. 28.1.9). */
+static void the_two_asics_read_a_table_of_eight(void) {
+  static const uint8_t asics[] = {3, 4};
+  for (unsigned index = 0; index < sizeof asics / sizeof *asics; index++) {
+    crtc_init(&crtc, asics[index]);
+    write_register(12, 0x30);
+    write_register(13, 0x18);
+    write_register(14, 0x2A);
+    write_register(15, 0x55);
+    /* The two slots the table fills with the light pen are the two a reader
+       could mistake for R8 and R9, which share their bottom three bits. Both
+       are written here so that the empty answers below say which pair the
+       table holds. */
+    write_register(8, 0x33);
+    write_register(9, 0x07);
+    /* Each register and the two numbers that name it through those 3 bits. */
+    static const struct {
+      uint8_t number;
+      uint8_t expected;
+    } reads[] = {{12, 0x30}, {4, 0x30}, {20, 0x30}, {13, 0x18}, {5, 0x18},  {14, 0x2A}, {6, 0x2A},
+                 {15, 0x55}, {7, 0x55}, {16, 0x00}, {0, 0x00},  {17, 0x00}, {1, 0x00}};
+    for (unsigned read = 0; read < sizeof reads / sizeof *reads; read++) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, reads[read].number));
+      TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), reads[read].expected);
+      /* And the status port answers whatever the read port answers. */
+      TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RW)), reads[read].expected);
+    }
+    /* A number past the table's own eight still lands in it, which is what
+       says this reading is reached before the one every other type takes:
+       31 names the eighth row, where a type 1 would answer its phantom
+       register and a type 2 a zero. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 31));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x55);
+    /* R2 and R3 reach the two status bytes, as R10 and R11 do. */
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 10));
+    uint8_t status_1 = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 2));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), status_1);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+    uint8_t status_2 = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 3));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), status_2);
+    /* The bits those two chapters wire rather than trace. */
+    TEST_EQUAL(status_1 & 0x40, 0x40); /* status 1 bit 6, "Always 1" */
+    TEST_EQUAL(status_2 & 0x10, 0x10); /* status 2 bit 4, "Always 1" */
+    TEST_EQUAL(status_2 & 0x40, 0x00); /* status 2 bit 6, "Always 0" */
+  }
+  /* No other type reads a display start back, which is what the naming turns
+     on: a type 2 answers 0 there and a type 1 answers 0 everywhere but the
+     cursor (ch. 21.2.2). */
+  for (uint8_t type = 0; type <= 2; type++) {
+    crtc_init(&crtc, type);
+    write_register(12, 0x30);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 4));
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), 0x00);
+  }
+}
+
+/* Status 1's fourth bit names "C0=R2+R3", the character an HSYNC ends on.
+   Where R3's low nibble is 0 these two run the sync sixteen characters —
+   "on CRTC's 2, 3 and 4, the HSYNC lasts 16 µsec when R3=0" (ch. 28.1.5) — so
+   the bit falls where that sync ends, at R2+16, and not at R2 as the table's
+   sum read literally would put it. Taking the width the chip itself keeps is
+   our reading of a table that does not draw a width of nothing. */
+static void the_asic_hsync_end_bit_follows_a_width_of_nothing(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 30);
+    write_register(3, 0x80);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0);
+    int cleared_at = -1;
+    for (int character = 0; character < SCANLINE && cleared_at < 0; character++) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 10));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      if ((status & 0x10) == 0) {
+        cleared_at = crtc.c0;
+      }
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(cleared_at, 30 + 16);
+  }
+}
+
+/* Every bit of those two bytes but the wired ones traces something, so across
+   a frame each must be caught at both values, and the wired ones at neither.
+   Ch. 4.3's own view of the registers is what says which is which: on these
+   two chips R10 reads "s 1 s s s s s s" and R11 "s 0 s 1 s s s s", one fixed
+   bit in the first and two in the second.
+
+   This is the shape of failure the bit-by-bit tables cannot show on their own.
+   Status 1's seventh bit was idled at 0 here, so it could never rise and the
+   whole video-pointer rule written under it was dead code that no reading
+   could reach. A bit that never moves is not a status bit. */
+static void the_asic_status_bytes_trace_rather_than_stand(void) {
+  static const uint8_t asics[] = {3, 4};
+  for (unsigned index = 0; index < sizeof asics / sizeof *asics; index++) {
+    crtc_init(&crtc, asics[index]);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 3);
+    write_register(6, 2);
+    write_register(7, 1);
+    write_register(9, 7);
+    uint8_t ones[2] = {0, 0};  /* bits caught set, a byte each */
+    uint8_t zeros[2] = {0, 0}; /* and bits caught clear */
+    /* And where the three "last character of a kind" bits fall: each names a
+       row, and each should name it once in a frame and no more. */
+    unsigned times_clear[3] = {0, 0, 0};
+    uint8_t row_when_clear[3] = {0xFF, 0xFF, 0xFF};
+    unsigned characters_bit_7_stood = 0;
+    /* Into the machine, then to the head of a frame, then one whole frame of
+       it: a chip fresh from power-on stands at that head already. */
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    /* Each character is read where the counters name it, then the chip is
+       stepped off it; the frame closes when the head comes round again. */
+    for (long waited = 0;; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      if (waited >= 4L * FRAME_TICKS) {
+        break;
+      }
+      for (unsigned byte = 0; byte < 2; byte++) {
+        crtc_access(&crtc, CRTC_CS | crtc_set_data(0, (uint8_t)(10 + byte)));
+        uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+        ones[byte] |= status;
+        zeros[byte] |= (uint8_t)~status;
+        if (byte == 1) {
+          for (unsigned bit = 0; bit < 3; bit++) {
+            if ((status & (1u << bit)) == 0) {
+              times_clear[bit]++;
+              row_when_clear[bit] = crtc.c4;
+            }
+          }
+          characters_bit_7_stood += (status & 0x80) != 0 ? 1 : 0;
+        }
+      }
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+    uint8_t traced[2] = {(uint8_t)(ones[0] & zeros[0]), (uint8_t)(ones[1] & zeros[1])};
+    /* Status 1: every bit but the sixth, which is wired, and the fifth, which
+       this chip leaves standing and the head of crtc.c says why. */
+    TEST_EQUAL(traced[0], 0x9F);
+    TEST_EQUAL(ones[0] & 0x40, 0x40);  /* "Always 1" */
+    TEST_EQUAL(zeros[0] & 0x40, 0x00); /* and never otherwise */
+    /* Status 2: every bit but the fourth and sixth, which are wired, and the
+       third, which counts whole frames and cannot turn inside one. */
+    TEST_EQUAL(traced[1], 0xA7);
+    TEST_EQUAL(ones[1] & 0x10, 0x10);  /* "Always 1" */
+    TEST_EQUAL(zeros[1] & 0x40, 0x40); /* "Always 0" */
+    TEST_EQUAL(ones[1] & 0x40, 0x00);
+    /* "C4=R4 ... : Last char of screen", "C4=R6-1 ... : Last char displayed",
+       "C4=R7-1 ... : Last char before Vsync" — one character each to a frame,
+       on the row each names and on no other. */
+    for (unsigned bit = 0; bit < 3; bit++) {
+      TEST_EQUAL(times_clear[bit], 1u);
+    }
+    TEST_EQUAL(row_when_clear[0], 3); /* R4 */
+    TEST_EQUAL(row_when_clear[1], 1); /* R6-1 */
+    TEST_EQUAL(row_when_clear[2], 0); /* R7-1 */
+    /* And bit 7 stands for a row's first line bar its last character, plus
+       the one character that ends the row: "(C9=R9 and C0=R0) or (C9=0 and
+       C0=0 to R0-1)", which over four rows of this frame is four of each. */
+    TEST_EQUAL(characters_bit_7_stood, 4u * (63u + 1u));
+  }
+}
+
+/* The fifth bit of the second byte stands for a whole line at a time — "C9=R9
+   : C0=0 to R0" (ch. 21.3.4.2) — so over a frame it falls for one line's worth
+   of characters in every row and no others, whatever the row's height. That
+   relation holds in the interlace video mode too, where this chip keeps the
+   row's end in a count and a parity rather than in C9 itself, so the bare
+   comparison the chapter writes names a different line from the one the row
+   actually ends on (crtc.c, row_is_on_its_last_scanline). */
+static void the_asic_row_end_bit_stands_for_the_line_the_row_ends_on(void) {
+  static const uint8_t modes[] = {0, 3}; /* the mode left alone, then asked for */
+  for (unsigned index = 0; index < sizeof modes / sizeof *modes; index++) {
+    crtc_init(&crtc, 3);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 3);
+    write_register(6, 2);
+    write_register(7, 1);
+    write_register(9, 7);
+    write_register(8, modes[index]);
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    unsigned characters_the_bit_fell_for = 0;
+    unsigned rows = 0;
+    /* The three that name a frame's last character of a kind fall on the same
+       line this one stands for, so they too must fall once and once only. */
+    unsigned times_clear[3] = {0, 0, 0};
+    uint8_t row = crtc.c4;
+    for (long waited = 0;; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      if (waited >= 4L * FRAME_TICKS) {
+        break;
+      }
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      if ((status & 0x20) == 0) {
+        characters_the_bit_fell_for++;
+      }
+      for (unsigned bit = 0; bit < 3; bit++) {
+        times_clear[bit] += (status & (1u << bit)) == 0 ? 1 : 0;
+      }
+      crtc_tick(&crtc);
+      if (crtc.c4 != row) {
+        rows++;
+        row = crtc.c4;
+      }
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+    TEST_EQUAL(characters_the_bit_fell_for, rows * 64u);
+    for (unsigned bit = 0; bit < 3; bit++) {
+      TEST_EQUAL(times_clear[bit], 1u);
+    }
+  }
+}
+
+/* And the one bit that counts frames rather than characters: "bit 3 of status
+   2 toggles from 1 to 0 and vice versa over the entire frame every 16 frames"
+   (ch. 21.3.4.2). Both halves are asserted — that it holds for a whole frame,
+   and that it turns on the sixteenth. */
+static void the_asic_frame_timer_turns_every_sixteenth_frame(void) {
+  crtc_init(&crtc, 4);
+  write_register(0, 7);
+  write_register(4, 1);
+  write_register(9, 1);
+  bool per_frame[48];
+  unsigned frames = 0;
+  bool held_all_frame = true;
+  while (frames < sizeof per_frame / sizeof *per_frame) {
+    /* To a frame's head, then across the whole of that frame. */
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+    bool at_the_head = (crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)) & 0x08) != 0;
+    per_frame[frames++] = at_the_head;
+    for (long waited = 0;; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS); /* a frame that never ends fails here */
+      if (waited >= 4L * FRAME_TICKS) {
+        break;
+      }
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break; /* the tick that ends a frame has already counted the next */
+      }
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      if (((crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)) & 0x08) != 0) !=
+          at_the_head) {
+        held_all_frame = false;
+      }
+    }
+  }
+  TEST_CHECK(held_all_frame);
+  /* And every run of like frames is sixteen long, the first and last apart:
+     those two are however much of a run this reading began and ended inside. */
+  unsigned run = 1;
+  unsigned runs_seen = 0;
+  bool runs_of_sixteen = true;
+  for (unsigned frame = 1; frame < frames; frame++) {
+    if (per_frame[frame] == per_frame[frame - 1]) {
+      run++;
+      continue;
+    }
+    if (runs_seen > 0 && run != 16) {
+      runs_of_sixteen = false; /* the first run began before this reading did */
+    }
+    runs_seen++;
+    run = 1;
+  }
+  TEST_CHECK(runs_of_sixteen);
+  TEST_CHECK(runs_seen >= 2);
+  /* Sixteen apart in either direction is the turn itself. */
+  bool turned = false;
+  for (unsigned frame = 16; frame < frames; frame++) {
+    if (per_frame[frame] != per_frame[frame - 16]) {
+      turned = true;
+    }
+  }
+  TEST_CHECK(turned);
+}
+
+/* And the first bit of the first status byte is the one the Compendium states
+   outright, which is what pins how the rest of that table is read: "bit 0 of
+   status 1 which is worth 1 when C0=R0 (0 otherwise)" (ch. 28.1.10). Every
+   other bit in the two tables names the value it takes while its event holds,
+   so all of them but this one idle at 1 and fall to 0 on their character. */
+static void the_first_status_bit_follows_the_character_counter(void) {
+  static const uint8_t asics[] = {3, 4};
+  for (unsigned index = 0; index < sizeof asics / sizeof *asics; index++) {
+    crtc_init(&crtc, asics[index]);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, 7);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 10));
+    bool followed_the_counter = true;
+    unsigned characters_at_the_end_of_a_line = 0;
+    for (long tick = 0; tick < 4L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+      bool set = (crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)) & 1) != 0;
+      if (set != (crtc.c0 == crtc.registers[0])) {
+        followed_the_counter = false;
+      }
+      characters_at_the_end_of_a_line += set ? 1 : 0;
+    }
+    TEST_CHECK(followed_the_counter);
+    TEST_EQUAL(characters_at_the_end_of_a_line, 4u); /* one a line, and no more */
+  }
+}
+
+/* Ch. 21.3.2: types 0 and 2 "do not have a status register", so &BE00 is a
+   bus nobody drives and the machine reads back whatever it put there. Type
+   1 has one, and its unused bits — 0 to 4 and 7 — read 0 (ch. 21.3.3). */
+static void only_type_1_drives_the_status_port(void) {
+  for (uint8_t type = 0; type < 3; type++) {
+    crtc_init(&crtc, type);
+    uint64_t floating = crtc_set_data(0, 0x77) | CRTC_CS | CRTC_RW;
+    TEST_EQUAL(crtc_data(crtc_access(&crtc, floating)), type == 1 ? 0x00 : 0x77);
+  }
+}
+
+/* And its bit 5, which ch. 21.3.3 gives twice over, in prose and in two
+   diagrams: the BORDER R6 condition on the two heads of line it names,
+   "False: C4=C9=C0=0 / True: C4=R6 & C9=C0=0". Its diagrams read the port
+   four times across each turn and the byte changes on the fourth, where C0
+   comes round to 0 — so the bit speaks for the line being drawn, and a
+   program that reads it during the line before is told the old answer.
+   With rows of eight scanlines and R6 at 25, it rises at the head of the
+   row R6 names and falls at the head of the frame. */
+static void the_status_border_bit_turns_over_at_a_line_head(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
+  crtc_init(&crtc, 1);
+  for (int reg = 0; reg < 14; reg++) {
+    write_register(reg, values[reg]);
+  }
+  int rose[3] = {-1, -1, -1}; /* c4, c9 and c0 where the bit went up */
+  int fell[3] = {-1, -1, -1};
+  bool standing = false;
+  /* A frame to settle on, then the frame that is read. */
+  for (long character = 0; character < 2L * 64 * 312; character++) {
+    crtc_tick(&crtc);
+    bool bit = (crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RW)) & 0x20) != 0;
+    if (bit != standing && character >= 64L * 312) {
+      int *where = bit ? rose : fell;
+      if (where[0] < 0) {
+        where[0] = crtc.c4;
+        where[1] = crtc.c9;
+        where[2] = crtc.c0;
+      }
+    }
+    standing = bit;
+  }
+  TEST_EQUAL(rose[0], 25); /* the row R6 names */
+  TEST_EQUAL(rose[1], 0);  /* on its first scanline */
+  TEST_EQUAL(rose[2], 0);  /* and its first character */
+  TEST_EQUAL(fell[0], 0);  /* and the frame's own head */
+  TEST_EQUAL(fell[1], 0);
+  TEST_EQUAL(fell[2], 0);
+}
+
+/* Ch. 16: the VSYNC's length "can be programmed on CRTC's 0, 3 and 4 (via
+   register R3h). It is fixed at 16 for CRTC's 1 and 2", so the same R3h
+   that shortens a type 0's pulse is not read at all by those two. And a
+   pulse a program triggers, by writing R7 to the row C4 already stands on,
+   is counted by those two "as if the VSYNC had started when C0=0"
+   (ch. 16.4.2, 16.4.3), so it spends a line fewer than a type 0's, which
+   keeps the rest of the line it began in. A pulse C4 simply walks into
+   keeps all sixteen on every type (ch. 28.1.4), which is why the two
+   columns below are set up differently: the first leaves R7 where C4 will
+   meet it, the second writes R7 mid-line to trigger one.
+
+   Counted as the line heads the pulse stands through, which is the measure
+   the chip's own counter takes, C3h advancing at each C0=0. Nothing outside
+   this repository grades the triggered rule: no group on the disc moves
+   when it is taken away. */
+static void each_type_keeps_its_own_vsync_length(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r3;             /* R3h the length asked for, R3l a HSYNC of 14 */
+    int walked_into;        /* line heads a pulse C4 meets stands through */
+    int triggered_mid_line; /* and one an R7 written mid-line begins */
+  } cases[] = {
+      {0, 0x4E, 4, 4},   /* four lines asked for and four given */
+      {1, 0x4E, 16, 15}, /* R3h unread, and a line fewer for being triggered */
+      {2, 0x4E, 16, 15}, /* which ch. 16.4.3 gives this type in the same words */
+      {0, 0x0E, 16, 16}, /* the R3h of 0 that makes a type 0 count 16 too */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    for (int triggered = 0; triggered < 2; triggered++) {
+      crtc_init(&crtc, cases[index].type);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(3, cases[index].r3);
+      write_register(4, 38);
+      write_register(9, 7);
+      write_register(6, 25);
+      /* Left where C4 walks into it, or out of C4's reach until a write
+         puts it under the row the chip already stands on. */
+      write_register(7, triggered ? 127 : 5);
+      int lines = 0;
+      bool standing = false;
+      for (long character = 0; character < 4L * 64 * 312; character++) {
+        bool vsync = (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+        if (vsync && crtc.c0 == 0) {
+          lines++;
+        }
+        if (standing && !vsync) {
+          break;
+        }
+        standing = vsync;
+        if (triggered && !standing && crtc.c9 == 3 && crtc.c0 == 20) {
+          write_register(7, crtc.c4);
+        }
+      }
+      TEST_EQUAL(lines, triggered ? cases[index].triggered_mid_line : cases[index].walked_into);
+    }
+  }
+
+  /* And the pulse an even interlaced frame raises on the half line of its
+     own, which R7 was set for in advance rather than written to trigger: it
+     "starts when R7 was programmed before C4=R7" and so "lasts 16 lines"
+     (ch. 28.1.4), where one a write triggers on the same type gives a line
+     up. */
+  crtc_init(&crtc, 1);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(3, 0x4E);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(6, 25);
+  write_register(7, 5);
+  write_register(8, 1); /* interlace, which raises an even frame's VSYNC late */
+  int lines = 0;
+  bool standing = false;
+  bool began_mid_line = false;
+  for (long character = 0; character < 6L * 64 * 312; character++) {
+    bool vsync = (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+    if (vsync && !standing) {
+      began_mid_line = crtc.c0 != 0;
+      lines = 0;
+    }
+    if (vsync && crtc.c0 == 0) {
+      lines++;
+    }
+    if (standing && !vsync && began_mid_line) {
+      break;
+    }
+    standing = vsync;
+  }
+  TEST_CHECK(began_mid_line);
+  TEST_EQUAL(lines, 16);
+}
+
+/* Every type waits the half line an even frame's VSYNC is held to, and
+   three of the five take a whole line besides: "there is also an exception
+   on CRTC's 0, 3 and 4 when the line count of a C4 character is odd on an
+   odd frame and an odd C4" (ch. 19.7.1). Of a type 1 ch. 19.5.3 says the
+   opposite outright — "the VSYNC is not delayed from a line on odd C4s when
+   R9 is even" — so where an odd frame finds C4 odd, a type 0 raises its
+   VSYNC on the row's second scanline and a type 1 and a type 2 on its
+   first. No line on the disc moves when the type test is taken away. */
+static void types_1_and_2_delay_no_vsync_by_a_whole_line(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t scanline_on_an_odd_frame;
+  } cases[] = {{0, 1}, {1, 0}, {2, 0}, {3, 1}, {4, 1}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 38);
+    write_register(9, 7); /* odd, which is what the whole-line delay asks for */
+    write_register(6, 25);
+    write_register(7, 5); /* odd, so C4 is odd where it meets R7 */
+    write_register(8, 3); /* the interlace video mode */
+    int half_line = -1;
+    int odd_frame_scanline = -1;
+    bool standing = false;
+    for (long character = 0; character < 8L * 64 * 320; character++) {
+      bool vsync = (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+      if (vsync && !standing) {
+        if (!crtc.parity_frame) {
+          half_line = crtc.c0;
+        } else if (odd_frame_scanline < 0) {
+          odd_frame_scanline = crtc.c9;
+        }
+      }
+      standing = vsync;
+      if (half_line >= 0 && odd_frame_scanline >= 0) {
+        break;
+      }
+    }
+    /* The half line is every type's, and it is half of R0 (ch. 16.5). */
+    TEST_EQUAL(half_line, 31);
+    TEST_EQUAL(odd_frame_scanline, cases[index].scanline_on_an_odd_frame);
+  }
+}
+
+/* Which R9 gives a row of a given height is not the same on a type 0 and a
+   type 1. Ch. 28.1.7 sets them side by side: "on CRTC's 0 and 1, with R9
+   programmed respectively with 6 and 7 without having modified R7, the
+   VSYNC occurs 2 times faster, since C4=R7 with characters of 4 lines
+   instead of 8", and ch. 19.4.1 and 19.4.2 say it from the programmer's
+   side — a character of N lines wants "value N-2" from a type 0 and "the
+   value N-1" from a type 1. The reason is in ch. 19.5.3: where a type 0
+   makes its odd-lined rows out of an odd R9, a type 1 makes them out of an
+   even one, and it reads the limit down to that parity where a type 0 reads
+   it up (ch. 19.8.2). The pairs below are ch. 19.5.2's table and ch.
+   19.5.3's diagram, both of which draw the two fields, so both fields are
+   read here: a pair of rows holds the same total on either frame, and it is
+   which of them is the longer that turns over. */
+static void types_0_and_1_want_different_r9s_for_a_row(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r9;
+    int even_field[2]; /* scanlines in the frame's first two rows */
+    int odd_field[2];  /* and in the first two of the frame after it */
+  } cases[] = {
+      {0, 6, {4, 4}, {4, 4}}, /* ch. 28.1.7's pair: one height, two R9s */
+      {1, 7, {4, 4}, {4, 4}},
+      {0, 7, {5, 4}, {4, 5}}, /* and the R9 each of them makes a pair of */
+      {1, 8, {5, 4}, {4, 5}},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 38);
+    write_register(9, cases[index].r9);
+    write_register(6, 25);
+    write_register(7, 35);
+    write_register(8, 3); /* the interlace video mode */
+    int rows[2][2] = {{0, 0}, {0, 0}};
+    int counted[2] = {0, 0};
+    int scanlines = 0;
+    int row = -1;
+    bool parity = false;
+    for (long character = 0; character < 8L * 64 * 320; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 != 0) {
+        continue;
+      }
+      if (crtc.c4 != row) {
+        int field = parity ? 1 : 0;
+        if (row >= 0 && scanlines > 0 && counted[field] < 2) {
+          rows[field][counted[field]++] = scanlines;
+        }
+        scanlines = 0;
+        row = crtc.c4;
+        parity = crtc.parity_frame;
+      }
+      scanlines++;
+    }
+    TEST_EQUAL(rows[0][0], cases[index].even_field[0]);
+    TEST_EQUAL(rows[0][1], cases[index].even_field[1]);
+    TEST_EQUAL(rows[1][0], cases[index].odd_field[0]);
+    TEST_EQUAL(rows[1][1], cases[index].odd_field[1]);
+  }
+}
+
+/* Ch. 19.5.3's diagrams for a pulse of the interlace video mode on a type
+   1, read off the page as drawn: sixteen of them, one for each way the
+   frame's parity, C4's, R9's and C9's can stand when the mode is asked for
+   and given up again. Each is labelled on the page with the Shaker tests
+   that exercise it, and those are the names carried beside the rows below.
+   Each names ParityC9 and ParityFrame after the OUT R8,3 and after the OUT
+   R8,0 that follows it, and draws C9's low bit beside them, character by
+   character, following ParityC9 through both writes — so one pair of
+   expectations answers for the counter and for the parity alike, and those
+   are what this holds the chip to. Every pulse the page draws stays inside
+   one line, the row named M/O among them, so the Shaker test of that name
+   is drawn here and graded elsewhere: the disc's own M pulses across a
+   line, which is the neighbouring test below. Where the chapter's prose
+   gives the rules as three lines of arithmetic, the diagrams give their
+   answers case by case, and a slip in reading either shows up as a
+   disagreement with the other. They are the only outside evidence for three
+   of the rules — the correction C4 makes where R9 is even, the reset of
+   ParityC9 where the frame was even, and the parity the frame takes back
+   when the mode is left — and no line either scoreboard scores can reach
+   them. The last of the three is not falsifiable here at all: in all
+   sixteen the frame takes a parity on leaving that it already held, so what
+   the leaving does is invisible to them. */
+static void an_r8_pulse_leaves_the_parities_the_diagrams_draw(void) {
+  static const struct {
+    bool frame_parity_odd; /* the parity the pulse finds */
+    bool c4_odd;
+    bool r9_odd;
+    bool c9_odd;
+    bool parity_c9_after_on;
+    bool frame_parity_after_on;
+    bool parity_c9_after_off;
+    bool frame_parity_after_off;
+  } cases[] = {
+      /* Initial parity EVEN (page 211) */
+      {false, false, false, false, false, false, false, false}, /* S/W */
+      {false, false, true, false, false, false, false, false},  /* T/X */
+      {false, false, false, true, false, false, false, false},  /* Q/U/Y1 */
+      {false, false, true, true, false, false, false, false},   /* R/V/Z1 */
+      {false, true, false, false, true, false, false, false},   /* D/H */
+      {false, true, true, false, false, false, false, false},   /* E/I */
+      {false, true, false, true, true, false, false, false},    /* B/F */
+      {false, true, true, true, false, false, false, false},    /* C/G */
+      /* Initial parity ODD (page 212) */
+      {true, false, false, false, false, false, false, false}, /* ZA/ZC */
+      {true, false, true, false, false, false, false, false},  /* ZB/ZD */
+      {true, false, false, true, true, true, true, true},      /* P/Y2 */
+      {true, false, true, true, true, true, true, true},       /* Z */
+      {true, true, false, false, true, false, false, false},   /* L/N */
+      {true, true, true, false, false, false, false, false},   /* M/O */
+      {true, true, false, true, false, true, true, true},      /* A/J2 */
+      {true, true, true, true, true, true, true, true},        /* K2 */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 1);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 35);
+    write_register(9, cases[index].r9_odd ? 7 : 6);
+    /* The chip is walked to the standing the diagram names rather than set
+       to it: the counters and the frame's parity are the chip's own, and a
+       state written into them by hand is one it need never have reached. */
+    bool found = false;
+    for (long character = 0; character < 8L * 64 * 400 && !found; character++) {
+      crtc_tick(&crtc);
+      found = crtc.c0 == 20 && ((crtc.c4 & 1) != 0) == cases[index].c4_odd &&
+              ((crtc.c9 & 1) != 0) == cases[index].c9_odd &&
+              crtc.parity_frame == cases[index].frame_parity_odd;
+    }
+    TEST_CHECK(found);
+    if (!found) {
+      continue;
+    }
+    write_register(8, 3); /* OUT R8,3: the mode is asked for */
+    TEST_EQUAL(crtc.parity_c9_held, cases[index].parity_c9_after_on);
+    TEST_EQUAL(crtc.parity_frame, cases[index].frame_parity_after_on);
+    TEST_EQUAL((crtc.c9 & 1) != 0, cases[index].parity_c9_after_on);
+    /* Four characters on, which is where the page draws the second write
+       and near enough what an OUT of its own costs. The line does not end
+       under them, so the mode is never taken up and C9 is the address. */
+    for (int character = 0; character < 4; character++) {
+      crtc_tick(&crtc);
+    }
+    write_register(8, 0); /* and given up again, on the same line */
+    TEST_EQUAL(crtc.parity_c9_held, cases[index].parity_c9_after_off);
+    TEST_EQUAL(crtc.parity_frame, cases[index].frame_parity_after_off);
+    TEST_EQUAL((crtc.c9 & 1) != 0, cases[index].parity_c9_after_off);
+  }
+}
+
+/* Ch. 13.6 draws what an R0 written across a line's end does, a chronogram to
+   a type (ch. 13.6.1, 13.6.2, 13.6.3), each with placements where "Update of
+   R0 ok (just in time)" leaves the line running on and a next one where it is
+   "not considered (too late)". Here a write landing on the character clock
+   that has just ended a line is still in time to move R0 under that
+   comparison, so the line did not end — which of the chronograms' placements
+   that answers to is the one character of shift crtc.h declares. Ch. 13.3's third
+   note works the example for a type 1: "if R0 was 49 and the 5th µsecond of
+   the OUTI is at the position following C0=49, and R0 is modified to 20, then
+   C0 will not be equal to 0 but to 50 in some cases". The hedge is the
+   chapter's own, twice over — the rule itself "takes place after the
+   assignment of R0 with the new value in some cases" — and what the cases are
+   it does not say, so this chip takes the rule whenever the write lands on the
+   clock and the hedge is a debt the disc has not yet called in.
+
+   What a type 1 has that the others do not is a second character: its table
+   in ch. 13.6.2 runs to five placements where ch. 13.6.1's and ch. 13.6.3's
+   run to four, and ch. 13.7.1 names the reason "an internal processing phase
+   shift between this CRTC and CRTCs 0 and 2". A character was drawn in the
+   meantime, and it counts: the counter goes on from what was drawn, not from
+   the ending, or the line comes out a microsecond long. Shaker's B (6) grades
+   both widths of the window, and on all three CRTC types it records.
+
+   The chapter's two blocks are both here: a line of #3F given a new width,
+   and the "Previous R0=0" line, one character long and ending on every
+   character it draws, given a width to run to. The board says which edge an
+   access landed on and the chip says what it means, so this drives the pin
+   itself rather than an instruction. */
+static void a_write_on_the_character_clock_takes_a_line_end_back(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t width;            /* the line's own width */
+    uint8_t written;          /* and what the write hands it */
+    bool on_the_clock;        /* whether the write lands on the character clock */
+    unsigned characters_late; /* how many characters after the ending it lands */
+    uint8_t goes_on_to[3];
+  } cases[] = {
+      /* Ch. 13.3's worked example, and the same write a quarter late. */
+      {1, 49, 20, true, 0, {50, 51, 52}},
+      {1, 49, 20, false, 0, {0, 1, 2}},
+      /* Every type takes the character the ending was decided on. */
+      {0, 49, 20, true, 0, {50, 51, 52}},
+      {2, 49, 20, true, 0, {50, 51, 52}},
+      {3, 49, 20, true, 0, {50, 51, 52}},
+      {4, 49, 20, true, 0, {50, 51, 52}},
+      /* The window is two characters wide, and the character drawn in the
+         second is counted: the counter goes on from 51, not from 50, or the
+         line comes out a microsecond too long. */
+      {1, 49, 20, true, 1, {51, 52, 53}},
+      /* Not three, though. */
+      {1, 49, 20, true, 2, {2, 3, 4}},
+      /* The other four have let it go a character later. */
+      {0, 49, 20, true, 1, {1, 2, 3}},
+      {2, 49, 20, true, 1, {1, 2, 3}},
+      {3, 49, 20, true, 1, {1, 2, 3}},
+      {4, 49, 20, true, 1, {1, 2, 3}},
+      /* A width rewritten with the width it already had ends its line all
+         the same: the comparison it is put to is the one that just held. */
+      {1, 49, 49, true, 0, {0, 1, 2}},
+      /* The chapter's "Previous R0=0" line, given a width to run to, where
+         every character is an ending. A type 1's write reaches the end a
+         character before the one standing, and ch. 13.6.2 draws its OUTI
+         going on a character further than ch. 13.6.1 draws a type 0's or
+         2's, at both placements it gives; the answer does not turn on which
+         character of the run the write lands on. */
+      {1, 0, 16, true, 0, {2, 3, 4}},
+      {1, 0, 16, true, 1, {2, 3, 4}},
+      {0, 0, 16, true, 0, {1, 2, 3}},
+      {0, 0, 16, true, 1, {1, 2, 3}},
+      {2, 0, 16, true, 0, {1, 2, 3}},
+      /* And given a width of 1, which names the character the end before was
+         taken on: a type 1 makes that comparison on the character drawn
+         since, and the line is two characters wide on every type. */
+      {1, 0, 1, true, 0, {0, 1, 0}},
+      {1, 0, 1, true, 1, {0, 1, 0}},
+      {0, 0, 1, true, 0, {1, 0, 1}},
+      /* The same comparison on a wide line, in a type 1's second character. */
+      {1, 49, 50, true, 1, {0, 1, 2}},
+      /* And the same write a quarter late, which no type takes. */
+      {1, 0, 16, false, 0, {0, 1, 2}},
+      /* A width of nothing written where a line's end is standing: the
+         take-back outranks the rule that puts the counter home, so the
+         counter goes on from the character the ending was taken on. */
+      {1, 49, 0, true, 0, {50, 51, 52}},
+      {0, 49, 0, true, 0, {50, 51, 52}},
+      /* And off the clock, where no end is taken back and the width of
+         nothing has the counter to itself: it goes home and stays. A
+         character into a type 1's window the counter is standing on 1 rather
+         than on 0, which is where the two can be told apart. */
+      {1, 49, 0, false, 0, {0, 0, 0}},
+      {1, 49, 0, false, 1, {0, 0, 0}},
+      /* A width of 1, where the take-back lands on the character C0 names
+         2 rather than on its first: the chapter's overflow is an overflow of
+         whatever C0 stood on, not a return to the head of a line. */
+      {1, 1, 20, true, 0, {2, 3, 4}},
+  };
+  static crtc_t line_end_rooms[2];
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    crtc_give_line_end_rooms(&crtc, line_end_rooms);
+    write_register(0, cases[index].width);
+    write_register(4, 38);
+    write_register(9, 7);
+    /* To the character the line ends on, which the chip has just taken. */
+    bool ended = false;
+    bool climbed = false;
+    for (long tick = 0; tick < 4L * SCANLINE && !ended; tick++) {
+      crtc_tick(&crtc);
+      /* A line of one character ends on every character it draws, so its
+         end is the next one either way; a wider one is walked to its own. */
+      ended = cases[index].width == 0 ? tick > 2 : (climbed && crtc.c0 == 0);
+      climbed = climbed || crtc.c0 != 0;
+    }
+    TEST_CHECK(ended);
+    if (!ended) {
+      continue;
+    }
+    /* And then however many characters late the write is to be. */
+    for (unsigned late = 0; late < cases[index].characters_late; late++) {
+      crtc_tick(&crtc);
+    }
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+    uint64_t pins = CRTC_CS | CRTC_RS | crtc_set_data(0, cases[index].written);
+    if (cases[index].on_the_clock) {
+      pins |= CRTC_ON_THE_CHARACTER_CLOCK;
+    }
+    crtc_access(&crtc, pins);
+    /* C0 is read as the chapter prints it, character by character, because a
+       line that runs on and a line that begins again both leave C0 climbing. */
+    TEST_EQUAL(crtc.c0, cases[index].goes_on_to[0]);
+    for (unsigned line = 1; line < 3; line++) {
+      crtc_tick(&crtc);
+      TEST_EQUAL(crtc.c0, cases[index].goes_on_to[line]);
+    }
+  }
+}
+
+/* And the two things that walk cannot see. A line's end goes stale: the chip
+   takes back the end it has just taken, or on a type 1 the one before it, and
+   no other, so a write landing four characters later finds nothing to undo.
+   And the line of one character the rescue lets go is counted again: while R0
+   was 0 "C9 can no longer count" (ch. 13.2.1), and the character the line
+   starts again on is the one that gives the management back.
+
+   That freeze is type 0's in the documentation and every type's here. Ch.
+   13.3 and ch. 13.5 deny it of the rest in as many words — "if R0 is 0, then
+   C9 and R4 continue to be managed normally" — and ch. 13.4 opens the same
+   way. Granting it to type 0 alone was tried and measured: B (6)'s
+   "OUTI ON C0=0,R0=0" did not move, Shaker's own "ANALYZER / FORCED STAB
+   CRTC 0 R0=0" stopped settling, and Batman Forever on a type 1 moved 866
+   frames from its twenty-fifth. So the freeze stays, and what it is standing
+   in for is declared in crtc.h. */
+static void only_the_latest_line_ends_are_taken_back(void) {
+  static crtc_t line_end_rooms[2];
+  crtc_init(&crtc, 1);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
+  write_register(0, 49);
+  write_register(4, 38);
+  write_register(9, 7);
+  bool ended = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended; tick++) {
+    crtc_tick(&crtc);
+    ended = climbed && crtc.c0 == 0;
+    climbed = climbed || crtc.c0 != 0;
+  }
+  TEST_CHECK(ended);
+  for (int character = 0; character < 4; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c0, 4u);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 4u);
+
+  /* A type 1 goes on a character further, from the end before the one
+     standing, and the character it passes C0=1 on was drawn all the same. */
+  static const struct {
+    uint8_t type;
+    int ticks;            /* how far into the frozen line the write lands */
+    uint8_t goes_on_from; /* the character the line goes on from */
+    uint8_t c9;           /* and the row's line it goes on in */
+  } frozen[] = {
+      {0, 8, 1, 1},
+      {1, 8, 2, 1},
+      /* One character after the only end that counted: the end a type 1
+         reaches is that one, so the count it made is taken back with it. */
+      {0, 3, 1, 1},
+      {1, 3, 2, 0},
+  };
+  for (unsigned index = 0; index < sizeof frozen / sizeof *frozen; index++) {
+    crtc_init(&crtc, frozen[index].type);
+    crtc_give_line_end_rooms(&crtc, line_end_rooms);
+    write_register(0, 0);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (int character = 0; character < frozen[index].ticks; character++) {
+      crtc_tick(&crtc);
+    }
+    /* One line's end counted before the freeze shut, and none after it: the
+       management stands at power-on and is withdrawn by the first end that
+       finds C0 unable to reach 1. */
+    TEST_EQUAL(crtc.c9, 1u);
+    uint16_t line_start = crtc.vma;
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 3));
+    TEST_EQUAL(crtc.c0, frozen[index].goes_on_from);
+    TEST_EQUAL(crtc.c9, frozen[index].c9);
+    /* The address walked with the counter through every character drawn. */
+    TEST_EQUAL(crtc.vma - line_start, frozen[index].goes_on_from);
+    /* The first line of its own again is where the management tells: given
+       back on the character C0 names 1, the row moves on at that line's end;
+       withheld, it waits for the line after it. */
+    for (uint8_t character = frozen[index].goes_on_from; character <= 3; character++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 0u);
+    TEST_EQUAL(crtc.c9, (uint8_t)(frozen[index].c9 + 1));
+  }
+
+  /* And the end before goes stale as the end just taken does: a line of one
+     character given a width off the clock ends no more, and a write on the
+     clock four characters on finds nothing of it to take back. */
+  crtc_init(&crtc, 1);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
+  write_register(0, 0);
+  write_register(4, 38);
+  write_register(9, 7);
+  for (int character = 0; character < 8; character++) {
+    crtc_tick(&crtc);
+  }
+  write_register(0, 20);
+  for (int character = 0; character < 4; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c0, 4u);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 30));
+  TEST_EQUAL(crtc.c0, 4u);
+  /* Nor does it come back with the next end the chip takes: the line of 30
+     runs to its own, and a write there takes back that end and no older. */
+  TICK_UNTIL(crtc.c0 == 0);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 40));
+  TEST_EQUAL(crtc.c0, 31u);
+}
+
+/* What "the line that had ended did not end" is worth as a whole. A chip
+   given the width from the start is the oracle: walk one of those beside a
+   chip whose narrow line does end, hand the narrow one that width on the
+   character clock, and from that character the two are the same machine.
+   Every counter the ending moved has to come back for that to hold — the
+   address, the row, the scanline within it, the HSYNC's own count — and the
+   sync is laid across the boundary on purpose, beginning before it and
+   ending after, because a sync is the one thing whose count the ending
+   advances and whose comparison it does not. The pins are what the
+   comparison is made on: they carry the address, the raster address, both
+   syncs and the display, and a frame of them is more than enough ground for
+   any of it to part company.
+
+   The walk is made twice, because R8 at rest leaves the largest body of this
+   type's own state out of the comparison: in the interlace video mode the
+   parities, the line a frame is owed and the raster address the count is
+   read up to are all live, and all of them are the ending's to move and the
+   rescue's to put back (ch. 19.5.3, 19.8.2).
+
+   The width handed over is the oracle's own. At 200 its line never ends; at
+   50 it ends a character after the narrow one did, which is where a type 1's
+   write in its second character finds the new width naming the character the
+   ending was taken on, and the line begun there has to be the oracle's line
+   in every counter a line's head sets. */
+static void walk_a_taken_back_line_beside_its_oracle(uint8_t type, uint8_t r8,
+                                                     unsigned characters_late, uint8_t width) {
+  static crtc_t oracle;
+  static crtc_t line_end_rooms[2][2];
+  static crtc_t ended;
+  const uint8_t registers[] = {1, 40, 48, 0x26, 5, 2, 3, 4, r8, 3};
+  crtc_t *chips[2] = {&oracle, &ended};
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], type);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
+    crtc = *chips[which];
+    for (int number = 1; number < (int)(sizeof registers); number++) {
+      write_register(number, registers[number]);
+    }
+    /* The only thing that differs: the oracle has the width at once, the
+       other a width its line ends at first. R0 is written last so that the
+       address register stands at 0 on both, which is where the write that
+       follows needs it. */
+    write_register(0, which == 0 ? width : 49);
+    *chips[which] = crtc;
+  }
+  /* To the character the narrow line ends on, both chips stepped together.
+     Neither has ended a line before it, so nothing has parted yet. */
+  bool ended_here = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended_here; tick++) {
+    uint64_t wide = crtc_tick(&oracle);
+    uint64_t narrow = crtc_tick(&ended);
+    ended_here = climbed && ended.c0 == 0;
+    climbed = climbed || ended.c0 != 0;
+    /* All but the character the ending was decided on, which is the one cost
+       the rescue cannot undo: those pins went to the board before the write
+       arrived, and they are the ending's. */
+    if (!ended_here) {
+      TEST_EQUAL(narrow, wide);
+    }
+  }
+  TEST_CHECK(ended_here);
+  TEST_CHECK(ended.hsync); /* the sync is standing across the boundary */
+  /* And however many characters late the write is to be, which the one that
+     never ended draws as well: what it draws there is what the rescue has to
+     put back, the address and the sync's own count with it. */
+  for (unsigned late = 0; late < characters_late; late++) {
+    crtc_tick(&oracle);
+    crtc_tick(&ended);
+  }
+  crtc_access(&ended, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, width));
+  TEST_EQUAL(ended.c0, oracle.c0);
+  TEST_EQUAL(ended.c9, oracle.c9);
+  TEST_EQUAL(ended.c4, oracle.c4);
+  TEST_EQUAL(ended.vma, oracle.vma);
+  TEST_EQUAL(ended.c3l, oracle.c3l);
+  TEST_EQUAL(ended.parity_frame, oracle.parity_frame);
+  TEST_EQUAL(ended.parity_c9_held, oracle.parity_c9_held);
+  /* Then a whole frame of pins, which is where a counter restored to the
+     wrong line or a sync restored to the wrong width tells. */
+  for (long tick = 0; tick < 4L * SCANLINE * 40; tick++) {
+    uint64_t wide = crtc_tick(&oracle);
+    uint64_t narrow = crtc_tick(&ended);
+    TEST_EQUAL(narrow, wide);
+  }
+}
+
+static void a_line_taken_back_is_the_line_its_oracle_draws(void) {
+  /* At both widths of the window, and with the interlace mode quiet and live,
+     so the parities and the raster address are in the comparison too. A type 0
+     keeps the first character as a type 1 does, and its line ending moves
+     state a type 1's does not — C9 spent on the adjustment where the other
+     keeps C5 — so it is walked for that character as well. */
+  for (unsigned characters_late = 0; characters_late < 2; characters_late++) {
+    walk_a_taken_back_line_beside_its_oracle(1, 0, characters_late, 200);
+    walk_a_taken_back_line_beside_its_oracle(1, 3, characters_late, 200);
+  }
+  walk_a_taken_back_line_beside_its_oracle(0, 0, 0, 200);
+  walk_a_taken_back_line_beside_its_oracle(0, 3, 0, 200);
+  /* And a width that names the character the ending was taken on. */
+  walk_a_taken_back_line_beside_its_oracle(1, 0, 1, 50);
+  walk_a_taken_back_line_beside_its_oracle(1, 3, 1, 50);
+  walk_a_taken_back_line_beside_its_oracle(0, 0, 0, 50);
+}
+
+/* A line of nothing given a width of 1 by a type 1's write on the character
+   clock takes back the end before the one standing, and the width names the
+   character that end was taken on: the chip has to come out as one handed the
+   same width off the clock two characters sooner, whose counter climbed to 1
+   there and ended its line on the next. The other types take back the end
+   standing, and their oracle is handed the width a character sooner. The run
+   of lines of nothing begins at power-on or on a wide line cut to nothing off
+   the clock, and is this many characters long before the width is given. */
+static void give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(
+    uint8_t type, const uint8_t registers[10], bool after_a_wide_line, int run) {
+  static crtc_t had_it;
+  static crtc_t given_it;
+  static crtc_t line_end_rooms[2][2];
+  crtc_t *chips[2] = {&had_it, &given_it};
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], type);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
+    crtc = *chips[which];
+    for (int number = 1; number < 10; number++) {
+      write_register(number, registers[number]);
+    }
+    write_register(0, after_a_wide_line ? 49 : 0);
+    *chips[which] = crtc;
+  }
+  if (after_a_wide_line) {
+    for (int character = 0; character < SCANLINE && given_it.c0 != 10; character++) {
+      TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+    }
+    for (int which = 0; which < 2; which++) {
+      crtc_access(chips[which], CRTC_CS | crtc_set_data(0, 0));
+      crtc_access(chips[which], CRTC_CS | CRTC_RS | crtc_set_data(0, 0));
+    }
+  }
+  for (int character = 0; character < run; character++) {
+    TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+  }
+  crtc_access(&had_it, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&had_it, CRTC_CS | CRTC_RS | crtc_set_data(0, 1));
+  for (int character = 0; character < (type == 1 ? 2 : 1); character++) {
+    crtc_tick(&had_it);
+    crtc_tick(&given_it);
+  }
+  crtc_access(&given_it, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&given_it, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 1));
+  TEST_EQUAL(given_it.c0, had_it.c0);
+  TEST_EQUAL(given_it.c9, had_it.c9);
+  TEST_EQUAL(given_it.c4, had_it.c4);
+  TEST_EQUAL(given_it.vma, had_it.vma);
+  TEST_EQUAL(given_it.hsync, had_it.hsync);
+  TEST_EQUAL(given_it.c3l, had_it.c3l);
+  TEST_EQUAL(given_it.parity_frame, had_it.parity_frame);
+  for (long tick = 0; tick < 4L * SCANLINE * 40; tick++) {
+    TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+  }
+}
+
+static void a_line_of_nothing_given_a_width_of_one_is_a_line_that_had_it(void) {
+  /* A sync standing across the run, R2 being 0, walked across the whole of
+     its period, so the new line's head meets the sync ending, running and
+     free. */
+  static const uint8_t a_sync_across_the_run[10] = {0, 40, 0, 0x26, 5, 2, 3, 4, 0, 3};
+  for (int run = 3; run < 12; run++) {
+    give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(1, a_sync_across_the_run, false,
+                                                                 run);
+  }
+  /* Frames one line tall, so the run stands on a frame's head and the new
+     line's head is one: the parity turns there, whatever the character
+     before the ending last latched. */
+  static const uint8_t frames_of_one_line[10] = {0, 40, 48, 0x26, 0, 0, 3, 1, 0, 0};
+  give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(1, frames_of_one_line, false, 2);
+  /* The same frames in the interlace video mode for three of the types that
+     take back the end standing. Types 3 and 4 turn their parity at every
+     frame's head, so the head the rescue leaves them has to be one no
+     character of the running line stood on; a type 0 anticipates its parity,
+     shows nothing of the latch, and is walked beside them for the oracle. */
+  static const uint8_t interlaced_frames_of_one_line[10] = {0, 40, 48, 0x26, 0, 0, 3, 1, 3, 0};
+  static const uint8_t other_types[] = {0, 3, 4};
+  for (unsigned index = 0; index < sizeof other_types; index++) {
+    for (int run = 2; run < 6; run++) {
+      give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(
+          other_types[index], interlaced_frames_of_one_line, false, run);
+    }
+  }
+  /* And a wide line that reached C0=2 cut to nothing with no run before the
+     width is given, so the arming of the frame sync it raised is what the new
+     head spends. */
+  static const uint8_t after_an_armed_line[10] = {0, 40, 48, 0x26, 5, 0, 3, 1, 0, 1};
+  give_a_line_of_nothing_a_width_of_one_beside_one_that_had_it(1, after_an_armed_line, true, 0);
+}
+
+/* The same width named on a frame's last line, where the line's end is the
+   frame's head: the head the rescue decides has to be the one a chip handed
+   the width off the clock decides there — the parity turned, the frame sync
+   begun, R7 being 0, and the row's border opened again — in the interlace
+   video mode as out of it. */
+static void a_frame_ended_by_a_width_named_since_is_a_frame_that_had_it(void) {
+  static crtc_t had_it;
+  static crtc_t given_it;
+  static crtc_t line_end_rooms[2][2];
+  static crtc_t looking_ahead;
+  static crtc_t looking_ahead_rooms[2];
+  for (uint8_t r8 = 0; r8 < 4; r8 += 3) {
+    const uint8_t registers[] = {49, 40, 48, 0x26, 5, 0, 3, 0, r8, 3};
+    crtc_t *chips[2] = {&had_it, &given_it};
+    for (int which = 0; which < 2; which++) {
+      crtc_init(chips[which], 1);
+      crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
+      crtc = *chips[which];
+      for (int number = 1; number < (int)(sizeof registers); number++) {
+        write_register(number, registers[number]);
+      }
+      write_register(0, registers[0]);
+      *chips[which] = crtc;
+    }
+    /* To C0=40 on a frame's last line, found by running a copy to the line's
+       end and asking whether it is the frame's head. */
+    bool on_the_last_line = false;
+    for (long tick = 0; tick < 4L * SCANLINE * 40 && !on_the_last_line; tick++) {
+      TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+      if (given_it.c0 == 40 && tick > SCANLINE) {
+        looking_ahead = given_it;
+        crtc_give_line_end_rooms(&looking_ahead, looking_ahead_rooms);
+        for (int ahead = 0; ahead < SCANLINE && looking_ahead.c0 != 0; ahead++) {
+          crtc_tick(&looking_ahead);
+        }
+        on_the_last_line = looking_ahead.c0 == 0 && looking_ahead.c4 == 0 && looking_ahead.c9 == 0;
+      }
+    }
+    TEST_CHECK(on_the_last_line);
+    crtc_access(&had_it, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&had_it, CRTC_CS | CRTC_RS | crtc_set_data(0, 50));
+    for (int character = 0; character < SCANLINE && given_it.c0 != 0; character++) {
+      crtc_tick(&had_it);
+      crtc_tick(&given_it);
+    }
+    TEST_EQUAL(given_it.c0, 0u);
+    crtc_tick(&had_it);
+    crtc_tick(&given_it);
+    crtc_access(&given_it, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&given_it, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 50));
+    TEST_EQUAL(given_it.c0, had_it.c0);
+    TEST_EQUAL(given_it.c4, had_it.c4);
+    TEST_EQUAL(given_it.c9, had_it.c9);
+    TEST_EQUAL(given_it.vma, had_it.vma);
+    TEST_EQUAL(given_it.parity_frame, had_it.parity_frame);
+    TEST_EQUAL(given_it.vsync, had_it.vsync);
+    TEST_EQUAL(crtc_data(crtc_access(&given_it, CRTC_CS | CRTC_RW)),
+               crtc_data(crtc_access(&had_it, CRTC_CS | CRTC_RW)));
+    for (long tick = 0; tick < 2L * 4 * SCANLINE * 40; tick++) {
+      TEST_EQUAL(crtc_tick(&given_it), crtc_tick(&had_it));
+    }
+  }
+}
+
+/* And the two costs the rescue cannot pay, which crtc.h declares and no line
+   of the disc grades. Both are one absence: the character C0 goes on to
+   makes none of its own comparisons, those having been made for the line's
+   ending and undone with it.
+
+   The first is the VSYNC's own authorization, raised at C0=2 (ch. 13.2.2).
+   A line of two characters handed a wider width lands C0 on 2 without any
+   tick standing there, so the authorization is never raised, where a chip
+   that was that wide all along raises it. */
+static void the_costs_a_taken_back_line_cannot_pay(void) {
+  static crtc_t never_ended;
+  static crtc_t line_end_rooms[2][2];
+  static crtc_t ended;
+  crtc_t *chips[2] = {&never_ended, &ended};
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], 1);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
+    crtc = *chips[which];
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(0, which == 0 ? 40 : 1);
+    *chips[which] = crtc;
+  }
+  /* Three characters: the narrow line's second ends it, and the wide one
+     stands on C0=2, which is where the authorization is raised. */
+  for (int character = 0; character < 3; character++) {
+    crtc_tick(&never_ended);
+    crtc_tick(&ended);
+  }
+  TEST_EQUAL(ended.c0, 0u);
+  TEST_EQUAL(never_ended.c0, 2u);
+  TEST_CHECK(never_ended.vsync_armed);
+  crtc_access(&ended, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 40));
+  TEST_EQUAL(ended.c0, 2u);
+  TEST_CHECK(!ended.vsync_armed); /* the cost, stated rather than hidden */
+
+  /* The second is the border R1 asks for, and it is the plainest of them.
+     A line ending on the character before R1 is handed a wider width: the
+     character the counter goes on to is the one a wider line would have met
+     R1 on, and that comparison went with the ending. So the rest of the line
+     stands displayed, where the chip that was that wide all along has
+     bordered from R1 onward (ch. 17.3, 18.2.1). */
+  for (int which = 0; which < 2; which++) {
+    crtc_init(chips[which], 1);
+    crtc_give_line_end_rooms(chips[which], line_end_rooms[which]);
+    crtc = *chips[which];
+    write_register(1, 30);
+    write_register(4, 38);
+    write_register(6, 25); /* or C4 meets R6 at once and borders the frame */
+    write_register(9, 7);
+    write_register(0, which == 0 ? 40 : 29);
+    *chips[which] = crtc;
+  }
+  bool ended_here = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended_here; tick++) {
+    crtc_tick(&never_ended);
+    crtc_tick(&ended);
+    ended_here = climbed && ended.c0 == 0;
+    climbed = climbed || ended.c0 != 0;
+  }
+  TEST_CHECK(ended_here);
+  TEST_EQUAL(never_ended.c0, 30u); /* the character R1 names */
+  crtc_access(&ended, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&ended, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 40));
+  /* Every character from there to the line's new end: one chip draws, the
+     other borders, and they come together again at the head of the next. */
+  for (int character = 0; character < 10; character++) {
+    uint64_t wide = crtc_tick(&never_ended);
+    uint64_t narrow = crtc_tick(&ended);
+    TEST_CHECK((wide & CRTC_DISPTMG) == 0);
+    TEST_CHECK((narrow & CRTC_DISPTMG) != 0);
+  }
+  uint64_t wide_again = crtc_tick(&never_ended);
+  uint64_t narrow_again = crtc_tick(&ended);
+  TEST_EQUAL(ended.c0, 0u);
+  TEST_EQUAL(narrow_again & CRTC_DISPTMG, wide_again & CRTC_DISPTMG);
+}
+
+/* What crosses the boundary unchanged, and what does not. The copy is taken
+   before the host touches the chip, so restoring it wholesale would undo the
+   very write that asked for the restoring: the register file and the register a
+   write is aimed at cross over as they stand. The latch that says R3 was
+   written on this character does not — the tick that ended the line has already
+   spent it, and a line's end is no such write (ch. 15.3.1). */
+static void a_take_back_carries_the_writes_it_cannot_undo(void) {
+  static crtc_t line_end_rooms[2];
+  crtc_init(&crtc, 1);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
+  write_register(0, 49);
+  write_register(4, 38);
+  write_register(9, 7); /* which leaves R9 the register selected */
+  bool reached = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !reached; tick++) {
+    crtc_tick(&crtc);
+    reached = crtc.c0 == 49;
+  }
+  TEST_CHECK(reached);
+  /* An R3 written on the character the line ends on, which that character's
+     own tick reads and spends. */
+  write_register(3, 0x26);
+  TEST_CHECK(crtc.r3_written_for_this_character);
+  write_register(9, 6);
+  crtc_tick(&crtc); /* the line ends here, and the copy is taken */
+  TEST_EQUAL(crtc.c0, 0u);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 50u);
+  /* Spent, and not handed back by the restoring. */
+  TEST_CHECK(!crtc.r3_written_for_this_character);
+  TEST_EQUAL(crtc.registers[9], 6u);
+  /* R0 is still the register aimed at, where the copy predates the select
+     and would have named R9: the next data write must land in R0. */
+  TEST_EQUAL(crtc.address_register, 0u);
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 60));
+  TEST_EQUAL(crtc.registers[0], 60u);
+  TEST_EQUAL(crtc.registers[9], 6u);
+  /* And the R3 the write carried over is the one that stands. */
+  TEST_EQUAL(crtc.registers[3], 0x26u);
+}
+
+/* Ch. 16.4.2 answers for this chip where ch. 16.4.1.1 answers for a type 0,
+   and the two part twice over. A program that writes R7 with the value C4
+   already holds gets its VSYNC outright here — "if R7 is modified with the
+   value of C4, then VSYNC is triggered immediately" — where a type 0 at the
+   head of a line gets a block instead: "except if this modification occurs
+   when C0vs=0 or C0vs=1 ... we are in a BLOCKED VSYNC" (ch. 16.4.1.1), which
+   is a type 0's chapter and has no counterpart in ch. 16.4.2. And this chip
+   reads that equality on the character the write lands on rather than on the
+   next, where the board says the write finished on the character clock: the
+   same quarter ch. 13.7.1's phase shift gives R0, which ch. 16.4.2 times at
+   "the earliest 5 μsec after" against ch. 16.4.1.1's "6 µsec later".
+
+   What it buys a program is ch. 16.4's last chance one microsecond later than
+   types 0, 3 and 4 have it — a type 2 reads the equality as early,
+   on the disc's evidence (crtc.c) — C4 having already walked onto the value being written, where
+   they do not read that equality until the character after. Shaker's B (6)
+   grades exactly that, and its "R7 LAST CHANCE 4TH uSec" came right with
+   it. */
+static void an_r7_written_on_c4_raises_or_blocks_a_vsync_as_each_type_reads_it(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t written_on; /* the character C0 names when the write lands */
+    bool on_the_clock;
+    bool at_once;   /* up before any further character is drawn */
+    bool a_tick_on; /* and up once one has been */
+    unsigned lines; /* line heads the pulse spans, 0 where none begins */
+  } cases[] = {
+      /* Blocked, and no later character brings it round (ch. 16.4.1.1). */
+      {0, 0, true, false, false, 0},
+      {0, 0, false, false, false, 0},
+      /* Read on the character the write lands on, and on the next where the
+         write lands a quarter too late for that one. Either way the pulse
+         crosses sixteen line heads, because a triggered one "counts the line
+         as if the VSYNC had started when C0=0" and so "ends at the end of
+         line 16" however far into a line it began (ch. 16.4.2) — where a type
+         0's, counting the part line as none of R3h's, ends at the end of line
+         17 (ch. 16.4.1.1). */
+      {1, 0, true, true, true, 16},
+      {1, 0, false, false, true, 16},
+      /* And away from the head, where no type is blocked and the quarter is
+         all that separates this one from the rest. */
+      {1, 20, true, true, true, 16},
+      {1, 20, false, false, true, 16},
+      /* A type 2 reads it on that character too, "triggered immediately"
+         (ch. 16.4.3), and its pulse runs as a type 1's; off the clock it waits
+         for the next, an edge taken from the type 1 rather than settled. */
+      {2, 20, true, true, true, 16},
+      {2, 20, false, false, true, 16},
+      /* At a line's head it is a GHOST, only because the sync power-on's R2
+         and R3 of 0 ask for spans it: a pulse that runs and counts as any
+         does, its pin held low (ch. 16.4.3), which the test below grades.
+         The two ASICs keep a type 0's block, their own chapter's answer
+         standing elsewhere; crtc.h says which and why. */
+      {2, 0, true, true, true, 16},
+      {3, 0, true, false, false, 0},
+      {4, 0, true, false, false, 0},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(7, 60); /* beyond C4's reach, so no VSYNC of its own */
+    /* To a line four rows in, C0 having reached 2 on the line before it so
+       that nothing is blocked going in (ch. 13.2.2). */
+    bool arrived = false;
+    for (long tick = 0; tick < 64L * SCANLINE && !arrived; tick++) {
+      crtc_tick(&crtc);
+      arrived = crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == cases[index].written_on;
+    }
+    TEST_CHECK(arrived);
+    TEST_CHECK(!crtc.vsync);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+    uint64_t pins = CRTC_CS | CRTC_RS | crtc_set_data(0, crtc.c4);
+    if (cases[index].on_the_clock) {
+      pins |= CRTC_ON_THE_CHARACTER_CLOCK;
+    }
+    crtc_access(&crtc, pins);
+    TEST_EQUAL(crtc.vsync, cases[index].at_once);
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.vsync, cases[index].a_tick_on);
+    /* And how long the pulse the write raised runs, counted in the line heads
+       it crosses, which is what tells a pulse begun at a head from one begun
+       inside a line. */
+    unsigned heads = 0;
+    for (long tick = 0; tick < 64L * SCANLINE && crtc.vsync; tick++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0) {
+        heads++;
+      }
+    }
+    TEST_EQUAL(heads, cases[index].lines);
+  }
+
+  /* And the write lifts the block before it reads its own equality, which
+     matters wherever the chip arrives at the write already blocked. A line of
+     two characters never reaches the C0=2 that authorizes the pulse, so every
+     head of one blocks it (ch. 13.2.2); the write is what brings the
+     comparison round again, "whatever the value written" (ch. 16.3), and the
+     same character then reads it. */
+  crtc_init(&crtc, 1);
+  write_register(0, 1);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  bool blocked_at_a_head = false;
+  for (long tick = 0; tick < 64L * SCANLINE && !blocked_at_a_head; tick++) {
+    crtc_tick(&crtc);
+    blocked_at_a_head = crtc.c0 == 0 && crtc.vsync_blocked && crtc.c4 == 4;
+  }
+  TEST_CHECK(blocked_at_a_head);
+  TEST_CHECK(!crtc.vsync);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
+  TEST_CHECK(crtc.vsync);
+}
+
+/* A type 2 counts a row's lines as any other chip does and displays from a
+   counter of its own. "In 'Interlace' mode, C9 is compared with R9 in a
+   conventional way to process C4. Another counter, C9.IVM, is used for
+   displaying and managing video pointer updating" (ch. 19.8.3), so where the
+   other four are programmed half a row in the interlace video mode this one
+   is programmed all of it: "when R9 = 7, we have C4 characters of 8 lines for
+   each frame with an update of video pointer every 4 lines" (ch. 19.4.3).
+
+   A row's height is a pair of rows' business on four of the five: where the
+   limit is read to a parity the rows run five lines then four — on an odd R9
+   for types 0, 3 and 4, on an even one for a type 1, which reads its limit down
+   (ch. 19.4.2, 19.8.2) — so what a type has to itself is the pair, not the row.
+
+   Shaker's C (O) is what grades the height: its lines are spaced a row apart
+   and want eight lines to a row, and this chip gave them four until the
+   counter was split in two. */
+static void a_type_2_keeps_its_row_whole_where_the_others_halve_theirs(void) {
+  static const struct {
+    uint8_t type;
+    unsigned lines; /* two rows' lines in the interlace video mode, R9=7 */
+  } cases[] = {{0, 9}, {1, 8}, {2, 16}, {3, 9}, {4, 9}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, 7);
+    write_register(8, 3);
+    /* Into a frame, then two whole rows counted from one boundary to the
+       next but one. */
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    uint8_t row = crtc.c4;
+    for (long tick = 0; tick < 64L * SCANLINE && crtc.c4 == row; tick++) {
+      crtc_tick(&crtc);
+    }
+    row = crtc.c4;
+    unsigned lines = 0;
+    unsigned rows = 0;
+    uint8_t previous_c0 = crtc.c0;
+    while (rows < 2) {
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && previous_c0 != 0) {
+        lines++;
+      }
+      previous_c0 = crtc.c0;
+      if (crtc.c4 != row) {
+        row = crtc.c4;
+        rows++;
+      }
+    }
+    TEST_EQUAL(lines, cases[index].lines);
+  }
+}
+
+/* And what a type 2 shows for those lines is the chapter's own two tables.
+   "C9.VMA=(C9.IVM*2) or Parity" (ch. 19.8.3), so an even frame's row of eight
+   runs 0, 2, 4, 6, 0, 2, 4, 6 and an odd frame's 1, 3, 5, 7, 1, 3, 5, 7,
+   which is the "Switching in IVM Mode on CRTC 2" diagram read down its two
+   columns; an R9 of 6 gives the same chapter's worked seven, "on even frames,
+   C9.VMA will be 0, 2, 4, 6, 0, 2, 4 (C9.IVM=0,1,2,3,0,1,2)". The row after
+   the first shows the same addresses and not the opposite parity, all eight of
+   those diagrams giving C4=1 what they gave C4=0: this chip's parity is the
+   frame's whatever the row, "parity is respected whatever the values of R9 and
+   C4" (ch. 19.5.4), where the balancing every other type does would alternate
+   them.
+
+   The pointer is left behind on the lines that counter is zeroed on, "in
+   order to update the VMA video pointer without C4 being incremented" (ch.
+   19.4.3) — twice to a row where R9 is odd, "the video address is updated 2
+   times for each value of C4", and once where it is even, the row ending a
+   line before the counter comes round: "if R9 is even, C9 reaches R9 before
+   C9.IVM reaches R9 (out of parity) and the VMA' video pointer is not
+   transferred into VMA" (ch. 19.8.3).
+
+   The frame's own first row is measured beside an interior one because a
+   counter the frame's head forgot to zero shows there and nowhere else: it
+   ran 6, 8, 10, 12, 0, 2, 4, 6 until that head zeroed it. */
+static void a_type_2_shows_its_rows_the_addresses_its_chapter_tabulates(void) {
+  static const uint8_t even_frame[] = {0, 2, 4, 6, 0, 2, 4, 6};
+  static const uint8_t odd_frame[] = {1, 3, 5, 7, 1, 3, 5, 7};
+  static const uint8_t even_frame_at_r9_of_6[] = {0, 2, 4, 6, 0, 2, 4};
+  static const uint8_t odd_frame_at_r9_of_6[] = {1, 3, 5, 7, 1, 3, 5};
+  static const struct {
+    uint8_t r9;
+    uint8_t row;          /* the row of the frame this reads */
+    bool parity;          /* and the frame parity it reads it on */
+    const uint8_t *shown; /* the addresses it shows, a line each */
+    unsigned lines;
+    unsigned captures; /* and the times it leaves the pointer behind */
+  } cases[] = {
+      {7, 0, false, even_frame, 8, 2},
+      {7, 1, false, even_frame, 8, 2}, /* and the row after it, the parity not turning with C4 */
+      {7, 0, true, odd_frame, 8, 2},   /* the diagram's other column */
+      {7, 1, true, odd_frame, 8, 2},
+      {6, 1, false, even_frame_at_r9_of_6, 7, 1},
+      {6, 1, true, odd_frame_at_r9_of_6, 7, 1},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, cases[index].r9);
+    write_register(8, 3);
+    /* Two frames in, so that the frame being read is one this chip built
+       rather than the one it powered on into, and at its head. */
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+               crtc.parity_frame == cases[index].parity);
+    TICK_UNTIL(crtc.c4 == cases[index].row);
+    uint8_t row = crtc.c4;
+    unsigned lines = 0;
+    unsigned captures = 0;
+    uint16_t pointer = crtc.vma_;
+    bool shown_as_tabulated = true;
+    while (crtc.c4 == row) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c4 != row) {
+        break; /* the boundary character belongs to the row after this one */
+      }
+      if (crtc.vma_ != pointer) {
+        captures++;
+        pointer = crtc.vma_;
+      }
+      if (crtc.c0 != 1) {
+        continue; /* one reading a line, taken away from either edge of it */
+      }
+      if (lines >= cases[index].lines || crtc_ra(pins) != cases[index].shown[lines]) {
+        shown_as_tabulated = false;
+      }
+      lines++;
+    }
+    TEST_CHECK(shown_as_tabulated);
+    TEST_EQUAL(lines, cases[index].lines);
+    TEST_EQUAL(captures, cases[index].captures);
+  }
+}
+
+/* And how far that leaves the pointer walking in a row is the plainest reading
+   of the rule there is. "When R9 = 7, we have C4 characters of 8 lines for each
+   frame with an update of video pointer every 4 lines" (ch. 19.4.3), so a row
+   of a type 2's covers two rows' worth of memory and the pointer steps R1
+   twice over it. Outside the mode it steps R1 once, and inside it at an even R9
+   once as well, the row ending a line before the counter comes round: "if R9 is
+   even, C9 reaches R9 before C9.IVM reaches R9 (out of parity) and the VMA'
+   video pointer is not transferred into VMA" (ch. 19.8.3). No other type does
+   any of this — the rule is a type 2's, and this is what says so. */
+static void a_type_2_walks_its_pointer_two_rows_of_memory_to_a_row(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r9;
+    uint8_t r8;    /* 3 asks for the interlace video mode, 0 for none */
+    uint16_t step; /* what the pointer walks from one row's head to the next */
+  } cases[] = {
+      {2, 7, 3, 80}, /* two rows of memory: R1 twice */
+      {2, 7, 0, 40}, /* and out of the mode, the once every type takes */
+      {2, 6, 3, 40}, /* an even R9 loses the transfer at the row's end */
+      {0, 7, 3, 40},
+      {1, 7, 3, 40},
+      {3, 7, 3, 40},
+      {4, 7, 3, 40},
+      /* And at an R9 small enough that a halving type's row is a line or two,
+         its display counter comes round every line — so a rule let loose from
+         this type would leave the pointer on every one of them. */
+      {0, 1, 3, 40},
+      {0, 3, 3, 40},
+      {3, 1, 3, 40},
+      {4, 3, 3, 40},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(9, cases[index].r9);
+    write_register(8, cases[index].r8);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    bool steps_as_the_chapter_says = true;
+    for (unsigned row = 0; row < 3; row++) {
+      uint16_t was = crtc.vma;
+      uint8_t here = crtc.c4;
+      while (crtc.c4 == here) {
+        crtc_tick(&crtc);
+      }
+      TICK_UNTIL(crtc.c0 == 0);
+      if ((uint16_t)(crtc.vma - was) != cases[index].step) {
+        steps_as_the_chapter_says = false;
+      }
+    }
+    TEST_CHECK(steps_as_the_chapter_says);
+  }
+}
+
+/* And a mode given in the middle of a row moves neither that row's end nor
+   the address of the line that asked. Ch. 19.8.3 draws this eight times over,
+   walking R8=3 down all eight lines of a row on both frames and printing the
+   address of every line: the row ends after C9=7 every time, "in 'Interlace'
+   mode, C9 is compared with R9 in a conventional way to process C4", and the
+   asking line keeps the address it already had, the doubling arriving with the
+   line after it ("the status ... will be performed on the next C0=0, after the
+   C9/R9 test of the line", ch. 19.8.1).
+
+   What the lines after it show is the display counter as it stood all along,
+   which is how those tables prove it was counting while the mode was off:
+   asked on C9=6 the last line shows 6, and a counter that had waited for the
+   mode would show 0. "This management of C9.IVM takes place all the time,
+   including when the IVM mode is not activated" (ch. 19.8.3).
+
+   The tables are read at a character early in each line, so they say nothing
+   about where inside the asking line the change lands — which is the immediacy
+   this chip does not have and crtc.h declares. */
+static void a_type_2_ends_its_row_where_r9_says_whenever_the_mode_arrives(void) {
+  /* Ch. 19.8.3's switching diagrams, even frame, C4=0: one row for each line
+     the mode is asked on, each holding that row's eight addresses. */
+  static const uint8_t asked_on_each_line[8][8] = {
+      {0, 2, 4, 6, 0, 2, 4, 6}, {0, 1, 4, 6, 0, 2, 4, 6}, {0, 1, 2, 6, 0, 2, 4, 6},
+      {0, 1, 2, 3, 0, 2, 4, 6}, {0, 1, 2, 3, 4, 2, 4, 6}, {0, 1, 2, 3, 4, 5, 4, 6},
+      {0, 1, 2, 3, 4, 5, 6, 6}, {0, 1, 2, 3, 4, 5, 6, 7},
+  };
+  for (uint8_t row = 0; row <= 1; row++) {
+    for (uint8_t line = 0; line <= 7; line++) {
+      crtc_init(&crtc, 2);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(4, 38);
+      write_register(6, 25);
+      write_register(9, 7);
+      for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+        crtc_tick(&crtc);
+      }
+      TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame);
+      TICK_UNTIL(crtc.c4 == row);
+      unsigned lines = 0;
+      bool shown_as_tabulated = true;
+      while (crtc.c4 == row) {
+        if (crtc.c9 == line && crtc.c0 == 30) {
+          write_register(8, 3); /* the mode, asked for in the middle of a line */
+        }
+        uint64_t pins = crtc_tick(&crtc);
+        if (crtc.c4 != row) {
+          break; /* the boundary character belongs to the row after this one */
+        }
+        if (crtc.c0 != 1) {
+          continue; /* one reading a line, taken before the write lands */
+        }
+        if (lines >= 8 || crtc_ra(pins) != asked_on_each_line[line][lines]) {
+          shown_as_tabulated = false;
+        }
+        lines++;
+      }
+      TEST_CHECK(shown_as_tabulated);
+      TEST_EQUAL(lines, 8u);
+    }
+  }
+}
+
+/* The counter goes on counting through a frame's additional lines too, which
+   on this type are counted on C5 while "the row keeps its own count through
+   all of it" (ch. 11.2.3, 11.3.1). A row's end zeroes both counters, so the
+   padding opens on a fresh one and walks the same two-step: R5 of four gives
+   four lines showing 0, 2, 4 and 6. A counter left standing there would show
+   one address four times over. */
+static void a_type_2_counts_its_display_through_the_additional_lines(void) {
+  static const uint8_t shown[] = {0, 2, 4, 6};
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(4, 3);
+  write_register(5, 4);
+  write_register(6, 25);
+  write_register(9, 7);
+  write_register(8, 3);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && !crtc.parity_frame);
+  /* One whole frame, a reading a line: the four rows R4 asks for at eight
+     lines each, and then the four R5 adds after them. */
+  uint8_t seen[64];
+  unsigned lines = 0;
+  for (long tick = 0; tick < 64L * SCANLINE && lines < sizeof seen; tick++) {
+    uint64_t pins = crtc_tick(&crtc);
+    if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+      break; /* the frame after this one has begun */
+    }
+    if (crtc.c0 == 1) {
+      seen[lines++] = crtc_ra(pins);
+    }
+  }
+  TEST_EQUAL(lines, 4u * 8u + 4u);
+  bool padded_as_the_counter_says = lines == 36;
+  for (unsigned line = 0; padded_as_the_counter_says && line < sizeof shown; line++) {
+    padded_as_the_counter_says = seen[32 + line] == shown[line];
+  }
+  TEST_CHECK(padded_as_the_counter_says);
+}
+
+/* Ticks until the VSYNC is up, counted; four frames and it gives up. */
+static long ticks_to_the_vsync(void) {
+  long ticks = 0;
+  while (!crtc.vsync && ticks < 4L * FRAME_TICKS) {
+    crtc_tick(&crtc);
+    ticks++;
+  }
+  return ticks;
+}
+
+/* A type 2 begins a frame again where the interlace video mode is switched on
+   during its first line under an odd frame. "If the IVM mode is activated on
+   the first line of an odd frame, then this line will become an additional
+   line, and a new line 0 will follow the old line 0, which will extend the
+   size of the frame by R0 µsec. This is true whatever the value of C0 (0 to
+   R0) on which the IVM mode is activated" (ch. 19.6.3), and "if the IVM mode
+   is activated on the first line of a frame (When C4=C9=0) while the parity
+   was odd, then C9 and C9.IVM are cleared on the 2nd line" (ch. 19.8.3). Both
+   chapters are a type 2's, and no other type is given the rule.
+
+   So the line after the first is read at its head on all five, and on a type
+   2 the frame is timed from its head to its VSYNC against the same frame given
+   the mode a line later, which is where the one line the chapter names shows.
+   That is asserted as a whole line, R0+1 characters, where the chapter says
+   "R0 µsec": "a new line 0" is a whole line, and ch. 16.2.2 speaks of a line
+   the same way, each further line of a sync on these chips "increases the
+   duration of the signal by R0 µsec". Shaker's C (S) grades the whole frame, wanting
+   a line more of a type 2 than of types 0 and 1, and the routine that settles
+   the parity before its C (O), C (P), C (S) and C (8) reads this very line to
+   learn which frame it is on. */
+static void a_type_2_begins_an_odd_frame_again_where_its_first_line_takes_the_mode(void) {
+  static const uint8_t characters[] = {0, 20, 63};
+  for (uint8_t type = 0; type < 5; type++) {
+    for (int odd = 0; odd < 2; odd++) {
+      for (unsigned index = 0; index < sizeof characters; index++) {
+        long to_the_vsync[2] = {0, 0};
+        for (uint8_t line = 0; line < 2; line++) {
+          crtc_init(&crtc, type);
+          write_register(0, 63);
+          write_register(1, 40);
+          write_register(2, 46);
+          write_register(4, 38);
+          write_register(6, 25);
+          write_register(7, 30);
+          write_register(9, 7);
+          for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+            crtc_tick(&crtc);
+          }
+          TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame == odd);
+          long ticks = 0;
+          while (!(crtc.c9 == line && crtc.c0 == characters[index]) && ticks < FRAME_TICKS) {
+            crtc_tick(&crtc);
+            ticks++;
+          }
+          TEST_CHECK(ticks < FRAME_TICKS);
+          write_register(8, 3);
+          if (line == 0) {
+            do {
+              crtc_tick(&crtc);
+              ticks++;
+            } while (crtc.c0 != 0 && ticks < FRAME_TICKS);
+            TEST_CHECK(ticks < FRAME_TICKS);
+            bool begun_again = crtc.c4 == 0 && crtc.c9 == 0 && (type != 2 || crtc.c9_ivm == 0);
+            TEST_EQUAL(begun_again, type == 2 && odd);
+          }
+          to_the_vsync[line] = ticks + ticks_to_the_vsync();
+          TEST_CHECK(crtc.vsync);
+        }
+        if (type == 2) {
+          TEST_EQUAL(to_the_vsync[0] - to_the_vsync[1], odd ? SCANLINE : 0);
+        }
+      }
+    }
+  }
+}
+
+/* Nor where the mode was never activated on that line: only written again, a
+   frame's head having found it standing, or asked for without the video half
+   of it, R8 of 1 being the sync mode alone. The chapters' condition is the
+   IVM mode "activated". Nor on the first line of any row but the frame's own,
+   which ch. 19.8.3 names by its counters, "When C4=C9=0". Nor where it is
+   given up again inside the line. The chapter says that of the additional
+   line a frame's end adds — "if the IVM mode is disabled during the
+   additional line (C4 being then greater than R4), then C4 will not be
+   automatically reset to 0 on the next line. C9 will count until it reaches
+   R9" (ch. 19.6.3) — and that it reaches this line too, which the same
+   chapter calls an additional line, is our reading, and nothing we can run
+   grades it. */
+static void a_type_2_first_line_goes_on_counting_where_the_mode_did_not_arrive(void) {
+  static const struct {
+    uint8_t standing;     /* R8 as the frame's head finds it */
+    uint8_t row;          /* the row whose first line the two writes are made on */
+    uint8_t first_write;  /* R8, at C0=10 */
+    uint8_t second_write; /* R8, at C0=30 */
+  } cases[] = {{3, 0, 3, 3}, {0, 0, 1, 1}, {0, 5, 3, 3}, {0, 0, 3, 0}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, cases[index].standing);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 10 && crtc.c4 == cases[index].row && crtc.c9 == 0 && crtc.parity_frame);
+    write_register(8, cases[index].first_write);
+    TICK_UNTIL(crtc.c0 == 30);
+    write_register(8, cases[index].second_write);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, cases[index].row);
+    TEST_EQUAL(crtc.c9, 1);
+  }
+}
+
+/* And not once C4 has moved off the frame's first line under it, which only a
+   line of one character can do: it lands the C4 increment the line before
+   armed without ever reaching the character that manages the rest (ch.
+   13.2.4). The mode switched on there does not begin the frame again from the
+   row after. No Z80 can arrange it, the two writes landing in one microsecond;
+   it is here so that the state cannot outlive the line it names. */
+static void a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(4, 38);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 0);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame);
+  write_register(0, 0);
+  write_register(8, 3);
+  crtc_tick(&crtc);
+  TEST_EQUAL(crtc.c4, 1);
+  write_register(0, 63);
+  TICK_UNTIL(crtc.c0 == 1);
+  TICK_UNTIL(crtc.c0 == 0);
+  TEST_EQUAL(crtc.c4, 2);
+}
+
+/* Stops on the head of the line interlace adds to an even frame of 39 rows of
+   eight, R5 lines before it as asked. */
+static void stand_on_the_head_of_the_interlace_line(uint8_t type, uint8_t r5, uint8_t r8) {
+  crtc_init(&crtc, type);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(4, 38);
+  write_register(5, r5);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 7);
+  write_register(8, r8);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 0 && crtc.interlace_line_given);
+}
+
+/* And where interlace adds its line after the padding's R5 lines, that line
+   is the frame's last rather than the R5 lines' own last: eight R5 lines end
+   a row and hand VMA on, so the interlace line begins forty on from the
+   frame's offset of 0, and the frame after it begins from the offset that
+   line took. */
+static void a_type_2s_interlace_line_is_the_last_its_pointer_knows(void) {
+  stand_on_the_head_of_the_interlace_line(2, 8, 1);
+  TEST_EQUAL(crtc.vma, 0x28);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+  TEST_EQUAL(crtc.vma, 0);
+}
+
+/* Given up while it is displayed, the interlace line is no last line: "if
+   the interlace mode is disabled (R8=0) while the 'Interlace' line is
+   displayed, then the 'Last Line' condition is cancelled" (ch. 11.9). Given
+   up before C0 meets R1, it takes no R12 written on it, and the line after
+   it, the frame going on, begins from the offset the frame's last line took;
+   given up after, it has taken that R12 already, and the line after begins
+   there, which is ours. */
+static void a_type_2s_interlace_line_given_up_is_no_last_line(void) {
+  static const struct {
+    uint8_t character; /* C0 R8=0 is written on */
+    uint16_t next_line_begins_at;
+  } cases[] = {{10, 0x0000}, {50, 0x3000}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    stand_on_the_head_of_the_interlace_line(2, 0, 1);
+    TEST_EQUAL(crtc.vma, 0);
+    TICK_UNTIL(crtc.c0 == 5);
+    write_register(12, 0x30);
+    TICK_UNTIL(crtc.c0 == cases[index].character);
+    write_register(8, 0);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 39);
+    TEST_EQUAL(crtc.c9, 1);
+    TEST_EQUAL(crtc.vma, cases[index].next_line_begins_at);
+  }
+}
+
+/* A frozen line of one character, R0 at 0, is no line the padding ended on,
+   though the line before it was: with R1 at 0 the next frame's head cuts the
+   offset into the latch once, and the frozen heads after it, each comparing
+   C0 with R1 again, take nothing more of an R13 moved among them. The freeze
+   on a type 2 is ours (crtc.h). */
+static void a_type_2s_frozen_line_ended_no_padding(void) {
+  run_a_type_2(46, 38, 7);
+  write_register(5, 1);
+  write_register(12, 0x01);
+  write_register(13, 0x23);
+  for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+    crtc_tick(&crtc);
+  }
+  TICK_UNTIL(crtc.c0 == 63 && crtc.c4 == 39 && crtc.vertical_adjustment_in_progress);
+  write_register(1, 0);
+  TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+  uint16_t cut_once = crtc.vma_;
+  TEST_EQUAL(cut_once, 0x0123);
+  write_register(0, 0);
+  write_register(13, 0x00);
+  for (int tick = 0; tick < 8; tick++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.vma_, cut_once);
+}
+
+/* The other half of ch. 19.6.3's "noticeable bug on the management of the
+   additional line", on the line a frame's end adds: "if the IVM mode is
+   disabled during the additional line (C4 being then greater than R4), then
+   C4 will not be automatically reset to 0 on the next line. C9 will count
+   until it reaches R9, and C4 will increment until it reaches R4", and the
+   chapter's example is this frame: R4=38 and R5=0, "an additional IVM line is
+   added on C4=39, C9=0. If IVM is disabled on this line (R8=0), then C9 will
+   count to R9, then C4 will be incremented again to 40" (ch. 19.6.3). Ch.
+   11.9 says it of "the interlace mode ... (R8=0)", and that "the current line
+   is no longer considered as an interlace line". A type 2's alone; the other
+   four end the frame after the line as they would have.
+
+   Counted from the head of the interlace line to the head of the next frame: on
+   a type 2 the line itself and the rest of its row, the rows C4 climbs through
+   to 127 and round, and the frame's rows up to R4 again, 1024 lines. With R5=1
+   the line follows an R5 line, and R4 moved onto C4 inside it — "it is
+   perfectly possible to reprogram R4 with C4 (equal to the old R4+1) in order
+   to reactivate the 'Last Line' state when C9 reaches R9" (ch. 11.9) — makes
+   that row's own last line a last line like any other, which takes its R5 line,
+   the line before having been no interlace line: eight lines, where the machine
+   answers C (P)'s #0020 as silicon does. Made a last line on the line itself —
+   R4 and R9 moved onto the counters at C0=1 — the line is padded or ends the
+   frame as any last line: two lines with R5=1, one without, where "C4 is
+   increasing if it is different from R4" (ch. 11.9) and here it is not. R8
+   written on the line's last character, after the C0=R0 read that asks for the
+   line after it, gives the line up all the same: padded where R5 is 1, which
+   only a line given up is, and with no second interlace line where R5 is 0.
+   Made only its row's end, R9 alone moved, it is no last line, and a type 2
+   pads no row past R4 (crtc.c): C4 climbs round to R4 on rows of two lines and
+   the frame is padded there, 256 lines in all, the climb Shaker's C (P) holds a
+   type 2 to. The sync mode given up is ch. 11.9's "interlace mode" too; the
+   video mode given up with the sync mode kept, R8 from 3 to 1, is not, though
+   ch. 19.6.3's "IVM mode" would say it was; and a mode given up and asked for
+   again inside the line is not given up. Those three are our reading of the two
+   chapters, and nothing we can run grades them. */
+static void a_type_2_frame_goes_on_where_its_interlace_line_gives_up_interlace(void) {
+  static const struct {
+    uint8_t r5;
+    uint8_t standing;     /* R8 as the frame has it */
+    uint8_t first_write;  /* R8, at C0=10 of the interlace line */
+    uint8_t r4;           /* R4, at C0=20 */
+    uint8_t second_write; /* R8, at C0=30 */
+    long lines_on_a_type_2;
+  } cases[] = {
+      {0, 3, 0, 38, 0, 1024}, {1, 3, 0, 39, 0, 8}, {0, 1, 0, 38, 0, 1024},
+      {0, 3, 1, 38, 1, 1},    {0, 3, 0, 38, 3, 1},
+  };
+  for (uint8_t type = 0; type < 5; type++) {
+    for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+      stand_on_the_head_of_the_interlace_line(type, cases[index].r5, cases[index].standing);
+      uint8_t row = crtc.c4;
+      uint8_t line = crtc.c9;
+      uint8_t frames = crtc.frames_counted;
+      TICK_UNTIL(crtc.c0 == 10);
+      write_register(8, cases[index].first_write);
+      TICK_UNTIL(crtc.c0 == 20);
+      write_register(4, cases[index].r4);
+      TICK_UNTIL(crtc.c0 == 30);
+      write_register(8, cases[index].second_write);
+      TICK_UNTIL(crtc.c0 == 0);
+      long wanted = type == 2 ? cases[index].lines_on_a_type_2 : 1;
+      TEST_EQUAL(crtc.c4, wanted == 1 ? 0 : row);
+      TEST_EQUAL(crtc.c9, wanted == 1 ? 0 : line + 1);
+      long lines = 1;
+      while (crtc.frames_counted == frames && lines < 2000) {
+        TICK_UNTIL(crtc.c0 == 1);
+        TICK_UNTIL(crtc.c0 == 0);
+        lines++;
+      }
+      TEST_EQUAL(lines, wanted);
+    }
+  }
+
+  static const struct {
+    uint8_t r5;
+    bool r4_onto_c4;   /* R4 moved with R9, or R9 alone */
+    uint8_t character; /* the one R8=0 is written on */
+    long lines;
+  } ends[] = {
+      {0, true, 10, 1}, {1, true, 10, 2}, {0, true, 63, 1}, {1, true, 63, 2}, {1, false, 10, 256}};
+  for (unsigned index = 0; index < sizeof ends / sizeof *ends; index++) {
+    stand_on_the_head_of_the_interlace_line(2, ends[index].r5, 3);
+    uint8_t frames = crtc.frames_counted;
+    TICK_UNTIL(crtc.c0 == 1);
+    if (ends[index].r4_onto_c4) {
+      write_register(4, crtc.c4);
+    }
+    write_register(9, crtc.c9);
+    TICK_UNTIL(crtc.c0 == ends[index].character);
+    write_register(8, 0);
+    TICK_UNTIL(crtc.c0 == 0);
+    long lines = 1;
+    while (crtc.frames_counted == frames && lines < 2000) {
+      TICK_UNTIL(crtc.c0 == 1);
+      TICK_UNTIL(crtc.c0 == 0);
+      lines++;
+    }
+    TEST_EQUAL(lines, ends[index].lines);
+  }
+}
+
+/* A width of nothing puts the counter home wherever it stood when the write
+   landed. The chapters put it only from a counter already there — "if R0=0,
+   then C0 never reaches 1 (and therefore remains at 0)" (ch. 13.2.1), "when
+   R0 is 0 and C0=0, then C0 remains at 0" (ch. 13.2.6) — so the reach past
+   C0=0 is this chip's own and Shaker's B (6) is all that stands behind it:
+   its "OUTI ON C0=0,R0=0" writes the width seven microseconds before the
+   OUTI's write lands, and reads that write landing on C0=0, which a counter
+   spending those microseconds climbing cannot do. The disc grades it on the
+   type 0, 1, 2 and 4 records, right on all four, and the type 3 is walked
+   here on nothing but that.
+
+   What it must not become is the plain overrun of a counter that can no
+   longer meet its width, which leaves it climbing the eight bits it has and
+   coming round — ch. 13.3's third note reaches the same overflow by another
+   road, "C0 will not be equal to 0 but to 50 in some cases". The two rules
+   part on whether the width written is zero, and a chip that ran them
+   together would answer this line and fail that note, so both are graded
+   here. */
+static void a_width_of_nothing_puts_the_counter_at_nothing(void) {
+  static const uint8_t types[] = {0, 1, 2, 3, 4};
+  for (unsigned index = 0; index < sizeof types / sizeof types[0]; index++) {
+    crtc_init(&crtc, types[index]);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    /* Well into a line, so the counter has somewhere to fall from. */
+    for (long tick = 0; tick < 4L * SCANLINE && crtc.c0 != 20; tick++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 20u);
+    write_register(0, 0);
+    TEST_EQUAL(crtc.c0, 0u);
+    /* And it stays there, drawing a character to a line for as long as the
+       width says nothing. */
+    for (int character = 0; character < 8; character++) {
+      crtc_tick(&crtc);
+      TEST_EQUAL(crtc.c0, 0u);
+    }
+    /* The quarter the write lands on is nothing to it: a width of nothing
+       names every character whenever it arrives. */
+    crtc_init(&crtc, types[index]);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (long tick = 0; tick < 4L * SCANLINE && crtc.c0 != 20; tick++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 20u);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+    crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 0));
+    TEST_EQUAL(crtc.c0, 0u);
+
+    /* Where a width narrowed to something the counter has passed does climb,
+       which is the overflow ch. 13.3's third note reaches by its own road. */
+    crtc_init(&crtc, types[index]);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(9, 7);
+    for (long tick = 0; tick < 4L * SCANLINE && crtc.c0 != 20; tick++) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 20u);
+    write_register(0, 10);
+    TEST_EQUAL(crtc.c0, 20u);
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.c0, 21u);
+  }
+}
+
+/* A place to go back to that the host has taken away, or swapped for
+   another: whatever the old one holds is not this one's, and a chip handed
+   none has nowhere to go back to at all. Either way the line's end that was
+   standing is no longer standing. */
+static void a_line_end_does_not_outlive_the_room_holding_it(void) {
+  static crtc_t line_end_rooms[2];
+  crtc_init(&crtc, 1);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
+  write_register(0, 49);
+  write_register(4, 38);
+  write_register(9, 7);
+  bool ended = false;
+  bool climbed = false;
+  for (long tick = 0; tick < 4L * SCANLINE && !ended; tick++) {
+    crtc_tick(&crtc);
+    ended = climbed && crtc.c0 == 0;
+    climbed = climbed || crtc.c0 != 0;
+  }
+  TEST_CHECK(ended);
+  TEST_CHECK(crtc.a_line_end_is_kept);
+  crtc_give_line_end_rooms(&crtc, 0);
+  TEST_CHECK(!crtc.a_line_end_is_kept);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 0u);
+
+  /* And the end before, which a type 1 keeps on a line of one character, is
+     let go with the rooms holding it just the same. */
+  static crtc_t other_rooms[2];
+  crtc_init(&crtc, 1);
+  crtc_give_line_end_rooms(&crtc, line_end_rooms);
+  write_register(0, 0);
+  for (int character = 0; character < 4; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(crtc.the_line_end_before_is_kept);
+  crtc_give_line_end_rooms(&crtc, other_rooms);
+  TEST_CHECK(!crtc.a_line_end_is_kept);
+  TEST_CHECK(!crtc.the_line_end_before_is_kept);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 20));
+  TEST_EQUAL(crtc.c0, 0u);
+}
+
+/* And a pulse the doubling starts inside, which is the other half of the
+   same rule. Ch. 19.8.2 gives a type 1 one counter and it is the address —
+   in the mode it steps by two, and when R8 returns to 0 "the counting logic
+   normally resumes" from the line the address had reached. This chip keeps
+   a count and a parity apart, so the two are handed back to each other at
+   the edge: without that the address repeats a line, and the row runs one
+   longer than the chip's. Shaker's C (3) puts its thirteenth test here, and
+   the write's own settling of C9 is refused on this edge because the bit it
+   would settle is the one the doubling already fills. */
+static void a_mode_taken_up_inside_a_row_is_counted_from_the_address(void) {
+  static const struct {
+    uint8_t type;
+    bool frame_parity_odd;
+    uint8_t c9;              /* the line the mode is asked for on */
+    unsigned given_up_after; /* and how many lines later it is given up */
+    uint8_t addresses[8];    /* what RA carries from there to the row's end */
+    unsigned drawn;
+  } cases[] = {
+      /* Asked for at C9=0 the counting takes the address to 2 ("C9 =
+         C9+1+(R9.0)", R9 odd), and given up on that line it goes on from
+         2 rather than from half of it: 3, 4, 5, 6, 7, and the row ends
+         where C9 meets R9. Asked for at 2 the same walk starts at 4. */
+      {1, false, 0, 1, {2, 3, 4, 5, 6, 7}, 6},
+      {1, false, 2, 1, {4, 5, 6, 7}, 4},
+      /* An odd frame carries ParityC9 in the bit the doubling leaves, so
+         the addresses it walks are the odd ones: from 1 the counting gives
+         3, and the row runs to R9 itself rather than to the line below it.
+         The write settles that bit of the counter before the doubling
+         starts, which is what makes an odd line answerable at all. */
+      {1, true, 1, 1, {3, 4, 5, 6, 7}, 5},
+      {1, true, 3, 1, {5, 6, 7}, 3},
+      /* Types 3 and 4 walk it as a type 1 does — ch. 19.8.4 gives them the
+         same counter, which is the address — and the write that asks for the
+         mode takes bit 0 of that address and not of the count. */
+      {3, false, 0, 1, {2, 3, 4, 5, 6, 7}, 6},
+      {4, false, 0, 1, {2, 3, 4, 5, 6, 7}, 6},
+      /* A type 1 given the mode up on the line the doubling would have ended
+         its row on. Its limit is read down — 6 for an even parity — so the
+         row would have ended there; the register having gone, the limit is
+         R9 itself and "the counting logic normally resumes", 6 to 7, and the
+         row runs a line more. A limit that kept its parity past the
+         register's going would stop at 6, which is what types 3 and 4 want
+         and this type does not. */
+      {1, false, 0, 3, {2, 4, 6, 7}, 4},
+      /* A type 0 is handed nothing back, and should not be: there "counter
+         C9 continues to increment normally" while the mode stands and the
+         address is that count doubled (ch. 19.8.1), so giving the mode up
+         leaves the address at the count and not at the address it had —
+         from 2 the row goes 6, then 4, 5, 6, 7. */
+      {0, false, 2, 1, {6, 4, 5, 6, 7}, 5},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    bool standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 crtc.parity_frame == cases[index].frame_parity_odd;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    bool reached = false;
+    for (long tick = 0; tick < 2L * FRAME_TICKS && !reached; tick++) {
+      crtc_tick(&crtc);
+      reached = crtc.c4 == 2 && crtc.c9 == cases[index].c9 && crtc.c0 == 20;
+    }
+    TEST_CHECK(reached);
+    if (!reached) {
+      continue;
+    }
+    write_register(8, 3);
+    uint8_t addresses[8] = {0};
+    unsigned counted = 0;
+    uint8_t row = crtc.c4;
+    bool given_up = false;
+    /* The mode is given up a line later, where the doubling stands: the
+       counter must not move under that write, and the address must go on
+       from where it had reached rather than from half of it. */
+    for (long tick = 0; tick < 12L * SCANLINE && crtc.c4 == row; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (counted < 8 && crtc.c0 == 1) {
+        addresses[counted++] = crtc_ra(pins);
+      }
+      if (!given_up && counted == cases[index].given_up_after && crtc.c0 == 20) {
+        uint8_t before_the_write = crtc.c9;
+        /* Given up, asked for again and given up once more, all on the one
+           line and all while the doubling stands: none of the three may
+           move this counter, whichever way the mode is going. */
+        write_register(8, 0);
+        TEST_EQUAL(crtc.c9, before_the_write);
+        write_register(8, 3);
+        TEST_EQUAL(crtc.c9, before_the_write);
+        write_register(8, 0);
+        TEST_EQUAL(crtc.c9, before_the_write);
+        given_up = true;
+      }
+    }
+    TEST_EQUAL(counted, cases[index].drawn);
+    for (unsigned line = 0; line < cases[index].drawn && line < counted; line++) {
+      TEST_EQUAL(addresses[line], cases[index].addresses[line]);
+    }
+  }
+}
+
+/* What the parity written into C9's low bit costs the frame it lands in.
+   That counter is the one a row's end is measured against, so a pulse that
+   puts it back to the line before gives the frame that line again:
+   "deactivate the IVM mode can also modify C9, and modify the end condition
+   of character C4" (ch. 19.5.3). It is the frame's own parity that decides,
+   because that is what the write hands ParityC9 when it finds an even one.
+   Shaker's C (3) grades this thirteen times over, and the diagrams that
+   draw it name that group's tests one by one. */
+static void a_pulse_on_an_odd_line_lengthens_an_even_frame(void) {
+  static const struct {
+    bool frame_parity_odd;
+    uint8_t c9;
+    bool gains_a_line;
+  } cases[] = {
+      /* The line is named in full, and not by its parity alone, so that a
+         chip writing the whole counter where it should write one bit of it
+         is told from one that has the rule: from C9=5 the first would begin
+         the row again and the second give back a single line. */
+      {false, 5, true}, {false, 4, false}, {true, 5, false},
+      {true, 4, false}, {false, 1, true},  {false, 0, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    long scanlines[2] = {0, 0};
+    for (int pulsed = 0; pulsed < 2; pulsed++) {
+      crtc_init(&crtc, 1);
+      write_register(0, 63);
+      write_register(4, 38);
+      write_register(7, 30);
+      write_register(9, 7);
+      bool standing = false;
+      for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+        crtc_tick(&crtc);
+        standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                   crtc.parity_frame == cases[index].frame_parity_odd;
+      }
+      TEST_CHECK(standing);
+      if (!standing) {
+        break;
+      }
+      /* A row the frame's end is nowhere near, so that what is counted is
+         the line and not some other rule of the last row's. */
+      bool reached = false;
+      for (long tick = 0; tick < 2L * FRAME_TICKS && !reached; tick++) {
+        crtc_tick(&crtc);
+        reached = crtc.c4 == 2 && crtc.c9 == cases[index].c9 && crtc.c0 == 20;
+      }
+      TEST_CHECK(reached);
+      if (!reached) {
+        break;
+      }
+      if (pulsed) {
+        write_register(8, 3);
+        write_register(8, 0);
+      }
+      do {
+        crtc_tick(&crtc);
+        if (crtc.c0 == 0) {
+          scanlines[pulsed]++;
+        }
+      } while (crtc.c0 != 0 || crtc.c4 != 0 || crtc.c9 != 0);
+    }
+    if (scanlines[0] > 0) {
+      TEST_EQUAL(scanlines[1] - scanlines[0], cases[index].gains_a_line ? 1 : 0);
+    }
+  }
+}
+
+/* Ch. 19.8.4 gives types 3 and 4 their interlace counting in an algorithm,
+   works two frames of it by hand and draws twenty-two counting cases beside
+   them, and this takes four in all: both frames and two of the cases. A
+   fifth block follows them for the late sync, which belongs to ch. 19.5.2,
+   19.5.5 and 19.7.1 rather than to the counting, and which these types can
+   lose altogether where the counting leaves a row off the address it names.
+   All run at R9=7, which for these two is the odd case — their R9 wants
+   "the number of character lines of character less 2", so an eight-line row
+   is an R9 of 6 — and an odd R9 is where a row comes out "5 even lines/ 4
+   odd lines" and its neighbour the other way about. First the chapter's own
+   Example 1, walking C4=0 and C4=1 of an even frame, where "for C4=0, we
+   obtain the lines C9 = 0, 2, 4, 6, 8" and then "on the character C4 = 1,
+   we will therefore have the C9=1, 3, 5, 7". Then the write's own rule,
+   which no counting reaches. Then one of the exit diagrams, giving the mode
+   up on a row's last line. Then Example 2, which turns a frame over on the
+   last C4 and shows the new frame opening odd — "on the new frame, we then
+   have odd C9s with an even C4". Their R9 is programmed a type 0's way (ch.
+   19.8.4), which is why the parity turns on an odd R9 here where a type 1
+   turns on an even one. */
+static void types_3_and_4_count_the_interlace_as_their_chapter_gives_it(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 3);
+    /* To the head of an even frame, where "Parityc9=ParityFrame". */
+    bool standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    /* The chapter's own two rows, in the order it draws them. */
+    static const uint8_t wanted[9][2] = {{0, 0}, {0, 2}, {0, 4}, {0, 6}, {0, 8},
+                                         {1, 1}, {1, 3}, {1, 5}, {1, 7}};
+    unsigned counted = 0;
+    for (long tick = 0; tick < 24L * SCANLINE && counted < 9; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c0 != 1) {
+        continue;
+      }
+      TEST_EQUAL(crtc.c4, wanted[counted][0]);
+      TEST_EQUAL(crtc_ra(pins), wanted[counted][1]);
+      counted++;
+    }
+    TEST_EQUAL(counted, 9u);
+
+    /* And the write's own rule, which is the half no counting can reach: a
+       mode asked for in the middle of a row takes the line's parity, "the
+       parity of the C9 can therefore be in contradiction with the parity of
+       the current frame until the next frame". Asked for on an odd line of
+       an even frame, the rest of the row runs odd. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 3 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    write_register(8, 3);
+    TEST_EQUAL(crtc.parity_c9_held, true);
+    /* The line being drawn keeps its address, because the write moves no
+       counter on these two — "unlike CRTC's 1 and 2, and as CRTC 0, C9 does
+       not change during the line" — and the two lines after it are the
+       chapter's "C9=C9+2", then "C9=C9 or ParityC9", from there to the
+       row's end at R9 itself. */
+    static const uint8_t after_the_write[3] = {3, 5, 7};
+    counted = 0;
+    for (long tick = 0; tick < 24L * SCANLINE && counted < 3; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c0 != 1) {
+        continue;
+      }
+      TEST_EQUAL(crtc_ra(pins), after_the_write[counted]);
+      counted++;
+    }
+    TEST_EQUAL(counted, 3u);
+
+    /* And the mode given up on a row's own last line, which ch. 19.8.4's
+       exit diagrams draw ending the row there: the address has reached the
+       limit, so the row ends whatever R8 now asks, and the next line is the
+       next character's first. These two reach that limit rather than matching
+       it, so no reading of R8 can carry the row past it. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 3);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    bool on_the_rows_last_line = false;
+    for (long tick = 0; tick < 24L * SCANLINE && !on_the_rows_last_line; tick++) {
+      uint64_t pins = crtc_tick(&crtc);
+      on_the_rows_last_line = crtc.c0 == 20 && crtc.c4 == 0 && crtc_ra(pins) == 8;
+    }
+    TEST_CHECK(on_the_rows_last_line);
+    if (!on_the_rows_last_line) {
+      continue;
+    }
+    write_register(8, 0);
+    uint64_t pins = 0;
+    for (int character = 0; character < SCANLINE; character++) {
+      pins = crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c4, 1u);
+    TEST_EQUAL(crtc_ra(pins), 0u);
+
+    /* The chapter's second worked frame: on the last C4 of an even frame the
+       parity turns and the row parity goes with it — "on the new frame, we
+       then have odd C9s with an even C4" — so the frame opens at C4=0 with
+       its first line odd, and the next is two on from it. R4 is odd here, as
+       the example has it, which is what leaves the old frame's last C4 odd.
+       The chapter's "C9=1" is the address, which this chip carries as a count
+       of 0 with the parity filling the bit the doubling leaves. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 9);
+    write_register(6, 9);
+    write_register(7, 30);
+    write_register(9, 7);
+    write_register(8, 3);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 !crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    static const uint8_t the_new_frames_rows[2] = {1, 3};
+    counted = 0;
+    bool turned = false;
+    for (long tick = 0; tick < 3L * FRAME_TICKS && counted < 2; tick++) {
+      uint64_t drawn = crtc_tick(&crtc);
+      if (!turned) {
+        turned = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 && crtc.parity_frame;
+        continue;
+      }
+      if (crtc.c0 != 1) {
+        continue;
+      }
+      TEST_EQUAL(crtc.c4, 0u);
+      TEST_EQUAL(crtc_ra(drawn), the_new_frames_rows[counted]);
+      counted++;
+    }
+    TEST_CHECK(turned);
+    TEST_EQUAL(counted, 2u);
+
+    /* And the sync a row of odd lines takes late, which on these two can
+       fall on a line the row does not visit. Ch. 19.5.2 names a type 0's
+       outright — "it occurs when C4=R7 and C9.VMA=2 on the odd C4s" — but of
+       these ch. 19.5.5 says only that "the VSYNC is delayed by 1 line", and
+       a row a write has left on an odd parity walks 1, 3, 5, 7 and never 2
+       at all. The second line is what both mean, so the sync
+       falls on 3 here, and a frame must not lose it. */
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(4, 38);
+    write_register(7, 1);
+    write_register(9, 7);
+    standing = false;
+    for (long tick = 0; tick < 8L * FRAME_TICKS && !standing; tick++) {
+      crtc_tick(&crtc);
+      standing = crtc.has_drawn_a_character && crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+                 crtc.parity_frame;
+    }
+    TEST_CHECK(standing);
+    if (!standing) {
+      continue;
+    }
+    while (!(crtc.c4 == 0 && crtc.c9 == 0 && crtc.c0 == 20)) {
+      crtc_tick(&crtc);
+    }
+    write_register(8, 3);
+    uint8_t rose_on = 0xFF;
+    for (long tick = 0; tick < FRAME_TICKS && rose_on == 0xFF; tick++) {
+      uint64_t drawn = crtc_tick(&crtc);
+      if ((drawn & CRTC_VSYNC) != 0) {
+        rose_on = crtc_ra(drawn);
+      }
+    }
+    TEST_EQUAL(rose_on, 3u);
+  }
+}
+
+/* Types 0 and 2 settle the coming frame's parity on the row R6 names, so
+   where C4 can never reach R6 "this state is no longer updated and
+   ParityFrame remains frozen" (ch. 19.5.2, 19.5.4) — the frames stop
+   alternating and the two fields stop differing. The other three anticipate
+   nothing: "ParityFrame switch between each frame when C4 = C9 = C0 = 0"
+   and does so "whatever the value of R8" (ch. 19.5.3, 19.5.5), so no R6 can
+   freeze them. The extra line follows whichever parity its type keeps — the
+   anticipated one on a type 0 and a type 2 (ch. 19.6.1, 19.6.3), the
+   frame's own on the other three, where it "does not depend on the C4=R6
+   equivalence" (ch. 19.6.2, 19.6.4) — so a frame carrying it is a line
+   longer than the frame beside it, and the lengths turn over wherever the
+   parity does. */
+static void types_0_and_2_alone_can_freeze_their_frame_parity(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r6;      /* the row a type 0 takes its anticipation on */
+    bool alternates; /* whether the parity, and the extra line with it, turns */
+  } cases[] = {
+      {0, 5, true},   {1, 5, true},  {2, 5, true},   {3, 5, true},  {4, 5, true},
+      {0, 25, false}, {1, 25, true}, {2, 25, false}, {3, 25, true}, {4, 25, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 6);
+    write_register(9, 7);
+    write_register(6, cases[index].r6);
+    write_register(7, 3);
+    write_register(8, 3);
+    bool parity[4] = {false, false, false, false};
+    int length[4] = {0, 0, 0, 0};
+    int frames = 0;
+    int lines = 0;
+    bool head = false;
+    for (long character = 0; character < 16L * 64 * 80 && frames < 4; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0) {
+        lines++;
+      }
+      bool on_the_head = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0;
+      if (on_the_head && !head) {
+        if (frames > 0) {
+          length[frames - 1] = lines - 1;
+        }
+        parity[frames++] = crtc.parity_frame;
+        lines = 0;
+      }
+      head = on_the_head;
+    }
+    /* Four frames seen, so a chip that stopped drawing cannot pass by
+       never contradicting anything. */
+    TEST_EQUAL(frames, 4);
+    for (int frame = 1; frame < 4; frame++) {
+      TEST_EQUAL(parity[frame] != parity[frame - 1], cases[index].alternates);
+    }
+    /* And the extra line turns over with it, or with nothing. */
+    TEST_EQUAL(length[1] != length[0], cases[index].alternates);
+    TEST_EQUAL(length[2] != length[1], cases[index].alternates);
+  }
+}
+
+/* A type 1 is the one type a program can tell which field to start on, and
+   an interlace pulse is how: "if IVM mode is toggled on and off on an even
+   C9 line, regardless of the value of R9, the parity is set to EVEN. It is
+   thus possible to fix the parity quite easily on this CRTC" (ch. 19.5.3).
+   The rules behind it are that chapter's own, taken on the third and fourth
+   microseconds of the write. No other type has them, and on those the pulse
+   leaves the parity where it found it. */
+static void an_interlace_pulse_fixes_a_type_1_on_an_even_field(void) {
+  for (uint8_t type = 0; type < 5; type++) {
+    for (uint8_t r9 = 6; r9 <= 7; r9++) {
+      for (int from_odd = 0; from_odd < 2; from_odd++) {
+        crtc_init(&crtc, type);
+        write_register(0, 63);
+        write_register(1, 40);
+        write_register(2, 46);
+        write_register(3, 0x8E);
+        write_register(4, 38);
+        write_register(9, r9);
+        write_register(6, 25);
+        write_register(7, 35);
+        /* Run to a frame whose parity is the one being started from, then
+           stand on an even scanline of a row and pulse the mode. */
+        bool standing = false;
+        for (long character = 0; character < 8L * 64 * 320; character++) {
+          crtc_tick(&crtc);
+          bool head = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0;
+          if (head && !standing && crtc.parity_frame == (from_odd != 0)) {
+            break;
+          }
+          standing = head;
+        }
+        while (!(crtc.c9 % 2 == 0 && crtc.c0 == 10)) {
+          crtc_tick(&crtc);
+        }
+        bool before = crtc.parity_frame;
+        write_register(8, 3);
+        crtc_tick(&crtc);
+        write_register(8, 0);
+        crtc_tick(&crtc);
+        if (type == 1) {
+          TEST_CHECK(!crtc.parity_frame); /* even, whichever it began on */
+        } else {
+          TEST_EQUAL(crtc.parity_frame, before);
+        }
+      }
+    }
+  }
+
+  /* Turning it on and leaving it on is the half the pulse hides, and it is
+     where the chapter's exception lives: the frame's parity survives only
+     "for cases where ParityFrame and ParityC9 were odd before the request
+     for IVM", and with an odd R9 it is the scanline alone that decides
+     ParityC9. So entering on an even scanline settles the parity even
+     whichever it was, and entering on an odd one only spares a frame that
+     was odd already. */
+  for (int from_odd = 0; from_odd < 2; from_odd++) {
+    for (int on_an_odd_scanline = 0; on_an_odd_scanline < 2; on_an_odd_scanline++) {
+      crtc_init(&crtc, 1);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(3, 0x8E);
+      write_register(4, 38);
+      write_register(9, 7); /* odd, so C4 has no say in ParityC9 */
+      write_register(6, 25);
+      write_register(7, 35);
+      bool standing = false;
+      for (long character = 0; character < 8L * 64 * 320; character++) {
+        crtc_tick(&crtc);
+        bool head = crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0;
+        if (head && !standing && crtc.parity_frame == (from_odd != 0)) {
+          break;
+        }
+        standing = head;
+      }
+      while (!(crtc.c9 % 2 == (on_an_odd_scanline ? 1 : 0) && crtc.c0 == 10)) {
+        crtc_tick(&crtc);
+      }
+      write_register(8, 3);
+      crtc_tick(&crtc);
+      TEST_EQUAL(crtc.parity_frame, from_odd && on_an_odd_scanline);
+    }
+  }
+}
+
+/* Ch. 11.2.2 and 11.2.3 each draw the frame's additional lines, one table
+   for each way a chip counts them, and the two are the test below. A type 0
+   holds the row still and spends C9 on them, so C4 stays where the last row
+   left it and C9 climbs; the second table is headed for a type 1 and a type
+   2, which keep them on a counter of their own — "on these circuits, the C5
+   and C9 counters are dissociated" — so the row goes on being counted and
+   C4 on advancing while C5 counts the lines beside them. The chapter
+   initializes R4=10, R5=16, R9=3, R1=40 and R0=63 (ch. 11.2.1), so the
+   lines run from C4=11 with R9 written to 10 on the fifth of them, which
+   its tables annotate; the rest are a standard frame's. */
+static void each_type_counts_the_adjustment_lines_its_own_way(void) {
+  static const struct {
+    uint8_t type;
+    const char *drawn; /* the row and scanline of each line, as the page has it */
+  } cases[] = {
+      {0, "11/0 11/1 11/2 11/3 11/4 11/5 11/6 11/7 11/8 11/9 11/10 11/11 11/12 11/13 11/14 11/15"},
+      {1, "11/0 11/1 11/2 11/3 12/0 12/1 12/2 12/3 12/4 12/5 12/6 12/7 12/8 12/9 12/10 13/0"},
+      {2, "11/0 11/1 11/2 11/3 12/0 12/1 12/2 12/3 12/4 12/5 12/6 12/7 12/8 12/9 12/10 13/0"},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 10);
+    write_register(9, 3);
+    write_register(5, 16);
+    write_register(6, 25);
+    write_register(7, 60);
+    char drawn[128] = "";
+    int length = 0;
+    int counted = 0;
+    bool standing = false;
+    bool written = false;
+    for (long character = 0; character < 40L * 64 * 400 && counted < 16; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 != 0) {
+        continue;
+      }
+      bool running = crtc.vertical_adjustment_in_progress;
+      if (running && !standing) {
+        length = 0;
+        counted = 0;
+      }
+      standing = running;
+      if (!running) {
+        continue;
+      }
+      length += snprintf(drawn + length, sizeof drawn - (size_t)length,
+                         counted ? " %d/%d" : "%d/%d", crtc.c4, crtc.c9);
+      counted++;
+      /* The page writes R9 on the line after the one it marks, so the row
+         that moved did so on the value it was counting against. */
+      if (counted == 5 && !written) {
+        write_register(9, 10);
+        written = true;
+      }
+    }
+    TEST_EQUAL(counted, 16);
+    if (strcmp(drawn, cases[index].drawn) != 0) {
+      TEST_FAIL("type %u drew %s, where the table says %s", cases[index].type, drawn,
+                cases[index].drawn);
+    }
+  }
+
+  /* And however they are counted, R5 says how many there are: the run ends
+     "when the number of the next additional line reaches R5" on either
+     counter (ch. 11.3.1, 11.3.2). */
+  for (uint8_t type = 0; type < 3; type++) {
+    for (uint8_t r5 = 1; r5 <= 6; r5++) {
+      crtc_init(&crtc, type);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(3, 0x8E);
+      write_register(4, 10);
+      write_register(9, 3);
+      write_register(5, r5);
+      write_register(6, 25);
+      write_register(7, 60);
+      int lines = 0;
+      bool standing = false;
+      bool seen = false;
+      for (long character = 0; character < 40L * 64 * 400; character++) {
+        crtc_tick(&crtc);
+        if (crtc.c0 != 0) {
+          continue;
+        }
+        bool running = crtc.vertical_adjustment_in_progress;
+        if (running && !standing) {
+          lines = 0;
+        }
+        if (running) {
+          lines++;
+        }
+        if (standing && !running && seen) {
+          break;
+        }
+        seen = seen || running;
+        standing = running;
+      }
+      TEST_EQUAL(lines, r5);
+    }
+  }
+}
+
+/* A type 1 latches a state when it opens a run of additional lines, "if
+   R5>0 when C4 should return to 0 at the end of the frame", and taking R5
+   back to 0 does not clear it: "the state is not deactivated, C4 does not
+   return to 0 and C5 loops". Only a later R5 closes it — "if C5+1 reaches
+   an R5>0, then the additional management changes C4 to 0 before
+   deactivating its state" (ch. 11.3.2). The chapter offers that to a
+   program as a way of holding a frame open — "it is possible to change C4
+   and C9 to 0 on any line with this method" — so the test is the offer
+   taken up: open a run, cancel R5, and name the line to end on — named on
+   the tenth line the run spends with R5 at 0, which is its eleventh and its
+   last, so the run is eleven lines long.
+
+   A program that names none does not hold the frame for ever, because "C4,
+   however, continues to be compared to R4 to process the change from C4 to
+   0". The run opens with C4 one past R4, and C4 comes back round to R4 after
+   the 128 rows a seven-bit counter has, each of the R9+1 = 4 lines the setup
+   below gives a row. The management is not deactivated there — "the
+   additional management, however, remains activated" — so C5, which never
+   stopped counting, spends the rest of its own round of thirty-two before it
+   reaches the 0 R5 was cancelled to: 128 x 4 + 32 below.
+
+   Types 0 and 2 latch no such state. An R5 cancelled under those is only
+   the overflow ch. 11.3.1 gives its two — "if R5 is modified with a value
+   less than C5+1/C9+1, then the counter overflows and continues to count up
+   to 0 to reach the new R5 value" — which is the thirty-two a five-bit
+   counter has before it comes round to the 0 it was cancelled to. That
+   chapter is headed "CRTC's 0, 2" and the deadlock's is headed "CRTC 1",
+   which is the whole of why the type column below names three types. */
+static void a_type_1_holds_a_frame_open_where_r5_is_cancelled(void) {
+  /* NEVER_ASKED stands in the column a line would be named in, for the
+     program that names none. WATCHED is twice the longest run asked for
+     below, and bounds a run that will not end, so that a chip holding the
+     frame for ever fails here rather than spinning until the character
+     count runs out. */
+  enum { NEVER_ASKED = -1, WATCHED = 2 * (128 * 4 + 32) };
+  static const struct {
+    uint8_t type;
+    int end_it_after; /* lines to run with R5 at 0 before naming the end */
+    int lines;        /* and how long the run comes out */
+  } cases[] = {
+      {1, 10, 11},                    /* ended where the program asks, and not before */
+      {1, 20, 21},                    /* and again ten lines later, to show it is the asking */
+      {1, NEVER_ASKED, 128 * 4 + 32}, /* or C4's round, and then C5's own */
+      {2, NEVER_ASKED, 32},           /* while these two merely count five bits */
+      {0, NEVER_ASKED, 32},           /* the one of them on C5, the other on C9 */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 10);
+    write_register(9, 3);
+    write_register(5, 2);
+    write_register(6, 25);
+    write_register(7, 60);
+    int lines = 0;
+    int held = 0;
+    bool standing = false;
+    bool seen = false;
+    bool cancelled = false;
+    bool ended = false;
+    for (long character = 0; character < 80L * 64 * 400; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 != 0) {
+        continue;
+      }
+      bool running = crtc.vertical_adjustment_in_progress;
+      if (running && !standing) {
+        lines = 0;
+        held = 0;
+      }
+      if (running) {
+        lines++;
+        if (!cancelled) {
+          write_register(5, 0);
+          cancelled = true;
+        } else if (++held == cases[index].end_it_after) {
+          write_register(5, (uint8_t)((crtc.c5 + 1) & 0x1F));
+        }
+        if (lines > WATCHED) {
+          break;
+        }
+      }
+      if (standing && !running && seen) {
+        ended = true;
+        break;
+      }
+      seen = seen || running;
+      standing = running;
+    }
+    TEST_CHECK(ended);
+    TEST_EQUAL(lines, cases[index].lines);
+  }
+}
+
+/* The state is taken where a run opens, and a frame is never held by the R5
+   of the frame before it. The path that tells a taken state from a carried
+   one is a last line unmade by an R9 write at C0=1, where "the current line
+   becomes the 'first' adjustment line" (ch. 10.3.1.2): the run that opens
+   there opens with "C4 should return to 0 at the end of the frame (C4=R4,
+   C9=R9)" false, which is the one comparison ch. 11.3.2 puts its state
+   behind. R5 stands above 0 over that opening and is cancelled inside the
+   run, so a chip that took no state counts the plain five-bit overflow,
+   where one that took the state here — or carried it from the two frames
+   before, which did open with the comparison true — would hold the frame
+   past that count, to the row C4 comes round to R4 on — R9 is moved and R4
+   is not, so C4 must climb all 128 rows to get there, and the difference is
+   a whole frame rather than a line of it. */
+static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
+  enum { GIVE_UP_AFTER = 4096 };
+  crtc_init(&crtc, 1);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 10);
+  write_register(9, 3);
+  write_register(5, 5);
+  write_register(6, 25);
+  write_register(7, 60);
+  int spent_runs = 0;
+  int lines = 0;
+  bool standing = false;
+  bool unmade = false;
+  bool opened_mid_line = false;
+  bool cancelled = false;
+  bool ended = false;
+  for (long character = 0; character < 400L * 64 * 400 && !ended; character++) {
+    /* The write that unmakes the last line is made during the character C0
+       names 1, the only one that can leave the state true and the
+       comparison false: one made at C0=0 would have been seen by the line's
+       own second look, and one made later leaves the state standing
+       (ch. 12.2, 10.3.1.2, both headed for a type 0 and read here whatever
+       the type). */
+    if (spent_runs == 2 && !unmade && crtc.c0 == 1 && crtc.c4 == 10 && crtc.c9 == 3) {
+      write_register(9, 4);
+      unmade = true;
+      /* That line is the run's first and is already past its own C0=0,
+         which is where the lines below are counted, so it is counted
+         here instead. */
+      opened_mid_line = true;
+    }
+    crtc_tick(&crtc);
+    if (crtc.c0 != 0) {
+      continue;
+    }
+    bool running = crtc.vertical_adjustment_in_progress;
+    if (running && !standing) {
+      lines = opened_mid_line ? 1 : 0;
+      opened_mid_line = false;
+    }
+    if (running) {
+      lines++;
+      /* The two frames before opened their runs with the comparison true
+         and R5 above 0, so a state carried rather than taken would stand
+         latched going in. This run's own opening had it false. */
+      /* Cancelled on the run's third line, by which point the row has
+         reached R9 once and carried C4 a step past R4: a state taken here
+         would have to climb the whole counter to find R4 again, where one
+         cancelled while C4 still stood on R4 would be released on the very
+         next line and tell us nothing. */
+      if (unmade && !cancelled && lines == 3) {
+        write_register(5, 0);
+        cancelled = true;
+      }
+      if (lines > GIVE_UP_AFTER) {
+        break;
+      }
+    }
+    if (standing && !running) {
+      spent_runs++;
+      /* Two runs spent with R5 above 0, and the state stands latched. */
+      if (unmade) {
+        ended = true;
+      }
+    }
+    standing = running;
+  }
+  TEST_CHECK(ended);
+  TEST_EQUAL(lines, 32);
+}
+
+/* The other half of that parenthesis. A line whose C4 has already gone past
+   R4 can still arm a run on a type 1, which keeps a type 0's padding past R4
+   (pads_a_row_past_r4; ch. 12.2's note gives it a type 0, no chapter a type
+   1) — so a program that moves R4 down under its own row counter opens a run
+   on a line that was never going to end the frame. "C4 should return to 0 at
+   the end of the frame (C4=R4, C9=R9)" is false there as surely as it is on a
+   last line unmade, and no state is taken: an R5 cancelled inside such a run
+   is ch. 11.3.1's plain overflow, the thirty-two a five-bit counter has. A
+   chip that read only the C9 half of the parenthesis would hold the frame
+   instead, until C4 had climbed its whole counter to find R4 again. */
+static void a_type_1_takes_no_state_where_c4_is_past_r4(void) {
+  enum { GIVE_UP_AFTER = 4096 };
+  crtc_init(&crtc, 1);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 8);
+  write_register(9, 3);
+  write_register(5, 2);
+  write_register(6, 25);
+  write_register(7, 60);
+  int lines = 0;
+  bool standing = false;
+  bool moved = false;
+  bool cancelled = false;
+  bool ended = false;
+  for (long character = 0; character < 400L * 64 * 400 && !ended; character++) {
+    /* R4 taken below C4 on a row's last scanline, which leaves the row
+       armed for a run it cannot end a frame with. */
+    if (!moved && crtc.c0 == 0 && crtc.c4 == 4 && crtc.c9 == 3) {
+      write_register(4, 2);
+      moved = true;
+    }
+    crtc_tick(&crtc);
+    if (crtc.c0 != 0) {
+      continue;
+    }
+    bool running = crtc.vertical_adjustment_in_progress;
+    if (running && !standing) {
+      lines = 0;
+    }
+    if (running) {
+      lines++;
+      if (moved && !cancelled && lines == 2) {
+        write_register(5, 0);
+        cancelled = true;
+      }
+      if (lines > GIVE_UP_AFTER) {
+        break;
+      }
+    }
+    if (standing && !running && cancelled) {
+      ended = true;
+    }
+    standing = running;
+  }
+  TEST_CHECK(ended);
+  TEST_EQUAL(lines, 32);
+}
+
+/* A last line can be made as well as unmade. "It is therefore not necessary
+   to anticipate the programming of R4 (or R9) on the current line for the
+   last line condition to be true on the following line. It is possible to
+   modify R4 or R9 on the current line as long as C0<2 to validate the 'Last
+   Line' state (and thus validate the reset of C4 on the following line)"
+   (ch. 12.2). So a row that was going to be an ordinary one ends the frame,
+   and C4 comes back to 0 under it.
+
+   The chapter's window is C0<2 and it counts where a write is made, which
+   settles the first two cases below. The third is outside it: this type "no
+   longer repeats this test on the other values of C0>1". The write at C0=1
+   is the one this file reads a character later, where it is in force — the
+   same place the chapter's converse is read, a write there unmaking a last
+   line and spending it on an adjustment instead. */
+static void a_write_can_make_a_last_line_as_well_as_unmake_one(void) {
+  static const struct {
+    uint8_t written_at; /* the character the write is made on */
+    bool ends_the_frame;
+  } cases[] = {
+      {0, true},  /* inside the chapter's window */
+      {1, true},  /* its last character */
+      {2, false}, /* outside it, and no test is repeated there */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 0);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 10);
+    write_register(9, 3);
+    write_register(5, 0);
+    write_register(6, 25);
+    write_register(7, 60);
+    bool written = false;
+    bool ended = false;
+    /* Row 4 is an ordinary one until R4 is written to name it. */
+    for (long character = 0; character < 40L * 64 * 20; character++) {
+      if (!written && crtc.c4 == 4 && crtc.c9 == 3 && crtc.c0 == cases[index].written_at) {
+        write_register(4, 4);
+        written = true;
+      }
+      crtc_tick(&crtc);
+      if (written && crtc.c0 == 0 && crtc.c9 == 0) {
+        ended = crtc.c4 == 0;
+        break;
+      }
+    }
+    TEST_CHECK(written);
+    TEST_EQUAL(ended, cases[index].ends_the_frame);
+  }
 }
 
 static void unselected_chip_ignores_the_bus(void) {
-  crtc_init(&crtc);
+  crtc_init(&crtc, 0);
   crtc_access(&crtc, crtc_set_data(0, 7)); /* no CS */
   TEST_EQUAL(crtc.address_register, 0);
 }
@@ -136,6 +4774,40 @@ static void hsync_falls_where_r2_and_r3_put_it(void) {
   TEST_CHECK(recorded[46] & CRTC_HSYNC);
   TEST_CHECK(recorded[59] & CRTC_HSYNC);
   TEST_CHECK(!(recorded[60] & CRTC_HSYNC));
+}
+
+/* A width of nothing is read two ways: no HSYNC at all on types 0 and 1, and
+   sixteen characters on the other three — ch. 14.1's table gives "0 0 0 0 /
+   No Hsync" in one column and "0 0 0 0 / 16 nop" in the next, and "on CRTC's
+   2, 3 and 4, the HSYNC lasts 16 µsec when R3=0" (ch. 28.1.5), which is one
+   of the ways a program tells them apart. */
+static void a_width_of_nothing_is_sixteen_on_three_of_the_types(void) {
+  static const struct {
+    uint8_t type;
+    int characters; /* of HSYNC on a line */
+  } cases[] = {{0, 0}, {1, 0}, {2, 16}, {3, 16}, {4, 16}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x80);
+    write_register(4, 38);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 7);
+    for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 10);
+    int characters = 0;
+    for (int character = 0; character < SCANLINE; character++) {
+      if (crtc_tick(&crtc) & CRTC_HSYNC) {
+        characters++;
+      }
+    }
+    TEST_EQUAL(characters, cases[index].characters);
+  }
 }
 
 static void vsync_holds_eight_scanlines_from_row_30(void) {
@@ -205,8 +4877,8 @@ static void c9_runs_to_its_own_top_when_r9_drops_below_it(void) {
      row 256 scanlines long is a frame that never ends. */
   program_standard();
   run_scanlines(3);
-  TEST_EQUAL(crtc.c9, 3);
-  run_characters(10); /* past C0=2, where the last line is decided */
+  TEST_EQUAL(crtc.c9, 2); /* the scanline just drawn, the third of the row */
+  run_characters(10);     /* past C0=2, where the last line is decided */
   write_register(9, 1);
 
   uint8_t highest = 0;
@@ -283,16 +4955,2370 @@ static void the_last_line_holds_once_it_is_decided(void) {
   TEST_EQUAL(crtc.c9, 0);
 }
 
-static void a_late_write_can_still_end_the_frame(void) {
-  /* The other direction of the same rule: a write after C0=1 that brings
-     C4 and R4 together does set the state (ch. 10.3.1.2). */
+static void a_late_write_cannot_end_the_frame(void) {
+  /* The other direction of the same rule: the test is not repeated once C0
+     is past 1, so a write that brings C4 and R4 together later in the line
+     leaves the row counter to go on climbing (ch. 12.2). */
   program_standard();
   TEST_CHECK(run_to_row(5));
   run_scanlines(7);
   run_characters(10);
   write_register(4, 5);
   run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 6);
+}
+
+/* R5 raised on the last line while C0 has not passed 2 is considered and
+   the lines it asks for are added; raised later it is not (ch. 11.2.2,
+   11.4.2, 13.2.1). A write lands the microsecond after the character it was
+   made in, so this one is made in the character C0 names 2. */
+static void an_r5_asked_for_in_time_adds_its_lines(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(2);
+  write_register(5, 4);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 39);
+}
+
+/* And the disarming, which the case above cannot see: with no adjustment
+   left to spend, R4 moved later in the line changes nothing, because the
+   last line it stood in front of was never taken away (ch. 12.2, 13.2.5). */
+static void a_cancelled_r5_leaves_the_last_line_standing(void) {
+  program_standard();
+  write_register(5, 4);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(5, 0);
+  run_characters(9);
+  write_register(4, 3);
+  run_scanlines(1);
   TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* The Compendium tabulates a type 0 adjustment of its own (ch. 11.2.1):
+   R4=10, R5=16, R9=3, and sixteen lines all carrying C4=11 while C9 runs 0
+   to 15 — C4 incremented once whatever R5 holds, and both counters back to
+   0 after (ch. 13.2.4). Transcribed from the table rather than from us. */
+static void the_documented_sixteen_line_adjustment(void) {
+  program_standard();
+  write_register(4, 10);
+  write_register(5, 16);
+  write_register(9, 3);
+  TEST_CHECK(run_to_row(10));
+  run_scanlines(3);
+  for (int line = 0; line < 16; line++) {
+    run_scanlines(1);
+    TEST_EQUAL(crtc.c4, 11);
+    TEST_EQUAL(crtc.c9, line);
+  }
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* A last line whose comparison no longer holds, because R9 moved under it
+   at C0=1, spends itself on an adjustment instead of ending the frame, and
+   no R5 above 0 is wanted for that (ch. 10.3.1.2). The numbers are the
+   Compendium's own third example in ch. 11.2.2 — C4 and C9 at 38 and 7 with
+   R9 taken to 6 — and so is the answer: "The next line is then C4==38,
+   C9==8." C9 climbs past R9 where without the rule both would return to 0,
+   and C4 stays where it is because the row never reached its last line. */
+static void r9_moved_at_c0_1_makes_the_line_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(9, 6);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 38);
+  TEST_EQUAL(crtc.c9, 8);
+}
+
+/* R4 is the other half of the same rule, and moving it does the same. */
+static void r4_moved_at_c0_1_makes_the_line_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(4, 20);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 38);
+  TEST_EQUAL(crtc.c9, 8);
+}
+
+/* And the deadline the other way about: a move the chip sees after C0 has
+   passed 2 can neither take the last line back nor make an adjustment of
+   it, so the frame ends where it stood (ch. 10.3.1.2, 12.2). */
+static void a_late_write_cannot_begin_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(2);
+  write_register(4, 20);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* An R5 of 0 is a quantity of no lines, so a frame whose adjustment is
+   cancelled ends where it would have ended without one (ch. 13.2.4). */
+static void an_r5_cancelled_in_time_adds_no_line(void) {
+  program_standard();
+  write_register(5, 4);
+  TEST_EQUAL(frame_scanlines(), 316);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  run_characters(1);
+  write_register(5, 0);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
+/* Either interlace mode adds one line to the end of the even frames — the
+   parity R6 anticipated, which turns odd where C4 reaches R6 on an even one
+   (ch. 11.9, 19.5.2, 19.6.1). So a pair of frames runs 312 lines and 313,
+   the 19968 and 20032 microseconds of ch. 19.3.1, averaging the 20000 an
+   interlaced field wants. That chapter calls the long one the odd frame,
+   counting from one VSYNC to the next; these frames are counted from one
+   C4=C9=C0=0 to the next, and the line falls after the VSYNC, which is what
+   ch. 19.3.1 means by the odd frame inheriting it. */
+static void an_interlace_mode_adds_a_line_to_the_even_frames(void) {
+  program_standard();
+  TEST_EQUAL(frame_scanlines(), 312);
+  TEST_EQUAL(frame_scanlines(), 312);
+
+  write_register(8, 1);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 313);
+  TEST_CHECK(crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 312);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 313);
+
+  /* It comes after the lines R5 asks for, and C4 is incremented once for
+     all of them together (ch. 11.9, 19.6.1). */
+  write_register(5, 6);
+  TEST_EQUAL(frame_scanlines(), 318);
+  TEST_EQUAL(frame_scanlines(), 319);
+  write_register(5, 0);
+  TEST_EQUAL(frame_scanlines(), 312);
+
+  /* R6 put above R4 while ParityR6 stands odd freezes it odd, because C4
+     can no longer reach it — and then every frame takes a line, rather than
+     every other (ch. 19.6.1). */
+  TEST_CHECK(run_to_row(26));
+  TEST_CHECK(crtc.parity_r6);
+  write_register(6, 40);
+  TEST_EQUAL(frame_scanlines(), 313);
+  TEST_EQUAL(frame_scanlines(), 313);
+  TEST_EQUAL(frame_scanlines(), 313);
+}
+
+/* On an even frame in either interlace mode the VSYNC is a MID-VSYNC: the
+   C4/R7 equality does not raise it where it falls but where C0 reaches
+   R0/2, which is the half line the second field is raised by. It begins
+   away from the head of a line, so R3's eight are counted from the head of
+   the next one and the rest of this one runs on top of them (ch. 16.4.1,
+   19.7.1, 19.7.2). */
+static void an_interlace_mode_holds_the_even_frames_vsync_back(void) {
+  vsync_seen seen;
+
+  program_standard();
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
+
+  write_register(8, 1);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(seen.odd_frame);
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
+
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(!seen.odd_frame);
+  TEST_EQUAL(seen.character, 31); /* R0/2, R0 being 63 */
+  TEST_EQUAL(seen.characters, 8 * SCANLINE + SCANLINE - 31);
+}
+
+/* An R6 of 0 puts the parity's turn on the frame's own first character,
+   where ParityFrame is settled too. ParityFrame is settled first and
+   ParityR6 is read from it, so ParityR6 answers the frame that has just
+   begun rather than the one that just ended, and the line still falls on
+   the even frame (ch. 19.5.2, 19.6.1). Four scanlines a frame, so the extra
+   one is a fifth. */
+static void an_r6_of_zero_keeps_the_line_on_the_even_frame(void) {
+  program_standard();
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 0);
+  write_register(9, 3);
+  write_register(8, 1);
+  crtc_tick(&crtc);
+  TEST_CHECK(!crtc.parity_frame);
+
+  TEST_EQUAL(frame_scanlines(), 5);
+  TEST_CHECK(crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 4);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 5);
+}
+
+/* The interlace line is not the adjustment's to give back. A frame that has
+   had its line has had it, however the adjustment carrying it ends, and a
+   frame that has not must still get one — so what spends the line is
+   renewed at a frame's first character and nowhere else. A chip that
+   renewed it when the adjustment ended would let one frame take two lines; one that
+   never renewed it would withhold a later frame's without a word (ch. 11.9,
+   13.2.1, 19.6.1). */
+static void an_adjustment_in_progress_keeps_its_interlace_line(void) {
+  program_standard();
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 0);
+  write_register(9, 3);
+  write_register(8, 1);
+  crtc_tick(&crtc); /* the priming tick, which draws no character */
+  int characters = 0;
+
+  run_scanlines(4);
+  characters += 4 * SCANLINE;
+  TEST_CHECK(crtc.vertical_adjustment_armed);
+  TEST_CHECK(crtc.interlace_line_given);
+  TEST_EQUAL(crtc.c4, 1); /* R4+1, incremented once for the whole of it */
+
+  /* R4 and R9 moved onto the counters in time for the character C0 names 3,
+     R4 and R9 are moved back onto the counters and R8 with them, so that
+     every condition the disarm tests is in place and only the adjustment
+     already begun stands in its way. */
+  write_register(4, 1);
+  write_register(9, 0);
+  write_register(8, 0);
+  run_characters(4);
+  characters += 4;
+  /* Past cancelling: "the additional management being in progress, it can
+     no longer be cancelled on C0=2" (ch. 13.2.6). A line earlier the same
+     writes would have taken the arming back; here nothing does. */
+  TEST_CHECK(crtc.vertical_adjustment_armed);
+  TEST_CHECK(crtc.interlace_line_given);
+
+  /* So the frame ends with the one line it was owed — its own four and the
+     interlace line — where a chip that renewed the flag when the adjustment ended would
+     ask again and go round for another. */
+  for (int character = 0; character < 4 * SCANLINE; character++) {
+    if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+      break;
+    }
+    crtc_tick(&crtc);
+    characters++;
+  }
+  TEST_EQUAL(characters, 5 * SCANLINE);
+  TEST_CHECK(!crtc.interlace_line_given);
+}
+
+/* Stops on the last line a frame has, with R5's own adjustment lines
+   already behind it and the frame's parity even, which is where ch. 11.9
+   puts its question. The two frames run first settle the parity, which
+   alternates whether or not interlace is asked for. */
+static void stand_on_the_last_line_of_an_even_frame(uint8_t r5) {
+  program_standard();
+  write_register(5, r5);
+  TEST_EQUAL(frame_scanlines(), 312 + r5);
+  TEST_EQUAL(frame_scanlines(), 312 + r5);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7 + r5);
+}
+
+/* Ch. 11.9 gives the interlace line a deadline of its own, and a later one
+   than the three microseconds a type 0 reads R5 in: "The adjustment condition
+   (interlace mode (IVM/non-IVM) activated and even frame) is evaluated on
+   the last line of a frame, when C0=R0, and only if R8 contains the right
+   value on the last line." So a write in force during that character
+   decides the frame, and one made during it arrives a microsecond late. */
+static void the_interlace_line_is_asked_for_at_c0_r0(void) {
+  stand_on_the_last_line_of_an_even_frame(0);
+  run_characters(62);
+  TEST_EQUAL(crtc.c0, 62);
+  write_register(8, 1); /* in force from C0=63, which is R0 */
+  run_characters(2);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 39); /* the interlace line, C4 incremented once */
+
+  stand_on_the_last_line_of_an_even_frame(0);
+  run_characters(63);
+  TEST_EQUAL(crtc.c0, 63);
+  write_register(8, 1); /* in force from C0=0, a microsecond too late */
+  run_characters(1);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 0); /* and the frame ended where it stood */
+}
+
+/* "This latest line can be one of the adjustment lines displayed via R5. It
+   is therefore possible to update R8 on one of the lines displayed via R5
+   to activate or deactivate the treatment of the interlace line" (ch.
+   11.9). The question is put afresh on every line, so what answers it is
+   the last line before the one it would add — a line R5's own window shut
+   several lines before. */
+static void an_adjustment_line_still_decides_the_interlace_line(void) {
+  /* Asked for on the last of R5's lines, and given. */
+  stand_on_the_last_line_of_an_even_frame(2);
+  TEST_EQUAL(crtc.c4, 39);
+  TEST_EQUAL(crtc.c9, 1);
+  run_characters(62);
+  write_register(8, 1);
+  run_characters(2);
+  TEST_EQUAL(crtc.c9, 2); /* the interlace line, after R5's */
+
+  /* And taken back there, though it stood through every line before. R8 is
+     set before the frames are counted, so the even one runs its 312 lines,
+     R5's two and the interlace line, and the odd one goes without. */
+  program_standard();
+  write_register(5, 2);
+  write_register(8, 1);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 315);
+  TEST_EQUAL(frame_scanlines(), 314);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(9);
+  run_characters(62);
+  write_register(8, 0);
+  run_characters(2);
+  TEST_EQUAL(crtc.c4, 0); /* the frame ended with R5's lines and no more */
+
+  /* And the deadline is the same one here as on a line of R5's own: asked
+     for during the last adjustment line's own C0=R0, it is asked too late,
+     though the line it would add begins on the very next character. */
+  stand_on_the_last_line_of_an_even_frame(2);
+  run_characters(63);
+  TEST_EQUAL(crtc.c0, 63);
+  write_register(8, 1);
+  run_characters(1);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
+/* The disarm at C0=2 tests both of the things that can ask for an
+   additional line: "the additional management state is deactivated if there
+   was no line programmed (R5=0 or no 'Interlace Line'" (ch. 13.2.1, and
+   again in 13.2.5 as "test of R5 and/or 'Interlace on even frame
+   programmed'"). So a frame the interlace still asks a line of keeps its
+   state whatever R5 has become. It must, too: the arm this would drop is
+   not the one C0=R0 can put back, because that one reads the last line as
+   it was settled while C0 was 0 and 1, and an R9 moved in between leaves
+   the two disagreeing. A chip that dropped it would lose the adjustment
+   with nothing to restore it and run C4 on past R4 for hundreds of lines. */
+static void the_disarm_tests_the_interlace_line_as_well_as_r5(void) {
+  program_standard();
+  write_register(8, 1);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7); /* the frame's last row line */
+  TEST_CHECK(crtc.parity_r6);
+  write_register(9, 8); /* in force from C0=1, where no last line is seen */
+  crtc_tick(&crtc);
+  write_register(9, 7);
+  write_register(5, 2); /* in force from C0=2 */
+  crtc_tick(&crtc);
+  write_register(5, 0); /* in force from C0=3, where the disarm looks */
+
+  int characters = 0;
+  for (int character = 0; character < 8 * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    characters++;
+    if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+      break;
+    }
+  }
+  TEST_EQUAL(characters, 126);
+}
+
+/* C4 is seven bits wide, so an R4 of 127 puts the interlace line's own
+   C4=R4+1 back at 0 — and with C9 zeroed for that line and C0 at its head,
+   the line reads exactly like a frame's first character. A chip that took
+   its frame's head from the counters rather than from the state machine
+   would renew the line under the line it had just given, and never end a
+   frame again (ch. 10.3.1.1, 12.1). */
+static void an_r4_of_127_does_not_trap_the_frame(void) {
+  program_standard();
+  write_register(4, 127);
+  write_register(9, 1);
+  write_register(8, 1);
+  int armed_characters = 0;
+  bool entered = false;
+  for (long character = 0; character < 600L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.vertical_adjustment_armed) {
+      entered = true;
+      armed_characters++;
+    } else if (entered) {
+      break;
+    }
+  }
+  /* The interlace line and the last line before it: the chip assesses the
+     last line at C0=0 and C0=1 and "arms an internal flag by default" there
+     (ch. 12.1, 13.2.5), so the flag stands for the whole of the last line
+     and not only from the C0=R0 that asks for the interlace line. */
+  TEST_EQUAL(armed_characters, 2 * SCANLINE);
+}
+
+/* Ch. 13.2.2 puts a state between the C4/R7 equality and the VSYNC it
+   raises: "Each time C0=2, a state validates the update of C4=R7 on the
+   next C0=0. This state is cancelled when C0=0." A line that never reaches
+   C0=2 therefore leaves the next line's equality unread, and R0 below 2 is
+   how a program arranges it — "if R0 is modified with a value lower than 2
+   on the line preceding the equivalence C4=R7 (On the line where C9=R9 and
+   C4=R7-1), the VSYNC will not be authorized on C0=0". Shaker calls this
+   one LOST VSYNC ON R0=0 and LOST VSYNC ON R0=1, asks it of both, and reads
+   the sync back off PPI port B on each of the twelve lines it prints: bit 0
+   clear, where before this state was here it stood. */
+static void a_line_too_short_to_reach_c0_2_costs_the_next_its_vsync(void) {
+  for (uint8_t narrow_r0 = 0; narrow_r0 <= 1; narrow_r0++) {
+    program_standard();
+    TEST_CHECK(run_to_row(29));
+    run_scanlines(7); /* the line before C4 reaches R7, C9 already at R9 */
+    TEST_EQUAL(crtc.c4, 29);
+    TEST_EQUAL(crtc.c9, 7);
+    write_register(0, narrow_r0);
+    /* 256 characters is a hundred and twenty-eight of these short lines,
+       well past where C4 walks onto R7 and off it again. */
+    for (int character = 0; character < 256; character++) {
+      TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
+    }
+  }
+}
+
+/* And the state is a state, not a rule read afresh: R0 put back before the
+   line has passed C0=2 arms it after all, and the VSYNC comes as it would
+   have. */
+static void an_r0_restored_before_c0_2_keeps_the_vsync(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(29));
+  run_scanlines(7);
+  write_register(0, 1);
+  crtc_tick(&crtc);      /* draws C0=1, the last character an R0 of 1 allows */
+  write_register(0, 63); /* in force from C0=2, which therefore arrives */
+  int vsync_characters = 0;
+  for (int character = 0; character < 12 * SCANLINE; character++) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE);
+}
+
+/* The equality is not merely missed but spent: "This will also cause the
+   VSYNC to block for the value C4=R7", so a program that widens R0 again
+   on the same line does not get the VSYNC back, and only the liftings of
+   ch. 16.3 — a C4 that moves, or an R7 written — bring it round again. The
+   widening here comes two short lines later, on a later line of the same
+   row, which is as long as C4 stands still. */
+static void a_vsync_lost_to_a_short_line_stays_lost_for_that_row(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(29));
+  run_scanlines(7);
+  write_register(0, 1);
+  run_characters(2 * 2); /* two of the two-character lines */
+  write_register(0, 63);
+  for (int character = 0; character < 4 * SCANLINE; character++) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
+  }
+  /* R7 written lifts the block, and the equality serves again (ch. 16.3).
+     Begun away from the head of a line, the pulse runs R3's eight lines and
+     the rest of the line it began in besides (ch. 16.4.1). */
+  while (crtc.c0 != 2) {
+    crtc_tick(&crtc);
+  }
+  write_register(7, crtc.c4);
+  int vsync_characters = 0;
+  for (int character = 0; character < 12 * SCANLINE; character++) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE + (63 - 2));
+}
+
+/* "A value lower than 2" is the whole of the condition, and 2 itself is on
+   the safe side of it: a line of three characters reaches C0=2 and arms, a
+   line of two does not (ch. 13.2.2). */
+static void a_line_of_three_characters_still_arms_the_vsync(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(29));
+  run_scanlines(7);
+  write_register(0, 2);
+  int vsync_characters = 0;
+  for (int character = 0; character < 30 * 3; character++) { /* thirty lines */
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * 3); /* R3's eight lines, three characters each */
+}
+
+/* Ch. 16.3's own degenerate case: "if R7=0, then a VSYNC occurs when C4=0.
+   If R4 is 0, then C4 remains at 0 ... C4 is therefore 0 during the VSYNC
+   but also after the end of the VSYNC. In this context, there is no more
+   VSYNC." Exactly one, then — which is also what says the chip wakes with
+   ch. 13.2.2's state standing, since C4 never moves to lift a block, and a
+   chip that woke without it would give none at all. */
+static void an_r7_and_r4_of_zero_give_one_vsync_and_no_more(void) {
+  crtc_init(&crtc, 0);
+  write_register(0, 63);
+  write_register(1, 40);
+  write_register(3, 0x8E);
+  write_register(4, 0);
+  write_register(9, 3);
+  /* R7 is left at the zero power-on gives it, so the equality is never made
+     by hand — and C4, which an R4 of 0 never moves, never lifts a block. */
+  int vsync_characters = 0;
+  for (long character = 0; character < 200L * SCANLINE; character++) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE);
+}
+
+/* Ch. 16.4.1.1 gives the equality made by hand a rule of its own, which is
+   not the arming of ch. 13.2.2: "the VSYNC is triggered immediately if it
+   was not already in progress, except if this modification occurs when
+   C0vs=0 or C0vs=1. If the modification of R7 with the value of C4 took
+   place when C0vs<2, we are in a BLOCKED VSYNC." The chapter reads it off
+   the PPI six microseconds after the write, and finds the sync inactive. */
+static void an_r7_written_at_a_lines_head_blocks_instead_of_triggering(void) {
+  for (uint8_t at = 0; at <= 2; at++) {
+    program_standard();
+    write_register(7, 100); /* beyond C4's reach, so nothing walks into it */
+    TEST_CHECK(run_to_row(10));
+    while (crtc.c0 != at) {
+      crtc_tick(&crtc);
+    }
+    write_register(7, crtc.c4);
+    bool sync = false;
+    for (int character = 0; character < 6; character++) {
+      sync = sync || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+    }
+    TEST_EQUAL(sync, at == 2);
+  }
+}
+
+/* And that is the whole of the condition on it: a line that never armed
+   still takes the VSYNC an R7 write makes on it, because the arming governs
+   the equality C4 walks into, while "when R7=C4 with C0vs>1, the VSYNC is
+   'triggered' during the line" carries no such clause (ch. 16.4.1.1). */
+static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
+  program_standard();
+  write_register(7, 100);
+  TEST_CHECK(run_to_row(10));
+  write_register(0, 1);
+  run_characters(2); /* a line of two characters, which never reaches C0=2 */
+  write_register(0, 63);
+  while (crtc.c0 != 10) {
+    crtc_tick(&crtc);
+  }
+  write_register(7, crtc.c4);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
+}
+
+/* A type 2 has no C0vs<2 exception: "if R7 is modified with the value of C4,
+   then the VSYNC is triggered immediately, except during the HSYNC period
+   (C0=R2 to C0=R2+R3), which triggers the GHOST VSYNC" (ch. 16.4.3) — a
+   period "1 µsec longer than the visual size of the HSYNC". Either way a sync
+   begins at once; inside the period it is a GHOST and no pin rises, then or
+   over the line after. The period is the sync's own, wherever R2 and R3 put
+   it: carried past R0 into the next line, and nowhere at all where no
+   counter reaches R2. */
+static void an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync(void) {
+  static const struct {
+    uint8_t r2;
+    uint8_t r3;         /* the sync's width */
+    uint8_t written_on; /* the character C0 names when the write lands */
+    bool on_the_clock;
+    bool pin; /* whether the sync it begins reaches the pin */
+  } cases[] = {
+      {46, 0x8E, 0, true, true},    /* a line's head, which a type 0 blocks */
+      {46, 0x8E, 1, true, true},    /* and the character after it */
+      {46, 0x8E, 45, true, true},   /* the character before the sync */
+      {46, 0x8E, 46, true, false},  /* the sync's first character */
+      {46, 0x8E, 53, true, false},  /* inside it */
+      {46, 0x8E, 59, true, false},  /* its last character */
+      {46, 0x8E, 60, true, false},  /* the microsecond past it */
+      {46, 0x8E, 61, true, true},   /* and the one past that */
+      {46, 0x80, 62, true, false},  /* a width of nothing is sixteen on this type */
+      {46, 0x80, 63, true, true},   /* and ends there */
+      {60, 0x88, 2, true, false},   /* a sync carried past R0 into the next line */
+      {50, 0x8E, 0, true, false},   /* B (3)'s sync, ended on the next line's head */
+      {50, 0x8E, 1, true, true},    /* and the character after */
+      {250, 0x8A, 2, true, true},   /* an R2 no counter reaches: no sync at all */
+      {46, 0x8E, 45, false, true},  /* off the clock, the equality read a */
+      {46, 0x8E, 46, false, false}, /* character later: ch. 15.4.4's drawing of */
+      {46, 0x8E, 60, false, false}, /* an OUT gives the same period, the last */
+      {46, 0x8E, 61, false, true},  /* character of it included */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, 2);
+    write_register(0, 63);
+    write_register(2, cases[index].r2);
+    write_register(3, cases[index].r3);
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(7, 60); /* beyond C4's reach, so no VSYNC of its own */
+    bool arrived = false;
+    for (long tick = 0; tick < 64L * SCANLINE && !arrived; tick++) {
+      crtc_tick(&crtc);
+      arrived = crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == cases[index].written_on;
+    }
+    TEST_CHECK(arrived);
+    TEST_CHECK(!crtc.vsync);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+    uint64_t pins = CRTC_CS | CRTC_RS | crtc_set_data(0, crtc.c4);
+    if (cases[index].on_the_clock) {
+      pins |= CRTC_ON_THE_CHARACTER_CLOCK;
+    }
+    crtc_access(&crtc, pins);
+    if (!cases[index].on_the_clock) {
+      crtc_tick(&crtc); /* the equality is read on the next character */
+    }
+    TEST_CHECK(crtc.vsync);
+    TEST_EQUAL(crtc.vsync_is_a_ghost, !cases[index].pin);
+    bool raised_later = false;
+    for (int character = 0; character < SCANLINE; character++) {
+      raised_later = raised_later || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+    }
+    TEST_EQUAL(raised_later, cases[index].pin);
+  }
+}
+
+/* What a GHOST is for: "the CRTC counts the lines as if a VSYNC were taking
+   place by preventing a new VSYNC from occurring, but without the VSYNC pin
+   being enabled" (ch. 16.4.3). A condition merely ignored inside the sync
+   "would occur immediately when leaving HSYNC", and the chip "will therefore
+   only be able to accept a new VSYNC condition when GHOST VSYNC is
+   completed" (ch. 15.4.4) — so an R7 written onto C4 again past the sync
+   raises nothing until the GHOST's sixteen lines are counted, and R7 written
+   onto C4 once they are raises a pulse that reaches the pin. */
+static void a_ghost_vsync_holds_another_off_until_its_lines_are_counted(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 50);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 4));
+  TEST_CHECK(crtc.vsync && crtc.vsync_is_a_ghost);
+  TICK_UNTIL(crtc.c0 == 62);
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 4));
+  int pin_characters = 0;
+  int lines = 0;
+  while (crtc.vsync && lines < 32) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      pin_characters++;
+    }
+    if (crtc.c0 == 0) {
+      lines++;
+    }
+  }
+  TEST_EQUAL(pin_characters, 0);
+  TEST_EQUAL(lines, 16);
+  /* Counted, and an equality made anew reaches the pin. */
+  TICK_UNTIL(crtc.c0 == 10);
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
+  TEST_CHECK(crtc.vsync && !crtc.vsync_is_a_ghost);
+}
+
+/* A GHOST ends as any VSYNC does, and the equality that raised it is spent
+   with it: where the row outlasts the sixteen lines, C4 still standing on R7
+   raises nothing more until the comparison changes (ch. 16.3). */
+static void a_ghost_vsync_spends_the_equality_that_raised_it(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 50);
+  write_register(3, 0x0E);
+  write_register(4, 38);
+  write_register(9, 31);
+  write_register(7, 5);
+  TICK_UNTIL(crtc.c4 == 5 && crtc.vsync);
+  TEST_CHECK(crtc.vsync_is_a_ghost);
+  /* Sixteen lines into a row of thirty-two it has ended, and nothing stands
+     in its place on the row's last line. */
+  TICK_UNTIL(crtc.c4 == 5 && crtc.c9 == 31);
+  TEST_CHECK(!crtc.vsync);
+}
+
+/* The GHOST an R7 written off the clock makes is that write's alone: the
+   next frame's sync, walked into at a row's head outside the line sync,
+   reaches the pin. And so where such a write begins no sync at all, one
+   already running when it lands. */
+static void a_ghost_written_off_the_clock_leaves_the_next_frame_its_pin(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 46);
+  write_register(3, 0x8E);
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 50);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 4));
+  crtc_tick(&crtc);
+  TEST_CHECK(crtc.vsync && crtc.vsync_is_a_ghost);
+  TICK_UNTIL(!crtc.vsync);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 0);
+  TEST_CHECK(crtc.vsync && !crtc.vsync_is_a_ghost);
+
+  TICK_UNTIL(crtc.c0 == 50);
+  TEST_CHECK(crtc.vsync);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 4));
+  TICK_UNTIL(!crtc.vsync);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 0 && crtc.c0 == 0);
+  TEST_CHECK(crtc.vsync && !crtc.vsync_is_a_ghost);
+}
+
+/* A write that makes no equality leaves C4 to walk into one on its own
+   terms: R7 written off the clock with the row still to come, on the last
+   character of a line whose sync ends there, is no GHOST at the next row's
+   head, which lies outside that sync (ch. 15.4.4). */
+static void an_r7_written_in_a_sync_ahead_of_c4_leaves_the_walk_in_alone(void) {
+  crtc_init(&crtc, 2);
+  write_register(0, 63);
+  write_register(2, 49);
+  write_register(3, 0x8E); /* 49 to 62, ended on 63 */
+  write_register(4, 38);
+  write_register(9, 7);
+  write_register(7, 60);
+  TICK_UNTIL(crtc.c4 == 4 && crtc.c9 == 7 && crtc.c0 == 63);
+  crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
+  crtc_access(&crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 5));
+  bool pin = false;
+  for (int character = 0; character < 2 * SCANLINE; character++) {
+    pin = pin || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+  }
+  TEST_CHECK(crtc.vsync);
+  TEST_CHECK(pin);
+}
+
+/* And the condition C4 walks into: "If this evaluation occurs while the
+   HSYNC is in progress, then a GHOST VSYNC starts", and one taking place
+   from C0=R2 to past the sync "will therefore trigger a GHOST VSYNC, unless
+   R2=0. When R2=0, the HSYNC starts on C0=0, but the VSYNC has had time to be
+   processed and it occurs normally" (ch. 15.4.4). That chapter's diagrams put the sync at 50
+   and give a pulse at R3 of 12 and 13 and none at 14 and 15, the widths whose
+   sync runs into, or ends on, the C0=0 the row R7 names begins on. The GHOST
+   is that chip's alone: the other four raise the pin there. */
+static void a_type_2_walks_into_a_ghost_vsync_where_its_hsync_runs(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r2;
+    uint8_t r3;
+    bool pin;
+  } cases[] = {
+      {2, 50, 0x0C, true},  /* the sync ends before the row's head */
+      {2, 50, 0x0D, true},  /* and on the character before it */
+      {2, 50, 0x0E, false}, /* on the head itself: a GHOST */
+      {2, 50, 0x0F, false}, /* running through it */
+      {2, 0, 0x0E, true},   /* only beginning there, R2 being 0 */
+      {0, 50, 0x0E, true},  {1, 50, 0x0E, true}, {3, 50, 0x0E, true}, {4, 50, 0x0E, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(2, cases[index].r2);
+    write_register(3, cases[index].r3);
+    write_register(4, 38);
+    write_register(9, 7);
+    write_register(7, 5);
+    TICK_UNTIL(crtc.c4 == 4);
+    bool began = false;
+    bool pin = false;
+    for (long tick = 0; tick < 2L * 8 * SCANLINE; tick++) {
+      pin = pin || (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+      began = began || crtc.vsync;
+    }
+    TEST_CHECK(began);
+    TEST_EQUAL(pin, cases[index].pin);
+  }
+}
+
+/* The management has no more defined a start than the VSYNC's permission
+   does, and this chip wakes holding it — a chip that has been running has
+   passed C0=1 more times than anyone can count. It shows only where R0 is
+   0 from the first character, which is what power-on leaves it: one
+   boundary lands, and then the freeze. */
+static void the_chip_wakes_with_its_counters_managed(void) {
+  crtc_init(&crtc, 0);
+  write_register(9, 7); /* a row of eight lines, so C9 is what the boundary moves */
+  for (int character = 0; character < 16; character++) { /* a dozen and more */
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c9, 1);
+  TEST_EQUAL(crtc.c4, 0);
+}
+
+/* Every last line is armed for an adjustment, whether or not anything wants
+   one — "the CRTC assesses whether it is on the last line, and if so, arms
+   an internal flag by default", C0=2 being left to "assess the conditions
+   for disarming ... in particular by testing the value of R5" (ch. 12.1,
+   13.2.5). The same assessment takes it back where the last line is unmade
+   under it: ch. 12.2 has that state "overridden if R4 or R9 is modified to
+   C0==0 so that C4 becomes different from R4", and that the arming goes with
+   it is our reading of that rather than its own words. */
+static void every_last_line_is_armed_and_an_unmade_one_disarmed(void) {
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);                           /* the last line, C0=0 drawn */
+  TEST_CHECK(crtc.vertical_adjustment_armed); /* armed, though R5 asks nothing */
+  run_characters(3);                          /* past the C0=3 the disarm reads */
+  TEST_CHECK(!crtc.vertical_adjustment_armed);
+
+  program_standard();
+  write_register(5, 0);
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  write_register(4, 39); /* in force from C0=1, unmaking the last line */
+  crtc_tick(&crtc);
+  TEST_CHECK(!crtc.vertical_adjustment_armed);
+}
+
+/* A line of three characters still reaches its disarm, though the character
+   this file reads it at does not exist there: ch. 11.2.2 and ch. 12.2 part
+   the narrow lines at "R0 < 2", so an R0 of 2 is on the wide side and the
+   frame ends where it would have ended. */
+static void a_line_of_three_characters_still_reaches_its_disarm(void) {
+  program_standard();
+  write_register(4, 1);
+  write_register(5, 0);
+  write_register(9, 1);
+  TEST_CHECK(run_to_row(1));
+  run_scanlines(1); /* C4=1=R4, C9=1=R9: the frame's last line */
+  write_register(0, 2);
+  run_characters(2);
+  write_register(4, 0); /* so the counters cannot end the frame on their own */
+  int lines = 0;
+  for (int character = 0; character < 200; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c0 == 0) {
+      lines++;
+      if (crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+  }
+  TEST_EQUAL(lines, 1); /* the next line is the frame's first */
+}
+
+/* Ch. 13.2.6's worked case. "If C9=R9 and C4=R4 (when R0 goes to 0), then
+   ... an additional management is activated, and which will remain so when
+   C0 can once again exceed 1. It is then R5 which controls the end of the
+   additional management. To stop this management, program R5 with C9+1."
+   The chapter's own summary is shorter: "if C9=R9 and C4=R4 then C4=R4+1.
+   When R0>0, C4 is managed by C9/R5." So the frozen row advance is not a
+   row advance at all but the adjustment beginning, and the line it lands on
+   is one the assessment at C0=0 can no longer take back — which it would,
+   C4 having just moved off R4 and the last line with it. */
+static void a_freeze_on_a_last_line_begins_an_adjustment(void) {
+  program_standard();
+  write_register(5, 0);
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c4 == 38 && crtc.c9 == 7 && crtc.c0 == 0) {
+      break;
+    }
+  }
+  write_register(0, 0); /* C0 already stands at 0, so it stays there */
+  for (int character = 0; character < 8; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c4, 39); /* R4+1 */
+  TEST_CHECK(crtc.vertical_adjustment_in_progress);
+
+  /* Widened again: "C9+1 being different from R5, then C9 is incremented"
+     (ch. 13.2.6), so C9 climbs from the 7 the freeze left it at while C4
+     holds where it landed. */
+  write_register(0, 63);
+  run_scanlines(4);
+  TEST_EQUAL(crtc.c4, 39);
+  TEST_EQUAL(crtc.c9, 11);
+
+  /* "To stop this management, program R5 with C9+1." */
+  write_register(5, 12);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* Ch. 11.2.2 lists the ways an adjustment comes about with R5 at 0: an R4 or
+   R9 moved at C0=1 of a last line, "or if C0 can never reach 2 because R0 <
+   2". Ch. 13.2.1 and ch. 13.2.5 say what that second one draws, both of them
+   inside their own R0=1 case: it lasts "1 line of 2 usec before ceasing
+   (C4+1, C9=0)", and only "on the next line" does "the end of additional
+   management reset C4 and C9 to 0". Ch. 13.2.5 draws the picture — "when
+   R4=R9=0, each 'line' of 2 usec is therefore immediately followed by a
+   'line' of 2 usec for which C9=0 and C4=1" — so the lines alternate. A wider
+   line measures before it gives, which is ch. 13.2.4's reminder and what
+   Shaker's graded E (1) holds this chip to. */
+static void a_narrow_line_draws_the_adjustment_it_cannot_disarm(void) {
+  crtc_init(&crtc, 0);
+  write_register(0, 1);
+  write_register(1, 40);
+  write_register(3, 0x8E);
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 0);
+  crtc_tick(&crtc); /* the priming tick draws no character */
+
+  /* Every line is a last line here, so every one is armed and none is
+     disarmed, and they come out as the chapter's picture has them. */
+  static const uint8_t alternating[6][2] = {{1, 0}, {0, 0}, {1, 0}, {0, 0}, {1, 0}, {0, 0}};
+  for (int line = 0; line < 6; line++) {
+    run_characters(2); /* a line of two characters */
+    TEST_EQUAL(crtc.c4, alternating[line][0]);
+    TEST_EQUAL(crtc.c9, alternating[line][1]);
+  }
+
+  /* And a row of four scanlines puts that line after the last of them:
+     "this 'line' of 2 usec (for which C4=1) occurs after the last value of
+     C9" (ch. 13.2.5). */
+  crtc_init(&crtc, 0);
+  write_register(0, 1);
+  write_register(3, 0x8E);
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(6, 25);
+  write_register(7, 30);
+  write_register(9, 3);
+  crtc_tick(&crtc);
+  static const uint8_t after_the_row[5][2] = {{0, 1}, {0, 2}, {0, 3}, {1, 0}, {0, 0}};
+  for (int line = 0; line < 5; line++) {
+    run_characters(2);
+    TEST_EQUAL(crtc.c4, after_the_row[line][0]);
+    TEST_EQUAL(crtc.c9, after_the_row[line][1]);
+  }
+}
+
+/* Which is a type 0's and not the two ASICs': of those "R0 accepts all values
+   without causing any problems for other counters" (ch. 13.5), and they ask
+   for padding where a line ends, which a line of two characters reaches like
+   any other. So where a type 0 alternates a frame's line with a line of
+   padding above, these two give a frame of one line after another, C4 never
+   leaving 0. */
+static void the_two_asics_take_no_padding_from_a_narrow_line(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 1);
+    write_register(1, 40);
+    write_register(3, 0x8E);
+    write_register(4, 0);
+    write_register(5, 0);
+    write_register(6, 25);
+    write_register(7, 30);
+    write_register(9, 0);
+    crtc_tick(&crtc); /* the priming tick draws no character */
+    for (int line = 0; line < 6; line++) {
+      run_characters(2);
+      TEST_EQUAL(crtc.c4, 0);
+      TEST_EQUAL(crtc.c9, 0);
+    }
+  }
+}
+
+/* And the ceasing after one line belongs to the R0=1 case alone. Ch. 13.2.6
+   gives a line of one character the other ending: the run "will remain so
+   when C0 can once again exceed 1. It is then R5 which controls the end of
+   the additional management. To stop this management, program R5 with
+   C9+1." Its table is walked here row by row — the frozen line, three
+   widened ones with C4 held and C9 climbing, and the ending the chapter
+   prescribes. */
+static void a_run_begun_under_a_stopped_picture_ends_on_r5(void) {
+  program_standard();
+  write_register(4, 0);
+  write_register(5, 0);
+  write_register(9, 0);
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c4 == 0 && crtc.c9 == 0 && crtc.c0 == 20) {
+      break;
+    }
+  }
+  /* A width of nothing under a running counter, which puts it home at once. */
+  write_register(0, 0);
+  TEST_EQUAL(crtc.c0, 0u);
+  run_characters(4);
+  TEST_EQUAL(crtc.c4, 1); /* R4+1, and the run begun */
+  TEST_EQUAL(crtc.c9, 0);
+
+  write_register(0, 63);
+  for (uint8_t line = 1; line <= 3; line++) {
+    run_scanlines(1);
+    TEST_EQUAL(crtc.c4, 1); /* held where the stopping left it */
+    TEST_EQUAL(crtc.c9, line);
+  }
+  write_register(5, (uint8_t)(crtc.c9 + 1));
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* Ch. 15.3.1: "On CRTC 0, two HSYNC's cannot be contiguous if position
+   C0=R2 is encountered when C3l reaches R3l, and R3l has not been modified
+   on this position." It is what keeps a line shorter than its own sync out
+   of the endless HSYNC the other types fall into — ch. 15.3.2 sets R0=0,
+   R2=0 and R3l=1 and says "on a CRTC 0, the HSYNC will not take place. It
+   will occur on the 3rd C0=0", so the syncs alternate with the characters
+   between them. */
+static void two_hsyncs_cannot_be_contiguous(void) {
+  crtc_init(&crtc, 0);
+  write_register(0, 0);
+  write_register(2, 0);
+  write_register(3, 0x01);
+  write_register(4, 4);
+  write_register(9, 1);
+  for (int character = 0; character < 16; character++) {
+    TEST_EQUAL((crtc_tick(&crtc) & CRTC_HSYNC) != 0, character % 2 == 0);
+  }
+
+  /* A sync four characters wide on a line of four ends where it began, so
+     the same block holds it to every other line. */
+  crtc_init(&crtc, 0);
+  write_register(0, 3);
+  write_register(2, 0);
+  write_register(3, 0x04);
+  write_register(4, 4);
+  write_register(9, 1);
+  for (int character = 0; character < 16; character++) {
+    TEST_EQUAL((crtc_tick(&crtc) & CRTC_HSYNC) != 0, (character / 4) % 2 == 0);
+  }
+}
+
+/* And the exception, which is where a R2.JIT HSYNC begins: "on this
+   position, if C0 is again equal to R2 but R3l is modified, then a new
+   HSYNC-CRTC begins without C3l being zeroed" (ch. 15.3.3). The write is
+   what is read here, not the value it carries — the same reading ch. 16.3
+   states outright for R7, "whatever the value written" — so a rewrite of
+   the value R3l already holds reaches it, and the sync it lets through runs
+   until C3l comes round the four bits to R3l again. Nothing outside this
+   repository grades that reading: a write that changes R3l cannot be told
+   apart here, the comparison that ends the sync reading the new value on
+   the same character. */
+static void an_r3_written_in_time_carries_the_hsync_on(void) {
+  crtc_init(&crtc, 0);
+  write_register(0, 0);
+  write_register(2, 0);
+  write_register(3, 0x04);
+  write_register(4, 4);
+  write_register(9, 1);
+  for (int character = 0; character < 4; character++) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC); /* C3l counting towards R3l */
+  }
+  write_register(3, 0x04); /* in force on the character C3l reaches it */
+  for (int character = 0; character < 16; character++) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC); /* let through, and counting on */
+  }
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_HSYNC));
+}
+
+/* Ch. 14.5: "it is possible to change the value of R3l when C3l counts,
+   which can affect the length of the HSYNC. If R3l is changed with a value
+   less than C3l, then C3l is overflowing". Ch. 14.5.1 draws it for types 0
+   and 2 at R2=11 and R3l=10, the write landing where C3l stands at 4, and
+   the widths below are read off that diagram: written with 5, the sync ends
+   where C3l meets it; with 0, C3l runs 0 to 15 and round to 0 again; with 1,
+   one character further. Ch. 14.5.1 and 14.5.3 draw the same run to sixteen
+   for a zero on types 2, 3 and 4; a type 1 cancels the sync instead
+   (ch. 14.5), which is not here and not pinned. Written with 4, the value
+   C3l stands at, ch. 14.5.1 draws the sync stopping, its row marked R3.JIT,
+   which ch. 14.5.4 gives types 0, 1 and 2 for an OUT; this chip runs it
+   round to 20, as ch. 14.5.3 draws for the two ASICs, and that row is
+   pinned so that it moves knowingly. */
+static void an_r3l_written_during_a_hsync_stops_it_or_overflows(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t written; /* the R3l in force on the sync's sixth character */
+    int characters;  /* and the width the sync comes out */
+  } cases[] = {
+      {0, 10, 10}, /* the value it already holds, which changes nothing */
+      {0, 5, 5},   /* one above where C3l stands, which it meets next */
+      {0, 4, 20},  /* R3.JIT, which silicon stops and this chip overflows */
+      {0, 0, 16},  /* under it, so C3l overflows and runs round to it */
+      {0, 1, 17},  {2, 0, 16}, {3, 0, 16}, {4, 0, 16},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(2, 11);
+    write_register(3, 0x8A);
+    write_register(4, 4);
+    write_register(9, 1);
+    int characters = 0;
+    bool written = false;
+    for (int character = 0; character < 40; character++) {
+      if (crtc_tick(&crtc) & CRTC_HSYNC) {
+        characters++;
+      } else if (characters > 0) {
+        break;
+      }
+      if (characters == 5 && !written) {
+        write_register(3, (uint8_t)(0x80 | cases[index].written));
+        written = true;
+      }
+    }
+    TEST_EQUAL(characters, cases[index].characters);
+  }
+}
+
+/* A line of one character never reaches C0=1, so "C9 processing management"
+   is never enabled again and "all of the CRTC counters are frozen as long as
+   R0=0" (ch. 13.2.1, 13.2.4). What the last managed line had already decided
+   still lands, and only one part of it can: "if C9 had reached R9 on the
+   first C0=0, then the reset of C9 had been armed as well as the increment
+   to C4. With C9 being frozen, only C4 will increment", and once only,
+   "because it has taken place". */
+static void a_line_of_one_character_freezes_the_counters(void) {
+  static const struct {
+    uint8_t from_c9; /* the row's scanline when R0 is taken to 0 */
+    uint8_t at_c0;   /* and the character the write is made on */
+    uint8_t settles_c4;
+    uint8_t settles_c9;
+  } cases[] = {
+      /* Past C0=1, so the management still stands and one boundary runs
+         managed before the freeze takes. */
+      {3, 5, 10, 4},
+      {6, 5, 11, 7},
+      /* And on C0=0 itself, where no boundary runs managed at all and the
+         armed increment is the whole of what happens. */
+      {7, 0, 11, 7},
+  };
+
+  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
+    program_standard();
+    TEST_CHECK(run_to_row(10));
+    run_scanlines(cases[index].from_c9);
+    run_characters(cases[index].at_c0);
+    /* Wherever the counter stood, a width of nothing puts it home, so the
+       write itself is the first C0=0 with R0=0. */
+    write_register(0, 0);
+    TEST_EQUAL(crtc.c0, 0u);
+    for (int character = 0; character < 8; character++) { /* well past a second */
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c4, cases[index].settles_c4);
+    TEST_EQUAL(crtc.c9, cases[index].settles_c9);
+  }
+}
+
+/* The VSYNC's line counter is frozen with the rest of them, which is what
+   leaves a pulse begun on such a line running for ever: "the VSYNC line
+   counter C3h is frozen, and the VSYNC is not deactivated if R3h was worth
+   1 (because C3h can no longer reach R3h)". A line of two characters keeps
+   its management, so there C3h counts and the pulse "will have lasted 2
+   µsec in total" (ch. 16.4.1.2). */
+static void a_line_of_one_character_leaves_a_vsync_running_where_two_do_not(void) {
+  for (uint8_t narrow_r0 = 0; narrow_r0 <= 1; narrow_r0++) {
+    program_standard();
+    /* R3h of 1: one line of VSYNC, over the HSYNC width R3l already held. */
+    write_register(3, 0x1E);
+    uint64_t pins;
+    do {
+      pins = crtc_tick(&crtc);
+    } while (!(pins & CRTC_VSYNC) || crtc.c0 != 0);
+    write_register(0, narrow_r0);
+    if (narrow_r0 == 0) {
+      /* Eight times over the one line R3h asked for, and still running. */
+      for (int character = 0; character < 8 * SCANLINE; character++) {
+        TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
+      }
+    } else {
+      TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC); /* the second of its two */
+      TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
+    }
+  }
+}
+
+/* The freeze shuts out the registers that feed the counters — "updates to
+   registers R4, R5 and R9 are no longer considered as long as R0=0" — but
+   not R8: "on the other hand, R8 continues to be considered each time
+   C0=0" (ch. 13.2.1). So the interlace video mode's doubling is taken up
+   under a frozen chip, and the raster address moves though no counter
+   does. */
+static void a_frozen_chip_still_reads_r8(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(10));
+  run_scanlines(3);
+  run_characters(5);
+  write_register(0, 0);
+  TEST_EQUAL(crtc.c0, 0u);
+  TEST_EQUAL(crtc_ra(crtc_tick(&crtc)), 4); /* C9, frozen where it landed */
+  write_register(8, 3);
+  uint8_t raster = 0;
+  for (int character = 0; character < 8; character++) {
+    raster = crtc_ra(crtc_tick(&crtc));
+  }
+  TEST_EQUAL(raster, 8); /* the same C9, doubled */
+}
+
+/* An adjustment moves C4 once for all its lines together, "and in
+   additional management one only once if C4 was worth R4" (ch. 13.2.1), so
+   what the freeze keeps against the next boundary has to ask the same
+   question the boundary itself asks. A chip that armed on the row's last
+   scanline alone would move C4 a second time under a still picture. */
+static void a_frozen_adjustment_moves_c4_no_further(void) {
+  program_standard();
+  write_register(5, 20);
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.vertical_adjustment_armed && crtc.c9 == 7 && crtc.c4 == 39 && crtc.c0 == 0) {
+      break;
+    }
+  }
+  TEST_EQUAL(crtc.c4, 39); /* R4+1, and there it stays for the whole of it */
+  write_register(0, 0);
+  for (int character = 0; character < 8; character++) {
+    crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc.c4, 39);
+}
+
+/* ParityFrame turns as a frame's first character is entered (ch. 19.5.2),
+   which is an event and not a comparison standing: a chip frozen on that
+   character enters nothing more, and its parity — which the raster address
+   and the VSYNC's placement both read — must hold with the counters. */
+static void a_chip_frozen_on_a_frame_head_keeps_its_parity(void) {
+  program_standard();
+  write_register(6, 0);
+  write_register(8, 3);
+  crtc_tick(&crtc); /* the priming tick draws no character */
+  for (long character = 0; character < 400L * SCANLINE; character++) {
+    crtc_tick(&crtc);
+    if (crtc.c4 == 0 && crtc.c9 == 0 && crtc.c0 == 0) {
+      break;
+    }
+  }
+  TEST_EQUAL(crtc.c0, 0);
+  write_register(0, 0);
+  bool parity = crtc.parity_frame;
+  for (int character = 0; character < 20; character++) {
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.parity_frame, parity);
+  }
+}
+
+/* ParityFrame is settled before the VSYNC is looked at, which only shows
+   where R7 is 0 and the two fall on the same character: the frame that has
+   just become even takes a MID-VSYNC in its own first line (ch. 19.7.2). */
+static void the_parity_settles_before_an_r7_of_zero_is_read(void) {
+  vsync_seen seen;
+
+  program_standard();
+  /* R7 is written where C4 is not 0, so the equality is left for the frame
+     to walk into rather than made by hand (ch. 16.4.1.1). */
+  TEST_CHECK(run_to_row(1));
+  run_characters(2);
+  write_register(7, 0);
+  write_register(8, 1);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(seen.odd_frame);
+  TEST_EQUAL(seen.character, 0);
+
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(!seen.odd_frame);
+  TEST_EQUAL(seen.character, 31);
+}
+
+/* The two ASICs take the same character the other way round: "in the
+   particular case where R7=0, the management of the VSYNC coincides with the
+   start of the frame. In this case, the management of the VSYNC has priority
+   over the assignment of ParityFrame ... If ParityFrame was odd, then there
+   will be no MID-VSYNC, and VSYNC will start on C4=C9=C0=0, although
+   ParityFrame has change to Even. Conversely, if ParityFrame was even, then
+   there will be a MID-VSYNC, and the VSYNC will start when C0 reaches R0/2
+   and even though ParityFrame has become odd" (ch. 19.7.3), where of the
+   other three "MID-VSYNC therefore always takes place when ParityFrame is
+   even, including when R7=0" (ch. 19.7.2). So on those two the half line
+   falls on the odd frames, and only where R7 is 0: "MID-VSYNC therefore always
+   takes place when ParityFrame is even, except when R7=0" (ch. 19.7.3), which
+   the R7 of 30 holds them to. Shaker grades it on both ASIC records, in C (S)
+   and in the one line of C (O) that asks for an R7 of 0. */
+static void an_r7_of_zero_is_read_before_the_parity_turns_on_the_asics(void) {
+  static const uint8_t r7s[] = {0, 30};
+  for (unsigned which = 0; which < sizeof r7s; which++) {
+    for (uint8_t type = 0; type < 5; type++) {
+      crtc_init(&crtc, type);
+      write_register(0, 63);
+      write_register(1, 40);
+      write_register(2, 46);
+      write_register(3, 0x8E);
+      write_register(4, 38);
+      write_register(6, 25);
+      write_register(7, 30);
+      write_register(9, 7);
+      for (long tick = 0; tick < 400L * SCANLINE; tick++) {
+        crtc_tick(&crtc);
+      }
+      /* R7 is written where C4 stands on neither value, so the equality is
+         left for the frame to walk into rather than made by hand (ch.
+         16.4.1.1, 16.4.4). */
+      TICK_UNTIL(crtc.c0 == 2 && crtc.c4 == 1);
+      write_register(7, r7s[which]);
+      write_register(8, 1);
+      bool read_first = r7s[which] == 0 && (type == 3 || type == 4);
+      int odd_frames = 0;
+      for (int frame = 0; frame < 4; frame++) {
+        vsync_seen seen = {0};
+        TEST_CHECK(next_vsync(&seen));
+        odd_frames += seen.odd_frame ? 1 : 0;
+        bool half_line = read_first ? seen.odd_frame : !seen.odd_frame;
+        TEST_EQUAL(seen.character, half_line ? 31 : 0);
+      }
+      /* Both parities, so a chip that stopped turning cannot pass by never
+         meeting the other. */
+      TEST_EQUAL(odd_frames, 2);
+    }
+  }
+}
+
+/* Ch. 19.8.1's counting tables for R9=6, transcribed. From the line after
+   the one R8 is given 3 on, the raster address is C9 doubled with parity in
+   bit 0, and the row ends where that address reaches R9 read up to the same
+   parity — so a row is four lines where it was seven, and the two frames
+   address alternate lines. */
+static void the_video_mode_doubles_the_raster_address(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+  static const r8_update on_the_first_line[] = {{0, 3}};
+
+  static const uint8_t even_from_the_first_line[8][3] = {
+      {0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6}, {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, on_the_first_line, 1);
+  check_lines("R8=3 on C9=0, even frame", got, even_from_the_first_line, 8);
+
+  static const uint8_t odd_from_the_first_line[8][3] = {{0, 0, 0}, {0, 1, 3}, {0, 2, 5}, {0, 3, 7},
+                                                        {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, on_the_first_line, 1);
+  check_lines("R8=3 on C9=0, odd frame", got, odd_from_the_first_line, 8);
+
+  /* The doubling waits for the head of the next line, so the line the mode
+     is asked for on still addresses itself undoubled. */
+  static const r8_update on_the_second_line[] = {{1, 3}};
+  static const uint8_t even_from_the_second_line[8][3] = {
+      {0, 0, 0}, {0, 1, 1}, {0, 2, 4}, {0, 3, 6}, {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, on_the_second_line, 1);
+  check_lines("R8=3 on C9=1, even frame", got, even_from_the_second_line, 8);
+
+  static const uint8_t odd_from_the_second_line[8][3] = {
+      {0, 0, 0}, {0, 1, 1}, {0, 2, 5}, {0, 3, 7}, {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, on_the_second_line, 1);
+  check_lines("R8=3 on C9=1, odd frame", got, odd_from_the_second_line, 8);
+
+  static const r8_update on_the_third_line[] = {{2, 3}};
+  static const uint8_t even_from_the_third_line[8][3] = {
+      {0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 6}, {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, on_the_third_line, 1);
+  check_lines("R8=3 on C9=2, even frame", got, even_from_the_third_line, 8);
+
+  static const uint8_t odd_from_the_third_line[8][3] = {{0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 7},
+                                                        {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, on_the_third_line, 1);
+  check_lines("R8=3 on C9=2, odd frame", got, odd_from_the_third_line, 8);
+}
+
+/* Parity joins the limit the moment R8 is written, a line before the
+   doubling does, and a row that has already passed the line the new limit
+   names cannot end on it: C9 climbs until the doubled address comes round
+   through five bits. This is one of the two counting bugs ch. 19.5.2 offers
+   a program as a way of reading the parity it is on. */
+static void a_video_mode_entered_late_overflows_c9(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+
+  static const r8_update on_the_fourth_line[] = {{3, 3}};
+  static const uint8_t even_overflow[24][3] = {
+      {0, 0, 0},   {0, 1, 1},   {0, 2, 2},   {0, 3, 3},   {0, 4, 8},   {0, 5, 10},
+      {0, 6, 12},  {0, 7, 14},  {0, 8, 16},  {0, 9, 18},  {0, 10, 20}, {0, 11, 22},
+      {0, 12, 24}, {0, 13, 26}, {0, 14, 28}, {0, 15, 30}, {0, 16, 0},  {0, 17, 2},
+      {0, 18, 4},  {0, 19, 6},  {1, 0, 0},   {1, 1, 2},   {1, 2, 4},   {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 24, on_the_fourth_line, 1);
+  check_lines("R8=3 on C9=3, even frame", got, even_overflow, 24);
+
+  static const uint8_t odd_overflow[24][3] = {
+      {0, 0, 0},   {0, 1, 1},   {0, 2, 2},   {0, 3, 3},   {0, 4, 9},   {0, 5, 11},
+      {0, 6, 13},  {0, 7, 15},  {0, 8, 17},  {0, 9, 19},  {0, 10, 21}, {0, 11, 23},
+      {0, 12, 25}, {0, 13, 27}, {0, 14, 29}, {0, 15, 31}, {0, 16, 1},  {0, 17, 3},
+      {0, 18, 5},  {0, 19, 7},  {1, 0, 1},   {1, 1, 3},   {1, 2, 5},   {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 24, on_the_fourth_line, 1);
+  check_lines("R8=3 on C9=3, odd frame", got, odd_overflow, 24);
+
+  /* Asked for on the row's last line, an even frame ends the row where it
+     would have ended anyway — and an odd one finds the limit a line higher
+     and overruns the whole way round.
+
+     The even table prints C9 as 0, 2, 4, 6 for the row after, where the
+     switching tables print 0, 1, 2, 3 for rows of the same shape and every
+     exit table shows C9 carrying on by one. C9 is a counter: its column is
+     corrected here, and the C9-VMA column, which is what the chip puts on
+     RA, is copied as printed. */
+  static const r8_update on_the_last_line[] = {{6, 3}};
+  static const uint8_t even_on_r9[11][3] = {{0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 3},
+                                            {0, 4, 4}, {0, 5, 5}, {0, 6, 6}, {1, 0, 0},
+                                            {1, 1, 2}, {1, 2, 4}, {1, 3, 6}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 11, on_the_last_line, 1);
+  check_lines("R8=3 on C9=R9, even frame", got, even_on_r9, 11);
+
+  static const uint8_t odd_on_r9[24][3] = {
+      {0, 0, 0},   {0, 1, 1},   {0, 2, 2},   {0, 3, 3},   {0, 4, 4},   {0, 5, 5},
+      {0, 6, 6},   {0, 7, 15},  {0, 8, 17},  {0, 9, 19},  {0, 10, 21}, {0, 11, 23},
+      {0, 12, 25}, {0, 13, 27}, {0, 14, 29}, {0, 15, 31}, {0, 16, 1},  {0, 17, 3},
+      {0, 18, 5},  {0, 19, 7},  {1, 0, 1},   {1, 1, 3},   {1, 2, 5},   {1, 3, 7}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 24, on_the_last_line, 1);
+  check_lines("R8=3 on C9=R9, odd frame", got, odd_on_r9, 24);
+}
+
+/* Leaving, the two switches part company the other way about: the limit
+   loses its parity at once and the address keeps its doubling for one line
+   more. So a row left on an address that has passed R9 runs on to R9
+   undoubled, and one left on R9 itself ends there.
+
+   The Compendium's exit tables give the line R8 is asked for on a doubled
+   address, where its switching tables and its own prose give that line an
+   undoubled one — "from the line C9 which follows that where R8 goes to 3".
+   The switching tables are followed here. */
+static void leaving_the_video_mode_drops_the_parity_from_the_limit(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+
+  static const r8_update left_on_the_rows_first_line[] = {{0, 3}, {4, 0}};
+  static const uint8_t even_left_early[12][3] = {{0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6},
+                                                 {1, 0, 0}, {1, 1, 1}, {1, 2, 2}, {1, 3, 3},
+                                                 {1, 4, 4}, {1, 5, 5}, {1, 6, 6}, {2, 0, 0}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 12, left_on_the_rows_first_line, 2);
+  check_lines("R8=0 on C4=1 C9=0, even frame", got, even_left_early, 12);
+
+  static const r8_update left_on_the_rows_last_line[] = {{0, 3}, {7, 0}};
+  static const uint8_t even_left_on_r9[12][3] = {{0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6},
+                                                 {1, 0, 0}, {1, 1, 2}, {1, 2, 4}, {1, 3, 6},
+                                                 {2, 0, 0}, {2, 1, 1}, {2, 2, 2}, {2, 3, 3}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 12, left_on_the_rows_last_line, 2);
+  check_lines("R8=0 on C4=1 C9=3, even frame", got, even_left_on_r9, 12);
+
+  /* The other counting bug: on an odd frame that address is R9+1, which the
+     limit no longer reaches, so the row runs on. */
+  static const uint8_t odd_left_on_r9[12][3] = {{0, 0, 0}, {0, 1, 3}, {0, 2, 5}, {0, 3, 7},
+                                                {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7},
+                                                {1, 4, 4}, {1, 5, 5}, {1, 6, 6}, {2, 0, 0}};
+  stand_on_an_odd_frame(6);
+  record_lines(got, 12, left_on_the_rows_last_line, 2);
+  check_lines("R8=0 on C4=1 C9=3, odd frame", got, odd_left_on_r9, 12);
+}
+
+/* With an odd R9 the parity of a row's lines turns with C4 as well as with
+   the frame, so the rows come out alternately five lines and four and a
+   pair of them holds the nine an R9 of 7 asks for — the balance that lets
+   the two frames carry the same number of lines (ch. 19.5.2). */
+static void an_odd_r9_gives_the_rows_alternating_parities(void) {
+  recorded_line got[MAX_RECORDED_LINES];
+  static const r8_update on_the_first_line[] = {{0, 3}};
+
+  static const uint8_t even_frame[18][3] = {{0, 0, 0}, {0, 1, 2}, {0, 2, 4}, {0, 3, 6}, {0, 4, 8},
+                                            {1, 0, 1}, {1, 1, 3}, {1, 2, 5}, {1, 3, 7}, {2, 0, 0},
+                                            {2, 1, 2}, {2, 2, 4}, {2, 3, 6}, {2, 4, 8}, {3, 0, 1},
+                                            {3, 1, 3}, {3, 2, 5}, {3, 3, 7}};
+  stand_on_an_even_frame(7);
+  record_lines(got, 18, on_the_first_line, 1);
+  check_lines("R9=7, even frame", got, even_frame, 18);
+
+  static const uint8_t odd_frame[18][3] = {{0, 0, 0}, {0, 1, 3}, {0, 2, 5}, {0, 3, 7}, {1, 0, 0},
+                                           {1, 1, 2}, {1, 2, 4}, {1, 3, 6}, {1, 4, 8}, {2, 0, 1},
+                                           {2, 1, 3}, {2, 2, 5}, {2, 3, 7}, {3, 0, 0}, {3, 1, 2},
+                                           {3, 2, 4}, {3, 3, 6}, {3, 4, 8}};
+  stand_on_an_odd_frame(7);
+  record_lines(got, 18, on_the_first_line, 1);
+  check_lines("R9=7, odd frame", got, odd_frame, 18);
+}
+
+/* An odd R9 in the video mode gives a row five lines on one parity and four
+   on the other, so an odd C4 of an odd frame begins where an even frame's
+   begins one line earlier. Its VSYNC waits that line out, rising at
+   C9.VMA=2 — which is what still leaves the two frames' syncs half a line
+   apart (ch. 19.5.2, 19.7.1). */
+static void an_odd_row_of_an_odd_frame_takes_its_vsync_late(void) {
+  vsync_seen seen;
+
+  stand_on_an_odd_frame(7);
+  write_register(7, 1);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 1);
+  TEST_EQUAL(seen.raster, 2);
+
+  /* On the even frame that same row runs its odd lines and starts at 1, so
+     the sync falls on the row's own first line. */
+  stand_on_an_even_frame(7);
+  write_register(7, 1);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 1);
+  TEST_EQUAL(seen.raster, 1);
+
+  /* An even C4 waits for nothing on either frame. */
+  stand_on_an_odd_frame(7);
+  write_register(7, 2);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 2);
+  TEST_EQUAL(seen.raster, 1);
+
+  /* Nor does an odd C4 whose rows are an even number of lines. */
+  stand_on_an_odd_frame(6);
+  write_register(7, 1);
+  write_register(8, 3);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.row, 1);
+  TEST_EQUAL(seen.raster, 1);
+}
+
+/* VMA' is captured where C0 reaches R1 on the row's last scanline, and in
+   the video mode that is the last of the doubled address's rather than the
+   last C9 would name — ch. 19.8.1 says the test "also takes place when
+   C0=R1 ... and the assignment of VMA' with VMA". So the video pointer
+   still steps R1 characters a row where C9 never reaches R9 at all. */
+static void the_video_pointer_still_steps_a_row_at_a_time(void) {
+  stand_on_an_even_frame(6);
+  write_register(8, 3);
+
+  TEST_CHECK(run_to_row(1));
+  uint16_t first = crtc.vma;
+  TEST_CHECK(run_to_row(2));
+  uint16_t second = crtc.vma;
+  TEST_CHECK(run_to_row(3));
+  uint16_t third = crtc.vma;
+  TEST_EQUAL(second - first, 40); /* R1 */
+  TEST_EQUAL(third - second, 40);
+}
+
+/* The vertical adjustment is armed on the row's last scanline too, so a
+   frame in the video mode still takes the lines R5 asks for. Five rows of
+   four lines and eight adjustment lines, and the even frame's interlace
+   line on top of them (ch. 11.2.2, 19.6.1, 19.8.1). */
+static void the_video_mode_still_takes_the_adjustment_lines(void) {
+  stand_on_an_even_frame(6);
+  write_register(4, 4);
+  write_register(5, 8);
+  write_register(6, 2);
+  write_register(8, 3);
+  TEST_EQUAL(frame_scanlines(), 29);
+  TEST_EQUAL(frame_scanlines(), 28);
+  TEST_EQUAL(frame_scanlines(), 29);
+}
+
+/* Ch. 17.6.2's own example: R0 of 3 and R1 of 4, so C0 never reaches R1 and
+   the line displays throughout — except that the chip runs ahead of the
+   characters the Gate Array draws and sends its border on half a character
+   early, putting one byte of it before C0 goes to 0. */
+static void a_line_r1_never_ends_borders_its_last_byte(void) {
+  program_standard();
+  write_register(0, 3);
+  write_register(1, 4);
+  TEST_CHECK(run_to_row(1));
+  /* Two whole lines of it: every character displays, and the one C0 names 3
+     gives its second byte to the border. */
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, crtc.c0 != 3);
+  }
+
+  /* "This behaviour remains true whatever the value of R0. If R0=0, then
+     the display alternates between 1 DISP ON byte, and 1 DISP OFF byte." */
+  write_register(0, 0);
+  for (int character = 0; character < 4; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_CHECK(!(pins & CRTC_DISPTMG_SECOND_BYTE));
+  }
+}
+
+/* Ch. 18.3.2: an R6 of 0 on a frame's first line is a conflict — C4 reaching
+   R6 asks for the border and the new frame takes it away — and the two land
+   a byte apart, so that line alternates displayed and bordered bytes where
+   every other line of such a frame is border throughout. */
+static void an_r6_of_zero_alternates_the_first_lines_bytes(void) {
+  program_standard();
+  write_register(6, 0);
+  TEST_CHECK(run_to_row(0));
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_CHECK(!(pins & CRTC_DISPTMG_SECOND_BYTE));
+  }
+  /* The second line of the frame is not the first, so R6 shuts it whole. */
+  run_scanlines(1);
+  uint64_t after = crtc_tick(&crtc);
+  TEST_CHECK(!(after & CRTC_DISPTMG));
+  TEST_CHECK(!(after & CRTC_DISPTMG_SECOND_BYTE));
+
+  /* And it is the conflict that parts the bytes, not the line: an R6 above
+     0 leaves a frame's first line whole. */
+  program_standard();
+  TEST_CHECK(run_to_row(0));
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_CHECK(pins & CRTC_DISPTMG_SECOND_BYTE);
+  }
+
+  /* Nor is it any row's first line: with R9 of 0 every row is one line long,
+     and C4 leaves R6 behind after the first of them, so the conflict is the
+     frame's own and the rows after it are whole. R1 is put where C0 cannot
+     reach it, which is the chapter's own way of holding the conflict open:
+     an R1 met while R6 still stands at 0 makes the border definitive and
+     there would be no row left to look at (ch. 18.3.2). */
+  program_standard();
+  write_register(6, 0);
+  write_register(9, 0);
+  write_register(1, 64); /* R0 + 1 */
+  TEST_CHECK(run_to_row(1));
+  for (int character = 0; character < 8; character++) {
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_CHECK(pins & CRTC_DISPTMG);
+    TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, crtc.c0 != 63);
+  }
+}
+
+/* What a frame's first line comes out as when R6 stands at 0, which is a
+   different answer on each of the three chapters. Types 0 and 2 alternate
+   bordered and displayed bytes (ch. 18.3.2). A type 1 borders outright,
+   because for that chip "the value 0 is specifically considered and triggers
+   a BORDER without the condition C4=R6 being required" (ch. 18.2.3) and the
+   border "is activated as long as the register value is 0" (ch. 18.3.3).
+   Types 3 and 4 have no conflict to hold their equality back and take it at
+   the frame's own head: "the BORDER is activated only when C0 goes to 0 when
+   C4=R6" (ch. 18.2.4, 18.3.4). */
+static void an_r6_of_zero_meets_each_type_differently(void) {
+  static const struct {
+    uint8_t type;
+    bool displays_the_first_byte;  /* the alternation's displayed half */
+    bool displays_the_second_byte; /* which only the two that alternate lose */
+  } cases[] = {
+      {0, true, false}, {1, false, false}, {2, true, false}, {3, false, false}, {4, false, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 0, 30, 0, 7, 0, 0, 0x30, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    TEST_CHECK(run_to_row(0));
+    for (int character = 0; character < 8; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, cases[index].displays_the_first_byte);
+      TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cases[index].displays_the_second_byte);
+    }
+  }
+}
+
+/* And a type 1's border goes when the register does, where the other four
+   keep what the equality threw: "the BORDER is activated as long as the
+   register value is 0" (ch. 18.3.3), read at every character rather than
+   latched. The write that makes it outlive its register is the one made
+   while C4 is 0, which the same chapter keeps for the rest of the frame. */
+static void a_type_1_gives_up_its_r6_border_with_the_register(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 0, 30, 0, 7, 0, 0, 0x30, 0};
+  for (int written_while_c4_was_zero = 0; written_while_c4_was_zero <= 1;
+       written_while_c4_was_zero++) {
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    if (written_while_c4_was_zero) {
+      /* The update ch. 18.3.3 keeps: an R6 written with 0 while C4 stands at
+         0 "becomes true first for all the rest of the frame". */
+      TEST_CHECK(run_to_row(0));
+      crtc_tick(&crtc);
+      write_register(6, 0);
+    }
+    TEST_CHECK(run_to_row(2));
+    crtc_tick(&crtc);
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* an R6 of 0 borders */
+    write_register(6, 25);
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_EQUAL((pins & CRTC_DISPTMG) != 0, !written_while_c4_was_zero);
+  }
+}
+
+/* The frame's first line is where an R6 of 0 can still be taken back, and
+   the character C0 meets R1 on is the deadline: "in this situation however,
+   if R6 is 0 when C0=R1, the BORDER becomes definitive", where an R1 put out
+   of C0's reach leaves it cancellable — "if we prevent C0=R1 on the line
+   C4=C9=0 (for example R1=R0+1), and R6 is no longer equal to 0, then the
+   BORDER is deactivated on the following line" (ch. 18.3.2). Ch. 18.3.3
+   settles the same standing on a type 1 the other way, and ch. 18.3.4 says
+   types 3 and 4 never meet it. */
+static void an_r6_of_zero_is_taken_back_only_before_r1(void) {
+  static const struct {
+    uint8_t r1;         /* 40 is met on the line; 64 is not */
+    bool taken_back;    /* whether R6 is written above 0 on the first line */
+    bool borders_after; /* what the frame's second row comes out as */
+  } cases[] = {
+      {40, true, true},  /* taken back after C0 met R1 */
+      {64, true, false}, /* taken back with R1 out of reach */
+      /* And never taken back, which the chapter leaves to "the condition
+         C4=R6=0=BORDER is cancellable on the first line" rather than saying
+         outright. */
+      {40, false, true},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    program_standard();
+    write_register(9, 0); /* a row to a line, so the second row is the second line */
+    write_register(1, cases[index].r1);
+    write_register(6, 0);
+    TEST_CHECK(run_to_row(0));
+    /* Along the first line, past R1 wherever it stands. */
+    for (int character = 0; character < 50; character++) {
+      crtc_tick(&crtc);
+    }
+    if (cases[index].taken_back) {
+      write_register(6, 25);
+    }
+    TEST_CHECK(run_to_row(1));
+    uint64_t pins = crtc_tick(&crtc);
+    TEST_EQUAL((pins & CRTC_DISPTMG) == 0, cases[index].borders_after);
+  }
+}
+
+/* R12/R13 reach the video pointer on every line of a frame's first
+   character row on a type 1, and on that row's first line alone everywhere
+   else: "CRTC 1 then loads VMA with R12/R13 as long as C4=0 and each time C0
+   returns to 0, regardless of the value of C9" (ch. 20.3.2), where a type 0
+   is given "when the counters C4, C9 and C0 change to 0" (ch. 20.3.1). The
+   offset is moved on the row's second line and the third line is read: a
+   type 1 draws it from the new address and the others from the old.
+
+   Ch. 20.3.1's own last line says of a type 0 only "if C4=0 and C0=0", which
+   would make it a type 1 in this; its opening sentence names C9 with the
+   other two, and that is what stands here. Nothing outside this file chooses
+   between them: dropping the C9 from the shared rule leaves both Shaker
+   records and both demo records passing, and only these rows notice. A type
+   2 has the offset from the last line of the frame before (ch. 17.4.3), so
+   the rows read are the second frame's. */
+static void a_type_1_takes_its_offset_all_through_the_first_row(void) {
+  static const struct {
+    uint8_t type;
+    bool on_every_line;
+  } cases[] = {{0, false}, {1, true}, {2, false}, {3, false}, {4, false}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    TEST_CHECK(run_to_row(1));
+    TEST_CHECK(run_to_row(0));
+    while (crtc.c9 != 1) { /* the row's second line, C4 still 0 */
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.c0, 0);
+    write_register(12, 0x20);
+    write_register(13, 0x40);
+    while (crtc.c9 != 2) { /* and its third, where the offset is read or not */
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.vma, cases[index].on_every_line ? 0x2040 : 0x1000);
+    /* And no type takes it once C4 has left 0 behind: the chapter gives a
+       type 1 the row C4 spends at 0, not the frame. */
+    TEST_CHECK(run_to_row(1));
+    while (crtc.c9 != 1) {
+      crtc_tick(&crtc);
+    }
+    uint16_t opened_the_line = crtc.vma;
+    write_register(12, 0x30);
+    write_register(13, 0x00);
+    while (crtc.c9 != 2) {
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(crtc.vma, opened_the_line);
+  }
+}
+
+/* The offset reaches a type 1's pointer and not its latch, which shows
+   where C0 can never meet R1 and the latch is therefore never filled: "the
+   condition C0 = R1 no longer occurs and the VMA' pointer is no longer
+   updated. VMA' is frozen on the last known pointer ... We have therefore,
+   when R1>R0, a first line character which contains the pointer defined in
+   R12/R13 and on the following, the last pointer updated in VMA'" (ch.
+   17.4.2). Types 0, 3 and 4 fill both at a frame's head, so every row of
+   theirs opens on R12/R13 and "all the lines displayed become identical"
+   (ch. 17.4.1). A type 2 fills its latch from R12/R13 only where C0 meets R1
+   on a last line, so it takes the offset nowhere and draws every row from
+   the frozen latch: "When R1>R0, neither pointer is updated with R12/R13
+   anymore. All lines are identical in this situation" (ch. 17.4.3). Ch.
+   20.3.3 opens on a type 0's rule, "when counters C4, C9 and C0 change to 0,
+   pointers (VMA' & VMS) are initialized with R12/R13", and goes on to give a
+   type 2 its own; ch. 17.4.3 is the one taken. */
+static void types_1_and_2_leave_their_latch_frozen_where_c0_cannot_reach_r1(void) {
+  static const struct {
+    uint8_t type;
+    bool draws_rows_from_the_frozen_latch;
+  } cases[] = {{0, false}, {1, true}, {2, true}, {3, false}, {4, false}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    /* A frame with R1 where C0 can reach it, so the latch holds a capture. */
+    TEST_CHECK(run_to_row(1));
+    write_register(1, 64); /* R0 + 1, past C0's reach from here on */
+    TEST_CHECK(run_to_row(0));
+    /* What the latch holds going into the frame: a capture from before R1
+       was moved on the two chips that do not fill it at a frame's head, and
+       R12/R13 on the three that do. */
+    uint16_t frozen = crtc.vma_;
+    TEST_EQUAL(frozen != 0x1000, cases[index].draws_rows_from_the_frozen_latch);
+    TEST_CHECK(run_to_row(1));
+    TEST_EQUAL(crtc.vma, cases[index].draws_rows_from_the_frozen_latch ? frozen : 0x1000);
+  }
+}
+
+/* And the offset carries into the C4 of 1 that a run of additional lines
+   gives a type 1, where the run opened with C4 at 0: "if C4=0 before the
+   additional management, then VMA is updated with R12/R13 and not VMA', and
+   this as long as C4=1 ... it is then possible to modify the offset on each
+   line C9 of C4=1 as one would do when C4=0" (ch. 11.2.4). A run that opened
+   above 0 carries nothing, which is the same C4 of 1 reached the other way.
+   The exception that chapter ends on is taken by the test below this one. */
+static void a_type_1_carries_its_offset_into_the_added_lines(void) {
+  static const struct {
+    uint8_t r4; /* 0 opens the run at C4 of 0; 127 opens it where C4 wraps */
+    uint8_t r9;
+    uint8_t c4;   /* the run's own C4, as it climbs */
+    bool carries; /* which the chapter gives the first of them alone */
+  } cases[] = {
+      {0, 7, 1, true},
+      {0, 7, 2, false},
+      /* And a run that reached the same C4 of 1 without having opened at 0:
+         C4 wraps through its seven bits, so the chapter's condition is the
+         one thing left deciding it. */
+      {127, 7, 1, false},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 12, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      uint8_t value = values[reg];
+      if (reg == 4) {
+        value = cases[index].r4;
+      }
+      if (reg == 9) {
+        value = cases[index].r9;
+      }
+      write_register(reg, value);
+    }
+    bool reached = false;
+    for (long character = 0; character < 64L * 64 * 130 && !reached; character++) {
+      crtc_tick(&crtc);
+      reached = crtc.vertical_adjustment_in_progress && crtc.c4 == cases[index].c4 &&
+                crtc.c0 == 0 && crtc.c9 > 0;
+    }
+    TEST_CHECK(reached);
+    if (!reached) {
+      continue;
+    }
+    uint16_t offset = (uint16_t)(0x2040 + index);
+    write_register(12, (uint8_t)(offset >> 8));
+    write_register(13, (uint8_t)offset);
+    do { /* on to the run's next line, whatever R9 leaves C9 reading */
+      crtc_tick(&crtc);
+    } while (crtc.c0 != 0);
+    if (cases[index].carries) {
+      TEST_EQUAL(crtc.vma, offset);
+    } else {
+      TEST_CHECK(crtc.vma != offset);
+    }
+  }
+}
+
+/* The R4 that makes a run decides whether the offset carries into it, and
+   only that one: "however, if R4 was modified to C0==R0 with R4>0, then VMA
+   is not updated with R12/R13 when C4=1" (ch. 11.2.4). An R4 moved once the
+   run is open moves nothing, which is what makes the answer a state taken at
+   the open rather than the register read line by line.
+
+   Both halves of what the chapter names of that write are here: the value
+   above 0, which an R4 of 0 or of &80 — seven bits, so also 0 — does not
+   meet, and the position C0=R0, which a write made along the line does not.
+   That row reaches its run the ordinary way, at the end of the frame's last
+   line and with C4 still at 0, so the carry stands because the write was not
+   where the exception wants it and not because the run was made otherwise. */
+static void an_r4_moved_at_a_lines_end_takes_the_carry_away(void) {
+  static const struct {
+    uint8_t at_c9; /* the line of the frame's last row the write lands on */
+    int at_c0;     /* and where along it; -1 for no write at all */
+    uint8_t to;
+    bool then_taken_back; /* a later write, away from a line's end */
+    bool moved_inside_the_run;
+    bool carries;
+  } cases[] = {
+      {7, -1, 5, false, false, true},    /* nothing moved */
+      {7, 63, 5, false, false, false},   /* the chapter's own exception */
+      {7, 63, 0, false, false, true},    /* moved there, but not above 0 */
+      {7, 63, 0x80, false, false, true}, /* nor is &80, which R4 keeps seven bits of */
+      {7, 30, 5, false, false, true},    /* moved above 0, but not at the line's end */
+      {3, 63, 5, true, false, true},     /* and taken back by a later write */
+      {7, -1, 5, false, true, true},     /* moved once the run had opened */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 20, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    if (cases[index].at_c0 >= 0) {
+      /* Where the write is to land, on the frame's own last row. */
+      bool there = false;
+      for (long character = 0; character < 8L * 64 * 40 && !there; character++) {
+        crtc_tick(&crtc);
+        there = !crtc.vertical_adjustment_in_progress && crtc.c4 == 0 &&
+                crtc.c9 == cases[index].at_c9 && crtc.c0 == cases[index].at_c0;
+      }
+      TEST_CHECK(there);
+      if (!there) {
+        continue;
+      }
+      write_register(4, cases[index].to);
+      if (cases[index].then_taken_back) {
+        bool later = false;
+        for (long character = 0; character < 8L * 64 && !later; character++) {
+          crtc_tick(&crtc);
+          later = crtc.c9 == (uint8_t)(cases[index].at_c9 + 1) && crtc.c0 == 10;
+        }
+        TEST_CHECK(later);
+        write_register(4, 0);
+      }
+    }
+    bool reached = false;
+    for (long character = 0; character < 8L * 64 * 40 && !reached; character++) {
+      crtc_tick(&crtc);
+      reached = crtc.vertical_adjustment_in_progress && crtc.c4 == 1 && crtc.c0 == 0 && crtc.c9 > 0;
+    }
+    TEST_CHECK(reached);
+    if (!reached) {
+      continue;
+    }
+    if (cases[index].moved_inside_the_run) {
+      /* At a line's end, which is where the exception would have caught the
+         write had the run not already opened. */
+      while (crtc.c0 != crtc.registers[0]) {
+        crtc_tick(&crtc);
+      }
+      write_register(4, cases[index].to);
+      do {
+        crtc_tick(&crtc);
+      } while (crtc.c0 != 0);
+    }
+    write_register(12, 0x20);
+    write_register(13, 0x40);
+    do {
+      crtc_tick(&crtc);
+    } while (crtc.c0 != 0);
+    if (cases[index].carries) {
+      TEST_EQUAL(crtc.vma, 0x2040);
+    } else {
+      TEST_CHECK(crtc.vma != 0x2040);
+    }
+  }
+}
+
+/* The exception wants C0 standing on R0, and not merely at or past it. An R0
+   pulled under C0 and left there for a character tells the two apart: the
+   write that follows lands where C0 is past R0 without being on it, so a
+   chip reading the comparison the other way would refuse a carry this one
+   grants. */
+static void the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 20, 25, 30, 0, 7, 0, 0, 0x10, 0};
+  crtc_init(&crtc, 1);
+  for (int reg = 0; reg < 14; reg++) {
+    write_register(reg, values[reg]);
+  }
+  bool there = false;
+  for (long character = 0; character < 8L * 64 * 40 && !there; character++) {
+    crtc_tick(&crtc);
+    there = !crtc.vertical_adjustment_in_progress && crtc.c4 == 0 && crtc.c9 == 7 && crtc.c0 == 30;
+  }
+  TEST_CHECK(there);
+  if (!there) {
+    return;
+  }
+  write_register(0, 10); /* R0 pulled under C0, which stands at 30 */
+  crtc_tick(&crtc);      /* and a character drawn with it there */
+  write_register(4, 5);  /* above 0, past R0, and not on it */
+  write_register(0, 63); /* the line put back */
+  bool reached = false;
+  for (long character = 0; character < 8L * 64 * 40 && !reached; character++) {
+    crtc_tick(&crtc);
+    reached = crtc.vertical_adjustment_in_progress && crtc.c4 == 1 && crtc.c0 == 0 && crtc.c9 > 0;
+  }
+  TEST_CHECK(reached);
+  if (!reached) {
+    return;
+  }
+  write_register(12, 0x20);
+  write_register(13, 0x40);
+  do {
+    crtc_tick(&crtc);
+  } while (crtc.c0 != 0);
+  TEST_EQUAL(crtc.vma, 0x2040);
+}
+
+/* R8's bits 5 and 4 are the SKEW-DISPTMG delays, which ch. 19.1's table
+   gives this type and withholds from types 1 and 2: one character or two
+   on the R1 border's two edges. Ch. 19.2.3 states each delay as its own
+   pair of rules. Of one microsecond: "The BORDER is deactivated on the 2nd
+   character after that or C0=R0 (C0=1)" and "The BORDER is activated on
+   the 1st character after the one where C0=R1". Of two: the 3rd character
+   (C0=2) and the 2nd. Both are read here from the display window's two
+   ends, and the window is walked round C0=0 so that the opening is
+   evidence and not only the closing. */
+static void the_skew_delays_the_border_at_both_ends(void) {
+  static const struct {
+    uint8_t r8;
+    int opens_at;  /* the first character of the line that displays */
+    int closes_at; /* the first that does not */
+  } functions[] = {{0x00, 0, 40}, {0x10, 1, 41}, {0x20, 2, 42}};
+
+  for (size_t index = 0; index < sizeof functions / sizeof functions[0]; index++) {
+    program_standard();
+    write_register(8, functions[index].r8);
+    TEST_CHECK(run_to_row(1));
+    /* run_to_row leaves the character C0 names 0 already drawn, so the line
+       is walked from the one after it and C0 read back off the chip. */
+    for (int character = 1; character <= 64; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      bool shown = crtc.c0 >= functions[index].opens_at && crtc.c0 < functions[index].closes_at;
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, shown);
+    }
+  }
+}
+
+/* Ch. 19.2.3's note: "If R1=R0, then the BORDER is activated on C0=0" — the
+   delay carries the closing round the line's end, so the border is the
+   line's first character and every other one displays. */
+static void a_skew_carries_the_border_round_the_lines_end(void) {
+  for (uint8_t skew = 1; skew <= 2; skew++) {
+    program_standard();
+    write_register(1, 63);
+    write_register(8, (uint8_t)(skew << 4));
+    TEST_CHECK(run_to_row(1));
+    for (int character = 1; character <= 127; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, crtc.c0 != skew - 1);
+    }
+  }
+}
+
+/* And where R1 was never reached, a delay turns the half character the chip
+   sends early into a whole one at the deferred place (ch. 19.2.4). */
+static void a_skew_makes_the_early_border_a_whole_character(void) {
+  for (uint8_t skew = 1; skew <= 2; skew++) {
+    program_standard();
+    write_register(0, 3);
+    write_register(1, 4);
+    write_register(8, (uint8_t)(skew << 4));
+    TEST_CHECK(run_to_row(1));
+    for (int character = 1; character <= 15; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      /* R0 stands in for R1, so the border is the character the delay
+         carries it to — C0=0 for one, C0=1 for two — and every other
+         character is displayed whole. */
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, crtc.c0 != skew - 1);
+      TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, crtc.c0 != skew - 1);
+    }
+  }
+}
+
+/* Ch. 19.2.1: the BORDER ON function shuts the display where it stands, and
+   the video pointer goes on counting under it. */
+static void the_border_on_function_shuts_the_display(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  run_characters(4);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  uint16_t before = crtc.vma;
+  write_register(8, 0x30);
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG_SECOND_BYTE));
+  TEST_EQUAL(crtc.vma, before + 2);
+  write_register(8, 0x00);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+/* Ch. 19.2.5.3's first row, which is what tells a held-back signal from a
+   moved comparison: the delay is taken off after the character it deferred
+   the border to has already passed. A chip that moved its comparisons would
+   never reach the opening and would lose the rest of the line; one that
+   holds the signal back reads out the latch as it stood and opens on time.
+   R0 and R1 are both 63, as that section has them. */
+static void a_skew_taken_off_late_does_not_cost_the_line(void) {
+  program_standard();
+  write_register(1, 63);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 60) {
+    crtc_tick(&crtc);
+  }
+  write_register(8, 0x10);                        /* in force from C0=61 */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* 61 */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* 62 */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* 63, the border deferred */
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* 0, and here it is */
+  write_register(8, 0x00);                        /* in force from C0=1 */
+  for (int character = 1; character <= 20; character++) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  }
+}
+
+/* And the BORDER ON function is not a count: it shuts the display where it
+   stands and leaves the R1 border where the registers put it, so a line it
+   is lifted from resumes as that border says, and not three characters late
+   as it would if its value were read as a count. Ch. 19.2.1 says only that
+   the function does not affect the R6 border; that it leaves the R1 one
+   alone as well is read from ch. 19.1's table, where it is the fourth value
+   of the skew field and named Non-output rather than a third delay. */
+static void the_border_on_function_moves_no_comparison(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  write_register(8, 0x30);
+  while (crtc.c0 != 40) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  }
+  write_register(8, 0x00); /* in force from C0=41, past R1 */
+  for (int character = 41; character <= 63; character++) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  }
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=0 opens the next line */
+}
+
+/* Ch. 19.2 gives the BORDER ON function the whole register: "if the BORDER
+   ON function is activated, the INTERLACE function on the 2 least
+   significant bits is not considered", and adds that the point wants
+   further investigation. Read literally it silences all three of the things
+   those bits ask for, and all three are read here. */
+static void the_border_on_function_silences_the_interlace_bits(void) {
+  vsync_seen seen;
+
+  /* No added line: an interlace mode lengthens an even frame by one, and
+     under BORDER ON it does not (ch. 19.6.1). */
+  program_standard();
+  write_register(8, 0x01);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 313);
+  program_standard();
+  write_register(8, 0x31);
+  TEST_CHECK(!crtc.parity_frame);
+  TEST_EQUAL(frame_scanlines(), 312);
+
+  /* No MID-VSYNC: every frame's VSYNC begins at the head of its line and
+     runs the eight lines R3 asks for, rather than eight and a part. */
+  program_standard();
+  write_register(8, 0x31);
+  TEST_CHECK(next_vsync(&seen));
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
+  bool first_parity = seen.odd_frame;
+  TEST_CHECK(next_vsync(&seen));
+  TEST_CHECK(seen.odd_frame != first_parity); /* the frames alternate still */
+  TEST_EQUAL(seen.character, 0);
+  TEST_EQUAL(seen.characters, 8 * SCANLINE);
+
+  /* No doubled raster address either: the counting is the plain one, an R9
+     of 6 giving seven scanlines a row and RA following C9. */
+  recorded_line got[MAX_RECORDED_LINES];
+  static const r8_update border_on_with_the_video_mode[] = {{0, 0x33}};
+  static const uint8_t undoubled[8][3] = {{0, 0, 0}, {0, 1, 1}, {0, 2, 2}, {0, 3, 3},
+                                          {0, 4, 4}, {0, 5, 5}, {0, 6, 6}, {1, 0, 0}};
+  stand_on_an_even_frame(6);
+  record_lines(got, 8, border_on_with_the_video_mode, 1);
+  check_lines("R8=#33 on C9=0, even frame", got, undoubled, 8);
+  stand_on_an_odd_frame(6);
+  record_lines(got, 8, border_on_with_the_video_mode, 1);
+  check_lines("R8=#33 on C9=0, odd frame", got, undoubled, 8);
+}
+
+/* Ch. 19.2.3 exempts the video pointer from the delay outright: "The video
+   pointer assignment when C9=R9 does not change regardless of the
+   programmed delay: VMA is always assigned with VMA' when C0 reaches R1".
+   So a row below a delayed line begins where an undelayed one would, and
+   the extra characters a delay shows on the right are, in the chapter's
+   words, "the characters whose address will be reloaded at the beginning of
+   the line". */
+static void a_skew_does_not_move_the_video_pointer(void) {
+  uint16_t rows[3];
+  for (int index = 0; index < 3; index++) {
+    program_standard();
+    write_register(8, (uint8_t)(index << 4));
+    TEST_CHECK(run_to_row(2));
+    rows[index] = crtc.vma;
+  }
+  TEST_EQUAL(rows[1], rows[0]);
+  TEST_EQUAL(rows[2], rows[0]);
+}
+
+/* Ch. 19.2.4 keys the substitution on "the condition C0=R1 not being met
+   during the line", and ch. 19.2.5 repeats it: "The condition C0=R1 is just
+   replaced by the condition C0=R0 in this case." R1 standing beyond the
+   line's end is the plainest way to miss the condition, and a line that
+   misses it earns the same border whatever the delay: half a character
+   early with none, a whole one at the deferred place with one. */
+static void a_line_that_misses_r1_borders_at_r0(void) {
+  for (uint8_t skew = 0; skew <= 2; skew++) {
+    program_standard();
+    write_register(1, 64);
+    write_register(8, (uint8_t)(skew << 4));
+    TEST_CHECK(run_to_row(1));
+    for (int character = 1; character <= 64; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      bool border = skew != 0 && crtc.c0 == skew - 1;
+      bool half = skew == 0 && crtc.c0 == 63;
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, !border);
+      TEST_EQUAL((pins & CRTC_DISPTMG_SECOND_BYTE) != 0, !border && !half);
+    }
+  }
+}
+
+/* An R1 moved behind C0 is missed for the rest of that line just as surely,
+   and the chip has no memory of the value it held (ch. 19.2.5's "the last
+   value programmed on the line is the one present when the 1st OUT is
+   performed on the following line"). */
+static void an_r1_moved_behind_c0_earns_the_missed_border(void) {
+  program_standard();
+  write_register(8, 0x10);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 30) {
+    crtc_tick(&crtc);
+  }
+  write_register(1, 20); /* behind C0, and never met again this line */
+  while (crtc.c0 != 63) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  }
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=0, the deferred byte */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+/* Ch. 19.2.5.1, the row where the cancelling write lands latest: "SKEW
+   DISP+1 is cancelled on C0<=63. BORDER management is handled with the 2nd
+   OUT. The programming of the 1st OUT (R8=#10) is ignored." So a delay
+   cancelled while C0=63 is drawn leaves the border on C0=63, where no delay
+   would have put it. One microsecond later is 19.2.5.2 instead, and the
+   byte disappears altogether — which is what that chapter is named for. */
+static void a_skew_cancelled_in_time_leaves_the_border_where_it_was(void) {
+  program_standard();
+  write_register(1, 63);
+  write_register(8, 0x10);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 62) {
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+  }
+  write_register(8, 0x00);                        /* in force from C0=63 */
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=63 borders */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);    /* and C0=0 does not */
+}
+
+/* Ch. 19.2.1: BORDER ON "does not affect the BORDER R6 state (when C4=R6)
+   and it is therefore possible to switch to one of the 3 other available
+   states". So an R6 border thrown while the display was shut is still
+   thrown when the function is lifted, and nothing but a new frame opens it
+   (ch. 18.2.2). Ch. 19.2.2 asks the question the other way round — whether
+   R8=0 can cancel a BORDER R6 — and marks it "To be tested"; here it
+   cannot, which is our reading and not the documentation's answer. */
+static void the_border_on_function_leaves_the_r6_border_standing(void) {
+  program_standard();
+  write_register(8, 0x30);
+  TEST_CHECK(run_to_row(26)); /* past R6, where the R6 border is thrown */
+  run_characters(4);
+  write_register(8, 0x00);
+  for (int character = 0; character < 8; character++) {
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+  }
+  TEST_CHECK(run_to_row(0));
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+}
+
+/* The substitution needs a character to put the border in, and only a delay
+   provides one. Whether the BORDER ON function provides one too is asked
+   nowhere: while it stands the display is shut, so on the line itself the
+   two readings agree. They part on the line's last character, where a
+   substitution would raise a latch that a delay written at C0=0 then hands
+   out. We read the function as ch. 19.1's table names it — Non-output, the
+   fourth value of the field rather than a third delay — so it earns no
+   character, and a line it stood on opens like any other. */
+static void the_border_on_function_earns_no_deferred_character(void) {
+  for (uint8_t standing = 0x00; standing <= 0x30; standing = (uint8_t)(standing + 0x30)) {
+    program_standard();
+    write_register(1, 64); /* C0 never meets R1 */
+    write_register(8, standing);
+    TEST_CHECK(run_to_row(1));
+    while (crtc.c0 != 63) {
+      crtc_tick(&crtc);
+    }
+    write_register(8, 0x10);                     /* a delay, in force from C0=0 */
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=0 displays all the same */
+  }
+}
+
+/* Ch. 19.2.5, where the delay is a rule read afresh at every character and
+   not a countdown held: a border asked for and then taken back before its
+   character arrives never comes, and one asked for too late to stop arrives
+   twice. R0 and R1 are both 63, as those diagrams have them. */
+static void a_skew_written_late_can_cancel_or_double_the_border(void) {
+  /* 19.2.5.2: the delay defers the border from C0=63 to C0=0, and R8 put
+     back to 0 on C0=0 defines the opening there instead — "it is considered
+     immediately and cancels the C0=R1 condition". */
+  program_standard();
+  write_register(1, 63);
+  write_register(8, 0x10);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 62) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=63, deferred */
+  write_register(8, 0x00);
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG); /* C0=0, the opening wins */
+
+  /* 19.2.5.4: with no delay the border comes on at C0=63, and a delay
+     written there is "considered for the following character, which results
+     in an additional BORDER byte". The section draws that write inside the
+     character it names while 19.2.5.1 draws its writes at the head of the
+     next one; the two cannot both be read literally, so the harness writes
+     where every other test here writes — after the tick that named the
+     character — and the sentence above is what grades it. */
+  program_standard();
+  write_register(1, 63);
+  TEST_CHECK(run_to_row(1));
+  while (crtc.c0 != 62) {
+    crtc_tick(&crtc);
+  }
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=63, the border */
+  write_register(8, 0x10);
+  TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG)); /* C0=0, one more of it */
+  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
 }
 
 static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
@@ -309,21 +7335,33 @@ static void the_sixty_hertz_table_makes_a_262_line_frame(void) {
 
 static void one_vsync_per_equality_of_c4_and_r7(void) {
   /* R7 given the value C4 already holds starts a VSYNC where the beam
-     stands. The same equality cannot start a second: C4 must move, or R7
-     must be written again (ch. 16.3, 16.4.1). */
+     stands, so long as the line is past its second character — the head of
+     a line has a rule of its own (ch. 16.4.1.1). The same equality cannot
+     start a second: C4 must move, or R7 must be written again (ch. 16.3,
+     16.4.1). */
   program_standard();
   write_register(9, 31); /* rows long enough to hold a whole VSYNC */
   TEST_CHECK(run_to_row(1));
   TEST_CHECK(!crtc.vsync);
 
+  run_characters(2); /* past C0=1, where a hand-made equality is blocked */
   write_register(7, 1);
   crtc_tick(&crtc);
   TEST_CHECK(crtc.vsync);
-  run_scanlines(8); /* R3's high nibble */
+  /* Begun away from the head of the line, so the counter is initialized at
+     the head of the next one and R3's eight lines are counted from there —
+     the rest of this line runs on top of them. "The total duration of the
+     VSYNC is increased by the number of µsec corresponding to the
+     calculation R0 - C0vs", which is 63 less the 2 the write landed on
+     (ch. 16.4.1, 16.4.1.1). */
+  run_characters(8 * SCANLINE + (63 - 2) - 1);
+  TEST_CHECK(crtc.vsync);
+  run_characters(1);
   TEST_CHECK(!crtc.vsync);
   run_scanlines(10); /* still row 1, and still no second VSYNC */
   TEST_CHECK(!crtc.vsync);
 
+  run_characters(2);
   write_register(7, 1);
   crtc_tick(&crtc);
   TEST_CHECK(crtc.vsync);
@@ -375,14 +7413,77 @@ static void the_r6_border_is_shut_for_the_whole_frame(void) {
   TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
 }
 
-static void an_r1_of_zero_leaves_the_line_displayed(void) {
-  /* Both conditions land on the same character, and the document gives the
-     opening priority (ch. 18.3.1). */
-  program_standard();
-  write_register(1, 0);
-  TEST_CHECK(run_to_row(1));
-  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
-  TEST_CHECK(crtc_tick(&crtc) & CRTC_DISPTMG);
+/* "If R1 is zeroed then no more characters are displayed, regardless of the
+   CRTC of a CPC" (ch. 17.1): the opening and C0=R1 land on the same
+   character, and the border has it — whatever the delay, and on the frame's
+   first line too, where an R6 of 0 has rules of its own (ch. 18.3.2). */
+static void an_r1_of_zero_borders_every_line(void) {
+  static const uint8_t r6s[] = {25, 0};
+  for (size_t index = 0; index < sizeof r6s / sizeof r6s[0]; index++) {
+    for (uint8_t skew = 0; skew <= 2; skew++) {
+      program_standard();
+      write_register(1, 0);
+      write_register(6, r6s[index]);
+      write_register(8, (uint8_t)(skew << 4));
+      TEST_CHECK(run_to_row(1));
+      uint64_t pins = 0;
+      do {
+        pins = crtc_tick(&crtc);
+      } while (crtc.c4 != 0 || crtc.c9 != 0 || crtc.c0 != 0);
+      for (int character = 0; character < 64 * 16; character++) {
+        if (pins & CRTC_DISPTMG) {
+          TEST_FAIL("R6=%u skew %u: C4=%u C9=%u C0=%u displayed with R1 at 0", r6s[index], skew,
+                    crtc.c4, crtc.c9, crtc.c0);
+          return;
+        }
+        pins = crtc_tick(&crtc);
+      }
+    }
+  }
+}
+
+/* Ch. 17.5.1's four drawings for types 0, 1 and 2: an OUT R1,0 whose write
+   reaches the chip before the line's C0=0, or on it, is "just in time" and
+   the line is BORDER; one reaching it on C0=1 is "too late" and the line is
+   displayed, to be bordered from the next. Written where this harness
+   writes everything, after the tick that named the character; the
+   character a write lands on keeps the pins it was given (see crtc.c). */
+static void r1_of_zero_is_just_in_time_up_to_the_lines_c0_of_0(void) {
+  static const struct {
+    uint8_t lands_on; /* C0 when the write reaches the chip */
+    bool line_displayed;
+  } cases[] = {{0x3E, false}, {0x3F, false}, {0x00, false}, {0x01, true}};
+  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
+    program_standard();
+    TEST_CHECK(run_to_row(1));
+    while (crtc.c0 != cases[index].lands_on) {
+      crtc_tick(&crtc);
+    }
+    write_register(1, 0);
+    /* The rest of the line the write lands on, or the whole of the next one
+       where it lands before C0=0: C0 2 to 63 carry the answer either way,
+       and C0=1 too wherever the write came before it. */
+    while (crtc.c0 != 1) {
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.c0 == 1) {
+        TEST_CHECK(!(pins & CRTC_DISPTMG));
+      }
+    }
+    int displayed = 0;
+    for (int character = 2; character <= 63; character++) {
+      displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
+    }
+    TEST_EQUAL(displayed, cases[index].line_displayed ? 62 : 0);
+    /* And whichever it was, the line after it is border. */
+    while (crtc.c0 != 63) {
+      crtc_tick(&crtc);
+    }
+    displayed = 0;
+    for (int character = 0; character <= 63; character++) {
+      displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
+    }
+    TEST_EQUAL(displayed, 0);
+  }
 }
 
 static void a_c0_that_overflowed_does_not_open_the_display(void) {
@@ -405,7 +7506,7 @@ static void a_c0_that_overflowed_does_not_open_the_display(void) {
 
 static void a_sync_width_of_zero_makes_no_hsync(void) {
   /* Where types 2, 3 and 4 read 16, this one reads none — the difference a
-     program tells them apart by (ch. 14.1, 14.5, 28.1.5). */
+     program tells them apart by (ch. 14.1, 14.6, 28.1.5). */
   program_standard();
   write_register(3, 0x80);
   int hsyncs = 0, vsyncs = 0;
@@ -429,9 +7530,84 @@ int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(select_wears_five_bits);
   TEST_RUN(writes_wear_the_documented_widths);
-  TEST_RUN(type0_reads_r12_to_r17_and_nothing_else);
+  TEST_RUN(each_type_answers_the_read_port_its_own_way);
+  TEST_RUN(a_counter_above_its_limit_comes_home_on_the_asics);
+  TEST_RUN(the_two_asics_leave_the_pointer_alone_through_the_padding);
+  TEST_RUN(an_r5_under_the_count_ends_the_padding_on_the_asics);
+  TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_the_types_that_open_one);
+  TEST_RUN(the_two_asics_raise_a_sync_only_at_a_frames_corner);
+  TEST_RUN(the_two_asics_take_the_frames_end_where_the_line_ends);
+  TEST_RUN(a_type_2_and_the_two_asics_take_r5_on_any_character_of_a_last_line);
+  TEST_RUN(a_type_2_makes_a_last_line_where_r4_or_r9_is_written);
+  TEST_RUN(a_type_2_reads_a_write_of_r4_or_r9_on_its_own_character);
+  TEST_RUN(a_type_2_takes_its_management_back_only_on_a_mismatch);
+  TEST_RUN(a_type_2_reads_r9_at_a_line_head_as_it_stood);
+  TEST_RUN(a_type_2s_head_compared_again_keeps_what_it_found);
+  TEST_RUN(a_type_2_refuses_the_line_after_a_last_line);
+  TEST_RUN(a_type_2_latches_on_the_last_character_of_its_sync);
+  TEST_RUN(a_type_2_whose_sync_stands_on_its_line_head_ends_no_frame);
+  TEST_RUN(a_type_2_keeps_its_last_line_while_c0_runs_round);
+  TEST_RUN(a_type_2_without_a_sync_keeps_both_its_states);
+  TEST_RUN(a_type_2_ruptures_line_to_line_by_moving_r9_through_its_sync);
+  TEST_RUN(a_type_2_ruptured_line_to_line_takes_an_offset_on_each_line);
+  TEST_RUN(a_type_2_takes_its_offset_where_c0_meets_r1_on_its_last_line);
+  TEST_RUN(a_type_2_hands_the_next_frame_the_state_its_last_line_had_at_r1);
+  TEST_RUN(a_type_2_takes_its_offset_at_the_head_where_r1_is_0);
+  TEST_RUN(a_type_2_takes_its_offset_whole_where_c0_comes_round_to_0);
+  TEST_RUN(a_type_2_reads_at_an_r1_of_0_the_state_its_line_before_ended_on);
+  TEST_RUN(a_type_2_takes_its_offset_on_the_last_line_of_its_padding);
+  TEST_RUN(a_type_2s_interlace_line_is_the_last_its_pointer_knows);
+  TEST_RUN(a_type_2s_interlace_line_given_up_is_no_last_line);
+  TEST_RUN(a_type_2s_frozen_line_ended_no_padding);
+  TEST_RUN(a_type_2s_padding_ends_where_r5_moved_inside_it_ends_it);
+  TEST_RUN(a_type_2_line_begun_again_takes_the_offset_as_the_interlace_line);
+  TEST_RUN(a_type_2s_line_begun_again_yields_only_to_a_padding_holding_it);
+  TEST_RUN(a_type_2s_padding_reads_r8_where_c0_meets_r1);
+  TEST_RUN(the_two_asics_still_add_the_interlace_line_to_an_even_frame);
+  TEST_RUN(the_two_asics_read_a_table_of_eight);
+  TEST_RUN(the_first_status_bit_follows_the_character_counter);
+  TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);
+  TEST_RUN(the_asic_hsync_end_bit_follows_a_width_of_nothing);
+  TEST_RUN(the_asic_row_end_bit_stands_for_the_line_the_row_ends_on);
+  TEST_RUN(the_asic_frame_timer_turns_every_sixteenth_frame);
+  TEST_RUN(each_type_keeps_its_own_vsync_length);
+  TEST_RUN(types_1_and_2_delay_no_vsync_by_a_whole_line);
+  TEST_RUN(types_0_and_1_want_different_r9s_for_a_row);
+  TEST_RUN(an_r8_pulse_leaves_the_parities_the_diagrams_draw);
+  TEST_RUN(a_write_on_the_character_clock_takes_a_line_end_back);
+  TEST_RUN(a_width_of_nothing_puts_the_counter_at_nothing);
+  TEST_RUN(a_type_2_keeps_its_row_whole_where_the_others_halve_theirs);
+  TEST_RUN(a_type_2_shows_its_rows_the_addresses_its_chapter_tabulates);
+  TEST_RUN(a_type_2_walks_its_pointer_two_rows_of_memory_to_a_row);
+  TEST_RUN(a_type_2_ends_its_row_where_r9_says_whenever_the_mode_arrives);
+  TEST_RUN(a_type_2_counts_its_display_through_the_additional_lines);
+  TEST_RUN(a_type_2_begins_an_odd_frame_again_where_its_first_line_takes_the_mode);
+  TEST_RUN(a_type_2_first_line_goes_on_counting_where_the_mode_did_not_arrive);
+  TEST_RUN(a_type_2_first_line_left_by_a_frozen_line_is_not_begun_again);
+  TEST_RUN(a_type_2_frame_goes_on_where_its_interlace_line_gives_up_interlace);
+  TEST_RUN(only_the_latest_line_ends_are_taken_back);
+  TEST_RUN(a_line_taken_back_is_the_line_its_oracle_draws);
+  TEST_RUN(a_line_of_nothing_given_a_width_of_one_is_a_line_that_had_it);
+  TEST_RUN(a_frame_ended_by_a_width_named_since_is_a_frame_that_had_it);
+  TEST_RUN(the_costs_a_taken_back_line_cannot_pay);
+  TEST_RUN(a_take_back_carries_the_writes_it_cannot_undo);
+  TEST_RUN(an_r7_written_on_c4_raises_or_blocks_a_vsync_as_each_type_reads_it);
+  TEST_RUN(a_line_end_does_not_outlive_the_room_holding_it);
+  TEST_RUN(a_mode_taken_up_inside_a_row_is_counted_from_the_address);
+  TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);
+  TEST_RUN(types_3_and_4_count_the_interlace_as_their_chapter_gives_it);
+  TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
+  TEST_RUN(each_type_counts_the_adjustment_lines_its_own_way);
+  TEST_RUN(a_type_1_holds_a_frame_open_where_r5_is_cancelled);
+  TEST_RUN(a_type_1_opens_each_run_with_the_r5_it_has);
+  TEST_RUN(a_type_1_takes_no_state_where_c4_is_past_r4);
+  TEST_RUN(an_interlace_pulse_fixes_a_type_1_on_an_even_field);
+  TEST_RUN(only_type_1_drives_the_status_port);
+  TEST_RUN(the_status_border_bit_turns_over_at_a_line_head);
+  TEST_RUN(a_write_can_make_a_last_line_as_well_as_unmake_one);
   TEST_RUN(unselected_chip_ignores_the_bus);
   TEST_RUN(hsync_falls_where_r2_and_r3_put_it);
+  TEST_RUN(a_width_of_nothing_is_sixteen_on_three_of_the_types);
   TEST_RUN(vsync_holds_eight_scanlines_from_row_30);
   TEST_RUN(display_covers_40_by_200);
   TEST_RUN(the_video_pointer_walks_the_documented_rows);
@@ -440,12 +7616,89 @@ int main(void) {
   TEST_RUN(c4_runs_to_its_own_top_when_r4_drops_below_it);
   TEST_RUN(the_vertical_adjustment_brings_c4_back_from_past_r4);
   TEST_RUN(the_last_line_holds_once_it_is_decided);
-  TEST_RUN(a_late_write_can_still_end_the_frame);
+  TEST_RUN(a_late_write_cannot_end_the_frame);
+  TEST_RUN(an_r5_asked_for_in_time_adds_its_lines);
+  TEST_RUN(a_cancelled_r5_leaves_the_last_line_standing);
+  TEST_RUN(the_documented_sixteen_line_adjustment);
+  TEST_RUN(r9_moved_at_c0_1_makes_the_line_an_adjustment);
+  TEST_RUN(r4_moved_at_c0_1_makes_the_line_an_adjustment);
+  TEST_RUN(a_late_write_cannot_begin_an_adjustment);
+  TEST_RUN(an_r5_cancelled_in_time_adds_no_line);
+  TEST_RUN(an_interlace_mode_adds_a_line_to_the_even_frames);
+  TEST_RUN(an_interlace_mode_holds_the_even_frames_vsync_back);
+  TEST_RUN(an_r6_of_zero_keeps_the_line_on_the_even_frame);
+  TEST_RUN(an_adjustment_in_progress_keeps_its_interlace_line);
+  TEST_RUN(the_interlace_line_is_asked_for_at_c0_r0);
+  TEST_RUN(an_adjustment_line_still_decides_the_interlace_line);
+  TEST_RUN(the_disarm_tests_the_interlace_line_as_well_as_r5);
+  TEST_RUN(an_r4_of_127_does_not_trap_the_frame);
+  TEST_RUN(a_line_too_short_to_reach_c0_2_costs_the_next_its_vsync);
+  TEST_RUN(an_r0_restored_before_c0_2_keeps_the_vsync);
+  TEST_RUN(a_vsync_lost_to_a_short_line_stays_lost_for_that_row);
+  TEST_RUN(a_line_of_three_characters_still_arms_the_vsync);
+  TEST_RUN(the_chip_wakes_with_its_counters_managed);
+  TEST_RUN(every_last_line_is_armed_and_an_unmade_one_disarmed);
+  TEST_RUN(a_line_of_three_characters_still_reaches_its_disarm);
+  TEST_RUN(a_freeze_on_a_last_line_begins_an_adjustment);
+  TEST_RUN(a_narrow_line_draws_the_adjustment_it_cannot_disarm);
+  TEST_RUN(the_two_asics_take_no_padding_from_a_narrow_line);
+  TEST_RUN(a_run_begun_under_a_stopped_picture_ends_on_r5);
+  TEST_RUN(two_hsyncs_cannot_be_contiguous);
+  TEST_RUN(an_r3_written_in_time_carries_the_hsync_on);
+  TEST_RUN(an_r3l_written_during_a_hsync_stops_it_or_overflows);
+  TEST_RUN(a_line_of_one_character_freezes_the_counters);
+  TEST_RUN(a_line_of_one_character_leaves_a_vsync_running_where_two_do_not);
+  TEST_RUN(a_frozen_chip_still_reads_r8);
+  TEST_RUN(a_frozen_adjustment_moves_c4_no_further);
+  TEST_RUN(a_chip_frozen_on_a_frame_head_keeps_its_parity);
+  TEST_RUN(an_r7_and_r4_of_zero_give_one_vsync_and_no_more);
+  TEST_RUN(an_r7_written_at_a_lines_head_blocks_instead_of_triggering);
+  TEST_RUN(an_r7_written_on_an_unarmed_line_still_triggers);
+  TEST_RUN(an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync);
+  TEST_RUN(a_ghost_vsync_holds_another_off_until_its_lines_are_counted);
+  TEST_RUN(a_type_2_walks_into_a_ghost_vsync_where_its_hsync_runs);
+  TEST_RUN(a_ghost_vsync_spends_the_equality_that_raised_it);
+  TEST_RUN(an_r7_written_in_a_sync_ahead_of_c4_leaves_the_walk_in_alone);
+  TEST_RUN(a_ghost_written_off_the_clock_leaves_the_next_frame_its_pin);
+  TEST_RUN(the_parity_settles_before_an_r7_of_zero_is_read);
+  TEST_RUN(an_r7_of_zero_is_read_before_the_parity_turns_on_the_asics);
+  TEST_RUN(the_video_mode_doubles_the_raster_address);
+  TEST_RUN(a_video_mode_entered_late_overflows_c9);
+  TEST_RUN(leaving_the_video_mode_drops_the_parity_from_the_limit);
+  TEST_RUN(an_odd_r9_gives_the_rows_alternating_parities);
+  TEST_RUN(an_odd_row_of_an_odd_frame_takes_its_vsync_late);
+  TEST_RUN(the_video_pointer_still_steps_a_row_at_a_time);
+  TEST_RUN(the_video_mode_still_takes_the_adjustment_lines);
+  TEST_RUN(a_line_r1_never_ends_borders_its_last_byte);
+  TEST_RUN(an_r6_of_zero_alternates_the_first_lines_bytes);
+  TEST_RUN(an_r6_of_zero_meets_each_type_differently);
+  TEST_RUN(a_type_1_gives_up_its_r6_border_with_the_register);
+  TEST_RUN(an_r6_of_zero_is_taken_back_only_before_r1);
+  TEST_RUN(a_type_1_takes_its_offset_all_through_the_first_row);
+  TEST_RUN(types_1_and_2_leave_their_latch_frozen_where_c0_cannot_reach_r1);
+  TEST_RUN(a_type_1_carries_its_offset_into_the_added_lines);
+  TEST_RUN(an_r4_moved_at_a_lines_end_takes_the_carry_away);
+  TEST_RUN(the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0);
+  TEST_RUN(the_skew_delays_the_border_at_both_ends);
+  TEST_RUN(a_skew_carries_the_border_round_the_lines_end);
+  TEST_RUN(a_skew_makes_the_early_border_a_whole_character);
+  TEST_RUN(the_border_on_function_shuts_the_display);
+  TEST_RUN(a_skew_taken_off_late_does_not_cost_the_line);
+  TEST_RUN(the_border_on_function_moves_no_comparison);
+  TEST_RUN(the_border_on_function_silences_the_interlace_bits);
+  TEST_RUN(a_skew_does_not_move_the_video_pointer);
+  TEST_RUN(a_line_that_misses_r1_borders_at_r0);
+  TEST_RUN(an_r1_moved_behind_c0_earns_the_missed_border);
+  TEST_RUN(a_skew_cancelled_in_time_leaves_the_border_where_it_was);
+  TEST_RUN(the_border_on_function_leaves_the_r6_border_standing);
+  TEST_RUN(the_border_on_function_earns_no_deferred_character);
+  TEST_RUN(a_skew_written_late_can_cancel_or_double_the_border);
   TEST_RUN(the_sixty_hertz_table_makes_a_262_line_frame);
   TEST_RUN(one_vsync_per_equality_of_c4_and_r7);
   TEST_RUN(the_r1_border_holds_until_the_line_begins_again);
   TEST_RUN(the_r6_border_is_shut_for_the_whole_frame);
-  TEST_RUN(an_r1_of_zero_leaves_the_line_displayed);
+  TEST_RUN(an_r1_of_zero_borders_every_line);
+  TEST_RUN(r1_of_zero_is_just_in_time_up_to_the_lines_c0_of_0);
   TEST_RUN(a_c0_that_overflowed_does_not_open_the_display);
   TEST_RUN(a_sync_width_of_zero_makes_no_hsync);
   return TEST_REPORT("crtc");

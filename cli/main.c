@@ -66,6 +66,12 @@ typedef struct {
   const char *rom_file;
   uint32_t ram_size;
   bool disc_interface; /* built in; a 464 gets one plugged in with a disc */
+  /* Amstrad fitted whichever part it had bought, and ch. 4.2's third note
+     says it "cannot be excluded even at present, that some series of CPC's
+     may be equipped with different CRTC models", so this is a choice about
+     a unit rather than a fact about the model. Type 0 is the only one
+     implemented, so it is the only one offered. A CPC's alone. */
+  uint8_t crtc_type;
   const char *description;
 
   /* The raster this machine's monitor paints, the window a picture is cut
@@ -110,6 +116,7 @@ static const machine_t machines[] = {
      .rom_file = "cpc6128.rom",
      .ram_size = 0x20000,
      .disc_interface = true,
+     .crtc_type = 0,
      .description = "Amstrad CPC 6128, 128K, BASIC 1.1",
      CPC_RASTER},
     {.kind = MACHINE_CPC,
@@ -117,6 +124,7 @@ static const machine_t machines[] = {
      .rom_file = "cpc664.rom",
      .ram_size = 0x10000,
      .disc_interface = true,
+     .crtc_type = 0,
      .description = "Amstrad CPC 664, 64K, BASIC 1.1",
      CPC_RASTER},
     {.kind = MACHINE_CPC,
@@ -124,6 +132,7 @@ static const machine_t machines[] = {
      .rom_file = "cpc464.rom",
      .ram_size = 0x10000,
      .disc_interface = false,
+     .crtc_type = 0,
      .description = "Amstrad CPC 464, 64K, BASIC 1.0",
      CPC_RASTER},
     {.kind = MACHINE_SPECTRUM,
@@ -505,23 +514,29 @@ static void cpc_record_displayed(const cpc_t *cpc) {
      over its address, so the samples just painted came from the address
      fetched last time — and blanking is judged now, as the chip judges it. */
   static uint16_t pending_address;
-  static bool pending_display;
+  static bool pending_display[2];
 
   uint16_t beam_x = cpc->monitor.beam_x;
   uint16_t beam_y = cpc->monitor.beam_y;
   bool blanked = cpc->gate_array.black_hsync || cpc->gate_array.black_vsync;
-  if (pending_display && !blanked && beam_y < CPC_FRAMEBUFFER_HEIGHT &&
+  if ((pending_display[0] || pending_display[1]) && !blanked && beam_y < CPC_FRAMEBUFFER_HEIGHT &&
       beam_x >= GATE_ARRAY_SAMPLES_PER_CHARACTER) {
     uint32_t start =
         (uint32_t)beam_y * CPC_FRAMEBUFFER_WIDTH + beam_x - GATE_ARRAY_SAMPLES_PER_CHARACTER;
     for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
-      /* Two bytes make sixteen samples, eight each, whatever the mode. */
-      uint16_t address = pending_address | (sample < 8 ? 0 : 1);
-      cpc_displayed[start + sample] = (uint32_t)address + 1;
+      /* Two bytes make sixteen samples, eight each, whatever the mode — and
+         the border can have one of them without the other, which is a half
+         a byte never painted and must not be claimed for one. */
+      uint8_t half = sample < 8 ? 0 : 1;
+      if (!pending_display[half]) {
+        continue;
+      }
+      cpc_displayed[start + sample] = (uint32_t)(pending_address | half) + 1;
     }
   }
   pending_address = cpc_video_address(cpc);
-  pending_display = (cpc->crtc_pins & CRTC_DISPTMG) != 0;
+  pending_display[0] = (cpc->crtc_pins & CRTC_DISPTMG) != 0;
+  pending_display[1] = (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0;
 }
 
 static void cpc_run_frames(cpc_t *cpc, long frames) {
@@ -845,7 +860,7 @@ static int run_cpc(const options_t *options) {
   }
 
   /* The operating system fills the lower 16K, BASIC the upper as ROM 0. */
-  cpc_init(cpc, ram, options->machine->ram_size, rom);
+  cpc_init(cpc, ram, options->machine->ram_size, rom, options->machine->crtc_type);
   cpc_set_upper_rom(cpc, 0, rom + 0x4000);
   if (disc_interface) {
     cpc_fit_disc_interface(cpc, true);

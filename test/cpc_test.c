@@ -19,18 +19,27 @@ static uint8_t basic_rom[0x4000];
 static uint8_t extra_rom[0x4000];
 static cpc_t cpc;
 
-static void power_on(uint32_t ram_size) {
+static void power_on_with_crtc(uint32_t ram_size, uint8_t crtc_type) {
   memset(ram, 0x76, sizeof ram);
   memset(lower_rom, 0x76, sizeof lower_rom);
   memset(basic_rom, 0, sizeof basic_rom);
   memset(extra_rom, 0, sizeof extra_rom);
-  cpc_init(&cpc, ram, ram_size, lower_rom);
+  cpc_init(&cpc, ram, ram_size, lower_rom, crtc_type);
   cpc_set_upper_rom(&cpc, 0, basic_rom);
 }
+
+static void power_on(uint32_t ram_size) { power_on_with_crtc(ram_size, 0); }
 
 static void rom_program(const uint8_t *code, size_t length) { memcpy(lower_rom, code, length); }
 
 static size_t bank_start(int bank) { return (size_t)bank * 0x4000; }
+
+/* A CRTC register written the way the board writes one, without asking the
+   processor to do it. */
+static void write_crtc(uint8_t which, uint8_t value) {
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, which));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, value));
+}
 
 static bool run_to_halt(void) {
   for (int ticks = 0; ticks < 10000; ticks++) {
@@ -208,7 +217,7 @@ static void upper_rom_selects_and_absent_numbers_fall_back(void) {
 static void an_empty_upper_socket_reads_high(void) {
   memset(ram, 0, sizeof ram);
   memset(lower_rom, 0x76, sizeof lower_rom);
-  cpc_init(&cpc, ram, sizeof ram, lower_rom);
+  cpc_init(&cpc, ram, sizeof ram, lower_rom, 0);
   TEST_EQUAL(cpc_peek(&cpc, 0xC000), 0xFF);
   TEST_EQUAL(cpc_peek(&cpc, 0xFFFF), 0xFF);
 }
@@ -370,6 +379,104 @@ static void the_gate_array_interrupts_six_times_a_frame(void) {
   TEST_CHECK(cpc.cpu.a >= 12 && cpc.cpu.a <= 16);
 }
 
+/* Ch. 27.6's diagrams, read for every type. The HSYNC begins where C0 meets
+   R2 and runs R3 characters; the interrupt falls one character after it
+   ends, which ch. 27.6.2 states as R3+1 microseconds after C0 reaches R2 —
+   15 for an R3 of 14, 9 for 8, 2 for 1. An R3 of 0 is no HSYNC at all on
+   types 0 and 1, and ch. 27.6.3 says of it only "No interruption"; types 2,
+   3 and 4 read it as sixteen, ch. 27.6.4 drawing 17. And the two ASICs are
+   a character later throughout: "the HSYNC begins at the start of the display
+   by the GATE ARRAY of the CRTC character corresponding to C0=R2", so that
+   "an interrupt occurs 1 µsec later on CRTC's 3 and 4 than on the other
+   CRTC's" — 16, 10, 3 and 18 in ch. 27.6.5 (ch. 27.6.1). Inside that
+   character the request rises on the processor's second cycle behind a Gate
+   Array and on its first, the character clock, behind the two ASICs, whose
+   line sync's black ch. 14.9 draws ending in the first of those cycles where
+   a type 0's ends in the second (cpc.c). */
+static void the_interrupt_falls_a_character_after_the_hsync(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r3;
+    int characters_after_r2; /* -1 where the diagram expects none at all */
+  } widths[] = {
+      {0, 14, 15}, {0, 8, 9},   {0, 1, 2},   {0, 0, -1}, {1, 14, 15}, {1, 8, 9},   {1, 1, 2},
+      {1, 0, -1},  {2, 14, 15}, {2, 8, 9},   {2, 1, 2},  {2, 0, 17},  {3, 14, 16}, {3, 8, 10},
+      {3, 1, 3},   {3, 0, 18},  {4, 14, 16}, {4, 8, 10}, {4, 1, 3},   {4, 0, 18},
+  };
+  static const uint8_t hsync_at = 8; /* R2, as the diagram draws it */
+
+  for (size_t index = 0; index < sizeof widths / sizeof widths[0]; index++) {
+    power_on_with_crtc(sizeof ram, widths[index].type);
+    /* The ROM is filled with HALT, so the processor stops at the first
+       instruction and never acknowledges what the Gate Array raises. */
+    TEST_CHECK(run_to_halt());
+    static const uint8_t frame[][2] = {{0, 63}, {1, 40}, {4, 38}, {6, 25}, {7, 30}, {9, 7}};
+    for (size_t reg = 0; reg < sizeof frame / sizeof frame[0]; reg++) {
+      write_crtc(frame[reg][0], frame[reg][1]);
+    }
+    write_crtc(2, hsync_at);
+    write_crtc(3, widths[index].r3);
+
+    int risen_at = -1;
+    int risen_on_quarter = -1;
+    for (long tick = 0; tick < 400000 && risen_at < 0; tick++) {
+      bool standing = cpc.gate_array.interrupt_request;
+      cpc_tick(&cpc);
+      if (!standing && cpc.gate_array.interrupt_request) {
+        risen_at = cpc.crtc.c0;
+        risen_on_quarter = cpc.gate_array.cpu_phase;
+      }
+    }
+    TEST_EQUAL(risen_at, widths[index].characters_after_r2 < 0
+                             ? -1
+                             : hsync_at + widths[index].characters_after_r2);
+    if (risen_at >= 0) {
+      TEST_EQUAL(risen_on_quarter, widths[index].type >= 3 ? 0 : 1);
+    }
+  }
+}
+
+/* Behind the two ASICs the frame sync is handed over a character late along
+   with the line sync — "the entirety of what is sent by the CRTC to the GATE
+   ARRAY" delayed alike (ch. 7.1) — so the two reach the Gate Array in the
+   order they leave the chip. That order is what decides the frame's check:
+   an HSYNC that ends on a line's last character, before a VSYNC begins on the
+   next, is not among the two HSYNCs after it (ch. 27.3.2). Where R2+R3 is R0
+   the check falls on the same line behind an ASIC as behind a Gate Array,
+   and would come a line early were the line sync alone held back. */
+static void the_frame_check_falls_on_the_same_line_behind_an_asic(void) {
+  static const uint8_t types[] = {0, 3, 4};
+  int check_line[3] = {-1, -1, -1};
+  for (size_t index = 0; index < sizeof types; index++) {
+    power_on_with_crtc(sizeof ram, types[index]);
+    TEST_CHECK(run_to_halt());
+    static const uint8_t frame[][2] = {{0, 63}, {1, 40}, {2, 49}, {3, 0x8E},
+                                       {4, 38}, {6, 25}, {7, 30}, {9, 7}};
+    for (size_t setting = 0; setting < sizeof frame / sizeof frame[0]; setting++) {
+      write_crtc(frame[setting][0], frame[setting][1]);
+    }
+    /* The check clears the counter whether or not it raises an interrupt,
+       so it is read off the counter going to 0 from anything but 51, which is
+       its ordinary wrap. A frame of 312 lines is six of 52, so every check
+       after the first finds it at 51, and the first is the one read. */
+    bool vsync_seen = false;
+    for (long tick = 0; tick < 400000 && check_line[index] < 0; tick++) {
+      bool vsync_before = cpc.crtc.vsync;
+      uint8_t counted = cpc.gate_array.r52;
+      cpc_tick(&cpc);
+      if (!vsync_before && cpc.crtc.vsync) {
+        vsync_seen = true;
+      }
+      if (vsync_seen && cpc.gate_array.r52 == 0 && counted != 0 && counted != 51) {
+        check_line[index] = cpc.crtc.c4 * 8 + cpc.crtc.c9;
+      }
+    }
+    TEST_CHECK(check_line[index] >= 0);
+  }
+  TEST_EQUAL(check_line[1], check_line[0]);
+  TEST_EQUAL(check_line[2], check_line[0]);
+}
+
 static void an_unheard_interrupt_is_held(void) {
   power_on(sizeof ram);
   uint8_t body[200];
@@ -388,8 +495,8 @@ static uint8_t framebuffer[CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT];
 /* Fill the screen with a full-brightness pattern, program the standard
    screen in mode 2, and run frames. Pen 1 is the only ink of its colour on
    the tube, so where it lands is where the display is. */
-static void draw_a_full_screen(void) {
-  power_on(sizeof ram);
+static void draw_a_full_screen_with_crtc(uint8_t crtc_type) {
+  power_on_with_crtc(sizeof ram, crtc_type);
   memset(framebuffer, 0xEE, sizeof framebuffer); /* no colour code is &EE */
   memset(ram + 0xC000, 0xFF, 0x4000);
   cpc_connect_monitor(&cpc, framebuffer);
@@ -408,44 +515,85 @@ static void draw_a_full_screen(void) {
   run_ticks(3 * CPC_TICKS_PER_STANDARD_FRAME);
 }
 
+static void draw_a_full_screen(void) { draw_a_full_screen_with_crtc(0); }
+
 static void the_display_lands_where_the_syncs_put_it(void) {
-  draw_a_full_screen();
-  int left = CPC_FRAMEBUFFER_WIDTH;
-  int right = -1;
-  int top = CPC_FRAMEBUFFER_HEIGHT;
-  int bottom = -1;
-  long white = 0;
-  for (int y = 0; y < CPC_FRAMEBUFFER_HEIGHT; y++) {
-    for (int x = 0; x < CPC_FRAMEBUFFER_WIDTH; x++) {
-      if (framebuffer[(size_t)y * CPC_FRAMEBUFFER_WIDTH + x] != 11) {
-        continue;
-      }
-      white++;
-      if (x < left) {
-        left = x;
-      }
-      if (x > right) {
-        right = x;
-      }
-      if (y < top) {
-        top = y;
-      }
-      if (y > bottom) {
-        bottom = y;
+  for (uint8_t type = 0; type < 5; type++) {
+    draw_a_full_screen_with_crtc(type);
+    int left = CPC_FRAMEBUFFER_WIDTH;
+    int right = -1;
+    int top = CPC_FRAMEBUFFER_HEIGHT;
+    int bottom = -1;
+    long white = 0;
+    for (int y = 0; y < CPC_FRAMEBUFFER_HEIGHT; y++) {
+      for (int x = 0; x < CPC_FRAMEBUFFER_WIDTH; x++) {
+        if (framebuffer[(size_t)y * CPC_FRAMEBUFFER_WIDTH + x] != 11) {
+          continue;
+        }
+        white++;
+        if (x < left) {
+          left = x;
+        }
+        if (x > right) {
+          right = x;
+        }
+        if (y < top) {
+          top = y;
+        }
+        if (y > bottom) {
+          bottom = y;
+        }
       }
     }
+    /* 40 characters of 16 pixel clocks, 25 rows of 8 lines. */
+    TEST_EQUAL(white, 640L * 200L);
+    TEST_EQUAL(right - left + 1, 640);
+    TEST_EQUAL(bottom - top + 1, 200);
+    /* The beam starts its line when the Gate Array's sync does, two
+       characters after the CRTC's HSYNC at R2=46, and the picture arrives a
+       microsecond behind the address that fetched it. Behind the two ASICs the
+       sync is handed over a character late, "at the start of the display"
+       (ch. 27.6.1), and the picture sits that character further left, as
+       ch. 15.1 has a type 4's on the monitor of a type 0, 1 or 2 machine. */
+    int sync_late = type == 3 || type == 4 ? 1 : 0;
+    TEST_EQUAL(left, (64 - 48 + 1 - sync_late) * 16);
+    /* The beam's rows begin 48 characters into the CRTC's lines, so a line's
+       display falls in the row its predecessor opened. */
+    TEST_EQUAL(top, 70);
   }
-  /* 40 characters of 16 pixel clocks, 25 rows of 8 lines. */
-  TEST_EQUAL(white, 640L * 200L);
-  TEST_EQUAL(right - left + 1, 640);
-  TEST_EQUAL(bottom - top + 1, 200);
-  /* The beam starts its line when the Gate Array's sync does, two
-     characters after the CRTC's HSYNC at R2=46, and the picture arrives a
-     microsecond behind the address that fetched it. */
-  TEST_EQUAL(left, (64 - 48 + 1) * 16);
-  /* The beam's rows begin 48 characters into the CRTC's lines, so a line's
-     display falls in the row its predecessor opened. */
-  TEST_EQUAL(top, 70);
+}
+
+/* The border byte ch. 17.6.2 puts at the end of a line R1 never reached has
+   to reach the screen, not merely the pins: the Gate Array draws the two
+   bytes of a character as the display enable found each of them. R1 one
+   above R0 is the chapter's own case, and mode 2 with the screen full of
+   ones paints a displayed byte in pen 1 and a bordered one in the border's
+   own ink. */
+static void the_border_byte_reaches_the_screen(void) {
+  power_on(sizeof ram);
+  memset(framebuffer, 0xEE, sizeof framebuffer);
+  memset(ram + 0xC000, 0xFF, 0x4000);
+  cpc_connect_monitor(&cpc, framebuffer);
+  uint8_t body[200];
+  size_t length = append_standard_screen(body, 0);
+  length = append_crtc_write(body, length, 1, 64); /* R1 one above R0 */
+  length = append_gate_array_write(body, length, 0x01);
+  length = append_gate_array_write(body, length, 0x40 | 11); /* pen 1 white */
+  length = append_gate_array_write(body, length, 0x10);
+  length = append_gate_array_write(body, length, 0x40 | 4); /* border blue */
+  length = append_gate_array_write(body, length, 0x8A);     /* RMR: mode 2 */
+  body[length++] = 0x18;
+  body[length++] = 0xFE;
+  rom_program(body, length);
+  run_ticks(3 * CPC_TICKS_PER_STANDARD_FRAME);
+
+  /* A line well inside the frame. The display runs 64 characters where it
+     ran 40, so the last of them ends 384 samples further right; its second
+     byte is the eight samples before that. */
+  const int row = 150 * CPC_FRAMEBUFFER_WIDTH;
+  TEST_EQUAL(framebuffer[row + 912 + 384 - 9], 11); /* the first byte, shown */
+  TEST_EQUAL(framebuffer[row + 912 + 384 - 1], 4);  /* the second, border */
+  TEST_EQUAL(framebuffer[row + 912 + 384 - 8], 4);
 }
 
 static void the_border_surrounds_the_display(void) {
@@ -553,14 +701,15 @@ static void port_b_carries_the_links_and_the_vsync(void) {
   };
   rom_program(program, sizeof program);
   TEST_CHECK(run_to_halt());
-  /* 50Hz and Amstrad, with the cassette, printer and expansion floating
-     high. Bit 0 is the CRTC's VSYNC passed straight through, whatever it
+  /* 50Hz and Amstrad, and nothing on the cassette, the printer or the
+     expansion port, which is the #5E Shaker's D (R) names for such a
+     machine. Bit 0 is the CRTC's VSYNC passed straight through, whatever it
      happens to be: an unprogrammed CRTC has R7 at zero and so never leaves
      its VSYNC, which is a degenerate frame but a real one. */
+  TEST_EQUAL(cpc.cpu.a & 0xE0, 0x40);
   TEST_EQUAL(cpc.cpu.a & 0x10, 0x10);
   TEST_EQUAL((cpc.cpu.a >> 1) & 0x07, CPC_MANUFACTURER_AMSTRAD);
   TEST_EQUAL(cpc.cpu.a & 0x01, (cpc.crtc_pins & CRTC_VSYNC) ? 1 : 0);
-  TEST_EQUAL(cpc.cpu.a & 0x80, 0x80); /* nothing drives the cassette bit */
 
   power_on(sizeof ram);
   cpc_set_links(&cpc, false, 5); /* 60Hz, Schneider */
@@ -568,6 +717,8 @@ static void port_b_carries_the_links_and_the_vsync(void) {
   TEST_CHECK(run_to_halt());
   TEST_EQUAL(cpc.cpu.a & 0x10, 0);
   TEST_EQUAL((cpc.cpu.a >> 1) & 0x07, 5);
+  /* The three that answer no link at all stand where they stood. */
+  TEST_EQUAL(cpc.cpu.a & 0xE0, 0x40);
 }
 
 static void port_b_follows_the_crtc_into_vsync(void) {
@@ -595,6 +746,52 @@ static void port_b_follows_the_crtc_into_vsync(void) {
   }
   TEST_CHECK(cpc.cpu.halted);
   TEST_CHECK((cpc.crtc_pins & CRTC_VSYNC) != 0);
+}
+
+/* Behind the two ASICs the Gate Array follows the frame sync a character late
+   (cpc.c), and port B still carries the chip's own: ch. 27.6's diagrams count
+   C0vs from the VSYNC a program reads. A poll eleven microseconds round walks
+   three microseconds a frame against a frame of 19968, so within eleven
+   frames some read lands on a character where the two disagree. A read
+   spans several ticks, and each is checked. */
+static void port_b_reads_the_chips_own_vsync_behind_an_asic(void) {
+  static const uint8_t types[] = {3, 4};
+  for (size_t index = 0; index < sizeof types; index++) {
+    power_on_with_crtc(sizeof ram, types[index]);
+    uint8_t body[200];
+    size_t length = append_standard_screen(body, 0);
+    body[length++] = 0x01; /* LD BC,&F500 */
+    body[length++] = 0x00;
+    body[length++] = 0xF5;
+    size_t loop = length;
+    body[length++] = 0xED; /* IN A,(C): four microseconds */
+    body[length++] = 0x78;
+    for (int nop = 0; nop < 4; nop++) {
+      body[length++] = 0x00; /* NOP: one */
+    }
+    body[length++] = 0x18; /* JR loop: three */
+    uint8_t displacement = (uint8_t)(loop - (length + 1));
+    body[length++] = displacement;
+    rom_program(body, length);
+    int ticks_read_wrong = 0;
+    int ticks_that_tell_them_apart = 0;
+    for (long tick = 0; tick < 12L * CPC_TICKS_PER_STANDARD_FRAME; tick++) {
+      uint64_t pins = cpc_tick(&cpc);
+      bool read = (pins & (Z80_M1 | Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD);
+      if (!read || (z80_address(pins) & 0x0B00) != 0x0100) {
+        continue;
+      }
+      bool vsync = (cpc.crtc_pins & CRTC_VSYNC) != 0;
+      if ((z80_data(pins) & 0x01) != (vsync ? 1 : 0)) {
+        ticks_read_wrong++;
+      }
+      if (vsync != cpc.gate_array.vsync_previous) {
+        ticks_that_tell_them_apart++;
+      }
+    }
+    TEST_EQUAL(ticks_read_wrong, 0);
+    TEST_CHECK(ticks_that_tell_them_apart > 0);
+  }
 }
 
 static void poke_lands_beneath_the_rom(void) {
@@ -886,6 +1083,57 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   TEST_CHECK(port_b_bit_7());
 }
 
+/* A whole machine copied into another object and run from there, which the
+   suites do to set a state aside and come back to it. Nothing inside a
+   machine may point at the machine it was copied from: such a pointer
+   outlives the copying, and two machines sharing one place to keep a line's
+   end would take each other's ends back. The CRTC's is the one field of that
+   shape, and the check with teeth is that it names the copy's own buffer
+   from the copy's first tick — from any quarter of a microsecond a first
+   tick can fall on, since a host may write a register before the character
+   clock next comes round. The frame that follows only says the copy runs and
+   the original stands still, which a stale pointer would not by itself
+   disturb. */
+static void a_copied_machine_runs_as_the_one_it_was_copied_from(void) {
+  static cpc_t copy;
+  power_on(0x20000);
+  cpc.crtc.type = 1;
+  /* A screen of the firmware's shape, because a chip left at its power-on
+     zeroes has a line of one character and counts nothing at all. */
+  write_crtc(0, 63);
+  write_crtc(1, 40);
+  write_crtc(2, 46);
+  write_crtc(3, 0x8E);
+  write_crtc(4, 38);
+  write_crtc(6, 25);
+  write_crtc(7, 30);
+  write_crtc(9, 7);
+  for (int tick = 0; tick < 4 * 64 * 8; tick++) {
+    cpc_tick(&cpc);
+  }
+  copy = cpc;
+  cpc_t left_behind = cpc;
+  /* The copy's own place to keep a line's end is its own from its first
+     tick, and from every quarter of a microsecond a first tick can fall on:
+     a machine that reached into the one it was copied from would take a
+     line's end back out of a chip nobody is running. */
+  for (int quarter = 0; quarter < 4; quarter++) {
+    cpc_tick(&copy);
+    TEST_CHECK(copy.crtc.line_end_rooms == copy.crtc_line_end_rooms);
+  }
+  for (int tick = 0; tick < 4 * 64 * 40; tick++) {
+    cpc_tick(&copy);
+  }
+  /* The copy has run a frame's worth of characters. */
+  TEST_CHECK(copy.crtc.c4 != left_behind.crtc.c4 || copy.crtc.c9 != left_behind.crtc.c9 ||
+             copy.crtc.c0 != left_behind.crtc.c0);
+  /* And the machine it was copied from has not moved a character. */
+  TEST_EQUAL(cpc.crtc.c0, left_behind.crtc.c0);
+  TEST_EQUAL(cpc.crtc.c9, left_behind.crtc.c9);
+  TEST_EQUAL(cpc.crtc.c4, left_behind.crtc.c4);
+  TEST_EQUAL(cpc.cpu.pc, left_behind.cpu.pc);
+}
+
 int main(void) {
   TEST_RUN(reset_shows_both_roms_and_the_base_map);
   TEST_RUN(programs_fetch_from_the_lower_rom);
@@ -903,8 +1151,11 @@ int main(void) {
   TEST_RUN(a_machine_tick_is_a_quarter_character);
   TEST_RUN(pens_and_inks_reach_the_gate_array);
   TEST_RUN(the_gate_array_interrupts_six_times_a_frame);
+  TEST_RUN(the_interrupt_falls_a_character_after_the_hsync);
+  TEST_RUN(the_frame_check_falls_on_the_same_line_behind_an_asic);
   TEST_RUN(an_unheard_interrupt_is_held);
   TEST_RUN(the_display_lands_where_the_syncs_put_it);
+  TEST_RUN(the_border_byte_reaches_the_screen);
   TEST_RUN(the_border_surrounds_the_display);
   TEST_RUN(the_beam_sweeps_every_line_below_the_flyback);
   TEST_RUN(the_screen_is_read_from_the_base_ram_alone);
@@ -915,10 +1166,12 @@ int main(void) {
   TEST_RUN(an_unpressed_keyboard_reads_high_through_the_chips);
   TEST_RUN(port_b_carries_the_links_and_the_vsync);
   TEST_RUN(port_b_follows_the_crtc_into_vsync);
+  TEST_RUN(port_b_reads_the_chips_own_vsync_behind_an_asic);
   TEST_RUN(the_cassette_motor_turns_the_tape_and_port_b_reads_it);
   TEST_RUN(poke_lands_beneath_the_rom);
   TEST_RUN(in_a_writes_the_crtc_register_the_accumulator_holds);
   TEST_RUN(the_disc_interface_decodes_its_two_ports);
   TEST_RUN(without_the_interface_the_ports_float);
+  TEST_RUN(a_copied_machine_runs_as_the_one_it_was_copied_from);
   return TEST_REPORT("cpc");
 }

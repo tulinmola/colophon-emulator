@@ -22,12 +22,17 @@ static const char *problem;
 static size_t track_at; /* where the track being built begins */
 static size_t track_count;
 
+/* An image's signature is a fixed-width field rather than a string: the
+   bytes go in without the terminator the literal carries. */
+static void write_signature(const char *signature, size_t length) {
+  memcpy(image, signature, length);
+}
+
 static void begin_image(bool extended, uint8_t cylinders, uint8_t sides) {
   memset(image, 0, sizeof image);
-  memcpy(image,
-         extended ? "EXTENDED CPC DSK File\r\nDisk-Info\r\n"
-                  : "MV - CPCEMU Disk-File\r\nDisk-Info\r\n",
-         34);
+  write_signature(extended ? "EXTENDED CPC DSK File\r\nDisk-Info\r\n"
+                           : "MV - CPCEMU Disk-File\r\nDisk-Info\r\n",
+                  34);
   image[0x30] = cylinders;
   image[0x31] = sides;
   image_length = 256;
@@ -318,12 +323,12 @@ static void an_image_that_is_not_one_is_refused(void) {
      likes and still be read; a difference inside those eight is another
      file entirely. */
   build_plain_extended();
-  memcpy(image, "MV - CPCEMU Disk-Wossname\r\n", 27);
+  write_signature("MV - CPCEMU Disk-Wossname\r\n", 27);
   TEST_CHECK(dsk_identify(image, image_length));
-  memcpy(image, "MV - CPD", 8);
+  write_signature("MV - CPD", 8);
   TEST_CHECK(!dsk_identify(image, image_length));
   TEST_CHECK(!dsk_read(&floppy, image, image_length, &problem));
-  memcpy(image, "EXTENDEX", 8);
+  write_signature("EXTENDEX", 8);
   TEST_CHECK(!dsk_identify(image, image_length));
 
   build_plain_extended();
