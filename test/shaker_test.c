@@ -26,11 +26,20 @@
  *
  * Needs the firmware and disc images: run `make roms` and `make discs`.
  *
+ * Two versions are walked, each against records of its own: 2.7, and 2.6
+ * before it, the version Shakerland's photographs of real machines show
+ * wherever their text tells the two apart, so that a photograph can be set
+ * against the version that drew it. A group named in these sources by its
+ * module and key alone — module C's (P), say — is 2.7's where a run of it is
+ * meant; a photograph of it may be of either.
+ *
  * Sources:
  * - "Shaker" (Longshot / Logon System), https://shaker.logonsystem.eu/ —
  *   the suite itself, and the recordings from real machines of each CRTC
  *   type that its tests are written against. Technical information sourced
  *   from the "Amstrad CPC CRTC Compendium" by Longshot (CC BY-NC-ND).
+ * - Shaker 2.6, http://logon.system.free.fr/down/shaker26.dsk — the version
+ *   before, still served from Logon System's older site.
  */
 #include <ctype.h>
 #include <limits.h>
@@ -87,14 +96,18 @@
    before printing anything at all, and module A's HSYNC group turns its
    byte over on the same beat, so a threshold near either would end the
    watch in the middle of the test — and a group cut off says nothing about
-   being cut off, which is why the standing records it separately.
+   being cut off, which is why the standing records it separately. The
+   longest quiet yet is 2.6's module C (P) on a type 0, which draws nothing
+   new for 375 frames on the way to the line it grades itself on; the watch
+   waits 500, which cost a quarter to two fifths more time than 300 when
+   measured on all ten records and moved no other graded line.
 
    The cap is for the groups that never stop, which are the ones drawing
    something that moves. Module B's status-register check is quieter than
    any of those: it waits past two hundred frames before its first screen,
    and a threshold that suited the groups a type 0 runs cut it off. */
 #define SAMPLE_STEP_FRAMES 5
-#define MAX_SAMPLES_WITHOUT_NEWS 60
+#define MAX_SAMPLES_WITHOUT_NEWS 100
 #define MAX_SAMPLES_PER_GROUP 300
 
 /* Every path this file builds names a directory the sweep was pointed at,
@@ -206,8 +219,16 @@ static int grid_left = NOMINAL_LEFT;
 static int grid_top = NOMINAL_TOP;
 static const char *rom_directory = "roms";
 static const char *disc_directory = "test/data/discs";
-static const char *report_directory = "build/shaker";
-static const char *scoreboard_on_record = "test/shaker-scoreboard-crtc0.txt";
+/* Where the sweep writes, by default the directory the Makefile makes for
+   the version and the type it walks. */
+static char default_report_directory[64];
+static const char *report_directory = NULL;
+/* The suite's version as its disc and its files name it, 2.7 being "27". */
+static const char *version = "27";
+/* And the record it is set against, by default the one for that version and
+   that type. */
+static char default_scoreboard_on_record[64];
+static const char *scoreboard_on_record = NULL;
 
 typedef struct {
   char key[MAX_KEY_LENGTH + 1];
@@ -347,13 +368,14 @@ static bool power_on(void) {
     return false;
   }
   size_t length = 0;
-  if (!load_file(disc_directory, "shaker27.dsk", disc_image, sizeof disc_image, &length,
-                 "make discs")) {
+  char disc_file[16];
+  snprintf(disc_file, sizeof disc_file, "shaker%s.dsk", version);
+  if (!load_file(disc_directory, disc_file, disc_image, sizeof disc_image, &length, "make discs")) {
     return false;
   }
   const char *problem = NULL;
   if (!dsk_read(&disc, disc_image, length, &problem)) {
-    TEST_FAIL("shaker27.dsk: %s", problem);
+    TEST_FAIL("%s: %s", disc_file, problem);
     return false;
   }
   build_glyph_index();
@@ -1760,7 +1782,7 @@ static void run_module(const char *module, const char *only_group) {
   grid_left = nominal_left();
   grid_top = NOMINAL_TOP;
   char command[64];
-  snprintf(command, sizeof command, "RUN\"SHAKE27%s\n", module);
+  snprintf(command, sizeof command, "RUN\"SHAKE%s%s\n", version, module);
   run_frames(FRAMES_TO_PROMPT);
   type_text(command);
   run_frames(FRAMES_TO_LOAD_MODULE);
@@ -1783,7 +1805,8 @@ static void run_module(const char *module, const char *only_group) {
   snprintf(path, sizeof path, "%s/module-%s.txt", report_directory, module);
   FILE *report = fopen(path, "w");
   if (report == NULL) {
-    TEST_FAIL("cannot write %s — run 'make test-shaker', which makes %s", path, report_directory);
+    TEST_FAIL("cannot write %s — run 'make test-shaker SHAKER=%s CRTC=%u', which makes %s", path,
+              version, crtc_type, report_directory);
     return;
   }
 
@@ -1834,8 +1857,8 @@ static const char *only_module;
 static const char *only_group;
 
 /* One test per module: a module that cannot be reached at all is a failure,
-   while the groups inside it are a record. The disc holds SHAKE27A through
-   SHAKE27E. */
+   while the groups inside it are a record. Each disc holds its version's
+   five, SHAKE27A to SHAKE27E on 2.7's. */
 static bool wanted(const char *module) {
   return only_module == NULL || strcmp(only_module, module) == 0;
 }
@@ -2729,7 +2752,7 @@ int main(int argc, char **argv) {
   if (argc > 2) {
     disc_directory = argv[2];
   }
-  if (argc > 3) {
+  if (argc > 3 && argv[3][0] != '\0') {
     report_directory = argv[3];
   }
   if (argc > 4 && argv[4][0] != '\0') {
@@ -2748,6 +2771,23 @@ int main(int argc, char **argv) {
       return 1;
     }
     crtc_type = (uint8_t)(argv[7][0] - '0');
+  }
+  if (argc > 8 && argv[8][0] != '\0') {
+    if (strcmp(argv[8], "26") != 0 && strcmp(argv[8], "27") != 0) {
+      printf("shaker: %s names no version this tier walks; it walks 26 and 27\n", argv[8]);
+      return 1;
+    }
+    version = argv[8];
+  }
+  if (report_directory == NULL) {
+    snprintf(default_report_directory, sizeof default_report_directory, "build/shaker%s/crtc%u",
+             version, crtc_type);
+    report_directory = default_report_directory;
+  }
+  if (scoreboard_on_record == NULL) {
+    snprintf(default_scoreboard_on_record, sizeof default_scoreboard_on_record,
+             "test/shaker%s-scoreboard-crtc%u.txt", version, crtc_type);
+    scoreboard_on_record = default_scoreboard_on_record;
   }
   if (only_group != NULL && only_module == NULL) {
     printf("shaker: a group needs the module it belongs to — pass MODULE too\n");
@@ -2780,8 +2820,8 @@ int main(int argc, char **argv) {
     printf("shaker: cannot write %s\n", scoreboard_path);
     return 1;
   }
-  fprintf(file, "What Longshot's Shaker 2.7 said about this machine, built as a type %u\n",
-          crtc_type);
+  fprintf(file, "What Longshot's Shaker %c.%c said about this machine, built as a type %u\n",
+          version[0], version[1], crtc_type);
   fprintf(file, "CRTC, module by module and in the order each module's own menu prints.\n\n");
   if (crtc_type != 0) {
     fprintf(file, "Built as, and nearly no more: the chip answers a program asking what it\n");

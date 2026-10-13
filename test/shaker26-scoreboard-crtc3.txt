@@ -1,4 +1,4 @@
-What Longshot's Shaker 2.7 said about this machine, built as a type 3
+What Longshot's Shaker 2.6 said about this machine, built as a type 3
 CRTC, module by module and in the order each module's own menu prints.
 
 Built as, and nearly no more: the chip answers a program asking what it
@@ -6,10 +6,10 @@ is, and of its own timing keeps only what the head of crtc.h names. The
 rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
-61 groups run, 25 left to another CRTC type.
+59 groups run, 23 left to another CRTC type.
 5 of them printed self-graded lines, 24 in all: 24 agree with Longshot's
 silicon and 0 do not. That is 100% of what this reader can score, and no
-measure at all of the other 56 groups.
+measure at all of the other 54 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -111,7 +111,7 @@ C (3)       CRTC 1   : PARITY SWITCH STATUS                                     
 C (4)       CRTC 1   : IVM ON/OFF                                                            another CRTC type's
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   another CRTC type's
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's
-C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded
+C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, cut off at the cap
 C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                another CRTC type's
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
@@ -167,8 +167,4 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   another CRTC type's
-E (4)       CRTC 3/4 : C4 OVERFLOW                                                           recorded, ungraded
-E (5)       SPLIT RAST COLOR POS                                                             recorded, ungraded
-E (6)       CRTC 0 : C9 COMPARATOR R9/R5 SWITCH MECH.                                        another CRTC type's
-E (7)       CRTC 2 : LAST LINE/HSYNC MECH.                                                   another CRTC type's
 E (COPY)    RESET CPC                                                                        recorded, ungraded

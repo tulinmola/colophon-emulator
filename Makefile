@@ -84,6 +84,14 @@ EXERCISER_GROUPS ?= 12
 MODULE ?=
 GROUP ?=
 
+# Which of Shaker's versions to walk, each against records of its own: 27, or
+# 26 before it, the version Shakerland's photographs of real machines show
+# wherever their text tells the two apart.
+SHAKER ?= 27
+ifeq ($(filter $(SHAKER),26 27),)
+$(error SHAKER=$(SHAKER) names no version this tier walks; it walks 26 and 27)
+endif
+
 # Frames of the demo the benchmark plays; empty takes its own default.
 BENCH_FRAMES ?=
 
@@ -94,7 +102,8 @@ DEMO_FRAMES ?=
 # Which CRTC the machine is built with, which decides both what Shaker runs
 # and the record it is set against. Only type 0 behaves as itself here;
 # CRTC=N builds a machine a program names a type N and runs the groups that
-# belong to one. The chip answers to all five, and each has a record.
+# belong to one. The chip answers to all five, and each has a record under
+# each of Shaker's versions.
 CRTC ?= 0
 ifeq ($(filter $(CRTC),0 1 2 3 4),)
 $(error CRTC=$(CRTC) names no CRTC; the types are 0 to 4)
@@ -281,8 +290,8 @@ test-sanitized:
 roms:
 	@sh tools/fetch-roms.sh
 
-# The disc images the machine tier reads, fetched and pinned by hash like
-# the firmware.
+# Every disc image the tiers read, fetched and pinned by hash like the
+# firmware.
 discs:
 	@sh tools/fetch-discs.sh
 
@@ -290,20 +299,20 @@ discs:
 # catalogued. Needs the ROM and disc images, so it fetches them first.
 test-firmware: $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
 	@sh tools/fetch-roms.sh
-	@sh tools/fetch-discs.sh
+	@sh tools/fetch-discs.sh shaker27.dsk
 	@$(BUILD)/cpc_firmware_test roms test/data/discs
 	@$(BUILD)/spectrum_firmware_test roms
 
 # Shaker: Longshot's CRTC acid tests, walked module by module, and what they
-# said set against the copy on record in test/. Passing means nothing moved,
-# and not that the machine is right: most groups state their verdict in a
-# picture, and a group is graded only once its convention has been read off
-# its own output.
+# said set against the copy on record in test/, one to a version and a type.
+# Passing means nothing moved, and not that the machine is right: most groups
+# state their verdict in a picture, and a group is graded only once its
+# convention has been read off its own output.
 test-shaker: $(BUILD)/shaker_test
 	@sh tools/fetch-roms.sh
-	@sh tools/fetch-discs.sh
-	@mkdir -p $(BUILD)/shaker/crtc$(CRTC)
-	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker/crtc$(CRTC) test/shaker-scoreboard-crtc$(CRTC).txt "$(MODULE)" "$(GROUP)" "$(CRTC)"
+	@sh tools/fetch-discs.sh shaker$(SHAKER).dsk
+	@mkdir -p $(BUILD)/shaker$(SHAKER)/crtc$(CRTC)
+	@$(BUILD)/shaker_test roms test/data/discs $(BUILD)/shaker$(SHAKER)/crtc$(CRTC) test/shaker$(SHAKER)-scoreboard-crtc$(CRTC).txt "$(MODULE)" "$(GROUP)" "$(CRTC)" "$(SHAKER)"
 
 # The software tier: a demo played from end to end, every frame kept at the
 # monitor's retrace and hashed. It grades nothing — it says whether anything
@@ -312,7 +321,7 @@ test-shaker: $(BUILD)/shaker_test
 # quick look; the record is written from a whole one.
 test-demos: $(BUILD)/demo_test
 	@sh tools/fetch-roms.sh
-	@sh tools/fetch-discs.sh
+	@sh tools/fetch-discs.sh batman-forever.dsk
 	@mkdir -p $(BUILD)/demos/crtc$(CRTC)
 	@$(BUILD)/demo_test roms test/data/discs $(BUILD)/demos/crtc$(CRTC) test/demo-batman-forever-crtc$(CRTC).txt "$(CRTC)" "$(DEMO_FRAMES)"
 
@@ -321,7 +330,7 @@ test-demos: $(BUILD)/demo_test
 # for is the before and after of one change. BENCH_FRAMES shortens it.
 bench: $(BUILD)/bench
 	@sh tools/fetch-roms.sh
-	@sh tools/fetch-discs.sh
+	@sh tools/fetch-discs.sh batman-forever.dsk
 	@$(BUILD)/bench roms test/data/discs "$(BENCH_FRAMES)"
 
 # The conformance tier: the complete SingleStepTests corpus, fetched on first
@@ -337,20 +346,28 @@ test-exerciser: $(BUILD)/z80_exerciser_test
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexdoc.com $(EXERCISER_GROUPS)
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexall.com $(EXERCISER_GROUPS)
 
-# Every CRTC the reader keeps a record for, whatever the command line asked
-# for — type 0 by the prerequisite below, the rest by the loop: the point of
-# the tier is every record, and a type named here would silently grade one of
-# them twice. And the whole demo, for the same reason: a
-# tier that compares a part of a run against a record of a whole one compares
-# nothing at all. Only two types have a demo record, so only those two are
-# played.
+# Every record the reader keeps, whatever the command line asked for — each
+# version on each CRTC, 2.7 on type 0 by the prerequisite below and the rest
+# by the loops: the point of the tier is every record, and a version, a type
+# or a module named here would silently grade one of them twice or none of it.
+# And the whole demo, for the same reason: a tier that compares a part of a
+# run against a record of a whole one compares nothing at all. Only two types
+# have a demo record, so only those two are played. A variable given on the
+# command line reaches every make below this one whatever this one overrides,
+# so each is named again where the loops call them.
 test-all: override CRTC := 0
+test-all: override SHAKER := 27
+test-all: override MODULE :=
+test-all: override GROUP :=
 test-all: override DEMO_FRAMES :=
 test-all: test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser
 	@for type in 1 2 3 4; do \
-		$(MAKE) --no-print-directory test-shaker CRTC=$$type || exit 1; \
+		$(MAKE) --no-print-directory test-shaker SHAKER=27 CRTC=$$type MODULE= GROUP= || exit 1; \
 	done
-	@$(MAKE) --no-print-directory test-demos CRTC=1
+	@for type in 0 1 2 3 4; do \
+		$(MAKE) --no-print-directory test-shaker SHAKER=26 CRTC=$$type MODULE= GROUP= || exit 1; \
+	done
+	@$(MAKE) --no-print-directory test-demos CRTC=1 DEMO_FRAMES=
 
 format:
 	$(CLANG_FORMAT) -i $(SOURCES) $(HEADERS)
