@@ -12,12 +12,14 @@
  *
  * It is also the machine's clock: from 16MHz it makes the CPU's 4MHz and
  * the character clock's 1MHz, and it holds the CPU off the RAM for three
- * cycles in four so the video fetch always wins. That hold is the READY
- * signal, wired to the Z80's WAIT.
+ * cycles in four, leaving it the fourth, on which the video fetch follows
+ * its access. That hold is the READY signal, wired to the Z80's WAIT.
  *
  * Implemented: the registers, the interrupt generator, the byte-to-pixel
  * serialiser, the composite sync and READY. Not yet: the 40010's habit of
- * starting mode 2 one pixel early, which waits for Shaker.
+ * starting mode 2 one pixel early, which waits for Shaker, and where inside
+ * the character a new mode begins, a few pixels in (ch. 9.3.4.1), a mode
+ * being taken here on a whole character.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -37,10 +39,9 @@
  *   tested on silicon.
  * - "The Gate Array" (Grim),
  *   https://www.grimware.org/doku.php/documentations/devices/gatearray —
- *   the command dispatch on data bits 7-6, the PENR/INKR/RMR layouts, mode
- *   changes taking effect after the next HSYNC, the byte-to-pixel tables
- *   for the four modes, and the palette as measured on the outputs of a
- *   real 40010.
+ *   the command dispatch on data bits 7-6, the PENR/INKR/RMR layouts, the
+ *   byte-to-pixel tables for the four modes, and the palette as measured on
+ *   the outputs of a real 40010.
  * - The Compendium ch. 16.2.2 and 16.2.3 for the composite sync: the H06
  *   and V26 counters this file names, the four-microsecond C-HSYNC that
  *   begins two characters after the CRTC's, the four-line C-VSYNC that
@@ -48,6 +49,10 @@
  *   and the XNOR that inverts the line pulses during a frame sync.
  * - The Compendium ch. 7.1 — the Gate Array displays a character one
  *   microsecond after the CRTC hands over its address.
+ * - The Compendium ch. 9.3 — where a mode write is taken: ch. 9.3.1's
+ *   HSYNC-GA period, capped at six microseconds and needing two, and ch.
+ *   9.3.2 and 9.3.3, which draw an OUT against R2=46, R3=14 a microsecond
+ *   at a time.
  * - "Interrupts on the CPC/CPC+ and KC Compact" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/ints.html — RMR bit 4 clears the
  *   pending request along with the counter.
@@ -80,8 +85,9 @@ typedef struct {
   uint8_t inks[17]; /* 5-bit hardware colour codes; [16] is the border */
 
   uint8_t mode;           /* the video mode in force, 0 to 3 */
-  uint8_t mode_pending;   /* RMR bits 1-0 as last written; a mode change takes
-                             effect after the next HSYNC ("The Gate Array") */
+  uint8_t mode_pending;   /* RMR bits 1-0 as last written, taken where the
+                             HSYNC-GA period of the next line sync of two
+                             characters or more ends (gate_array.c) */
   bool lower_rom_enabled; /* RMR bits 2 and 3: a cleared bit enables; these
                              store the enabled state directly */
   bool upper_rom_enabled;
@@ -193,14 +199,17 @@ static inline bool gate_array_ready(const gate_array_t *gate_array) {
   return gate_array->cpu_phase != 0;
 }
 
-/* Serialise one character. The two bytes are those the machine has just
- * fetched at the CRTC's address, and the two flags the CRTC's display
- * enable as each of them finds it; all four are held a microsecond before
- * they reach the screen, so this writes out the set handed over last
- * time. */
+/* Serialise one character. The two flags are the CRTC's display enable as
+ * each of the character's two bytes finds it; flags and bytes are held a
+ * microsecond before they reach the screen, so this writes out the set
+ * handed over last time and keeps the flags. The bytes follow in
+ * gate_array_fetch. */
 void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool display_second_byte,
-                      uint8_t byte0, uint8_t byte1,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]);
+
+/* The two bytes read at the address the CRTC handed over with the flags,
+ * held with them for the next gate_array_video. */
+void gate_array_fetch(gate_array_t *gate_array, uint8_t byte0, uint8_t byte1);
 
 /* What the Gate Array's three-state RGB logic puts on the cable for a
  * hardware colour code, as 0xRRGGBB. */

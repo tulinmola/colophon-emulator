@@ -37,6 +37,15 @@ static void pulse_hsync(void) {
   character(false, false);
 }
 
+/* A line sync of two characters, the shortest that takes a mode written
+   before it: "a HSYNC of at least 2 μsec is required for the graphic mode
+   update" (ch. 9.3.1). */
+static void take_the_mode(void) {
+  character(true, false);
+  character(true, false);
+  character(false, false);
+}
+
 static void pulse_hsyncs(int count) {
   for (int pulse = 0; pulse < count; pulse++) {
     pulse_hsync();
@@ -47,7 +56,8 @@ static void pulse_hsyncs(int count) {
    the chip reports unless one of the rules that part them is in play. */
 static void draw_character(bool display, uint8_t byte0, uint8_t byte1,
                            uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
-  gate_array_video(&gate_array, display, display, byte0, byte1, samples);
+  gate_array_video(&gate_array, display, display, samples);
+  gate_array_fetch(&gate_array, byte0, byte1);
 }
 
 static void reset_state(void) {
@@ -78,8 +88,59 @@ static void rmr_owns_roms_and_mode(void) {
   TEST_CHECK(!gate_array.upper_rom_enabled);
   TEST_EQUAL(gate_array.mode_pending, 1);
   TEST_EQUAL(gate_array.mode, 0); /* not yet: a mode waits for the HSYNC */
-  pulse_hsync();
+  take_the_mode();
   TEST_EQUAL(gate_array.mode, 1);
+}
+
+/* A mode is taken where ch. 9.3.1's HSYNC-GA period ends, which is the
+   sync's own end where that comes within six characters of its first, and
+   otherwise the clock that brings H06 to 6. Under a sync of fourteen
+   characters that is the seventh clock, the sync's first being the first,
+   and a mode written after it waits for the next sync (ch. 9.3.2's
+   diagram); every width from two to seven takes it; a sync of one
+   character takes nothing, and neither does a second one begun under the
+   pulse ch. 16.2.3's counter raises after the first. */
+static void a_mode_is_taken_where_the_hsync_ga_period_ends(void) {
+  gate_array_init(&gate_array);
+  gate_array_write(&gate_array, 0x8D); /* RMR: mode 1 */
+  for (int sync_character = 0; sync_character < 14; sync_character++) {
+    character(true, false);
+    TEST_EQUAL(gate_array.mode, sync_character >= 6 ? 1 : 0);
+  }
+  gate_array_write(&gate_array, 0x8E); /* mode 2, written past the sixth */
+  character(false, false);
+  TEST_EQUAL(gate_array.mode, 1);
+  take_the_mode();
+  TEST_EQUAL(gate_array.mode, 2);
+
+  gate_array_write(&gate_array, 0x8C); /* mode 0, under a sync of one */
+  character(true, false);
+  for (int after = 0; after < 8; after++) {
+    character(false, false);
+  }
+  TEST_EQUAL(gate_array.mode, 2);
+
+  /* Every width between, the sync ending on the clock that brings H06 to 6
+     among them. */
+  for (int width = 2; width <= 7; width++) {
+    gate_array_write(&gate_array, 0x8C);
+    for (int sync_character = 0; sync_character < width; sync_character++) {
+      character(true, false);
+    }
+    character(false, false);
+    TEST_EQUAL(gate_array.mode, 0);
+    gate_array_write(&gate_array, 0x8E);
+    take_the_mode();
+    TEST_EQUAL(gate_array.mode, 2);
+  }
+
+  gate_array_write(&gate_array, 0x8C);
+  for (int sync = 0; sync < 4; sync++) {
+    character(true, false);
+    character(false, false);
+    character(false, false);
+  }
+  TEST_EQUAL(gate_array.mode, 2);
 }
 
 /* The end of an HSYNC is counted a character later, and the interrupt it
@@ -329,7 +390,7 @@ static void mode_0_paints_two_fat_pixels_a_byte(void) {
   gate_array_init(&gate_array);
   inks_name_their_pens();
   gate_array_write(&gate_array, 0x8C); /* RMR: mode 0 */
-  pulse_hsync();
+  take_the_mode();
   uint8_t samples[16];
   /* Bit 7 carries pen bit 0, bit 3 pen bit 1, bit 5 pen bit 2, bit 1 pen
      bit 3; the odd bits carry the second pixel. &88 is pen 3, then 0. */
@@ -346,7 +407,7 @@ static void mode_1_paints_four_pixels_a_byte(void) {
   gate_array_init(&gate_array);
   inks_name_their_pens();
   gate_array_write(&gate_array, 0x8D); /* RMR: mode 1 */
-  pulse_hsync();
+  take_the_mode();
   uint8_t samples[16];
   /* &80 sets bit 7: pen bit 0 of the leftmost pixel. */
   serialise(0x80, 0x08, samples);
@@ -363,7 +424,7 @@ static void mode_2_paints_a_pixel_a_bit(void) {
   gate_array_init(&gate_array);
   inks_name_their_pens();
   gate_array_write(&gate_array, 0x8E); /* RMR: mode 2 */
-  pulse_hsync();
+  take_the_mode();
   uint8_t samples[16];
   serialise(0xA0, 0x01, samples);
   TEST_EQUAL(samples[0], 1);
@@ -378,7 +439,7 @@ static void mode_3_ignores_four_bits_a_byte(void) {
   gate_array_init(&gate_array);
   inks_name_their_pens();
   gate_array_write(&gate_array, 0x8F); /* RMR: mode 3 */
-  pulse_hsync();
+  take_the_mode();
   uint8_t samples[16];
   /* Mode 0's widths, mode 1's two leftmost pixels: &88 is pen 3, and the
      bits mode 0 would have read as pen bits 2 and 3 do nothing. */
@@ -445,7 +506,7 @@ static void every_byte_paints_what_the_structure_says(void) {
     gate_array_init(&gate_array);
     inks_differ_from_their_pens();
     gate_array_write(&gate_array, (uint8_t)(0x8C | mode));
-    pulse_hsync();
+    take_the_mode();
     for (uint16_t value = 0; value < 256; value++) {
       /* The character's two halves carry different bytes, so a half painted
          from the other one's byte disagrees. */
@@ -477,7 +538,7 @@ static void a_mode_wider_than_rmr_keeps_paints_as_mode_3(void) {
   gate_array_init(&gate_array);
   inks_differ_from_their_pens();
   gate_array_write(&gate_array, 0x8F); /* RMR: mode 3 */
-  pulse_hsync();
+  take_the_mode();
   uint8_t expected[GATE_ARRAY_SAMPLES_PER_CHARACTER];
   serialise(0x88, 0x30, expected);
   const uint8_t wider[] = {4, 5, 6, 7, 0x80, 0xFF};
@@ -510,15 +571,17 @@ static void the_border_can_take_one_byte_of_a_character(void) {
   gate_array_init(&gate_array);
   inks_name_their_pens();
   gate_array_write(&gate_array, 0x8E); /* RMR: mode 2, a pixel a bit */
-  pulse_hsync();                       /* which a mode change waits for */
+  take_the_mode();                     /* which a mode change waits for */
   gate_array_write(&gate_array, 0x10); /* PENR: the border */
   gate_array_write(&gate_array, 0x49); /* INKR: colour 9 */
   uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
 
   /* Displayed first, border second: the bytes are all ones, so a displayed
      byte reads as pen 1 and a bordered one as the border's own colour. */
-  gate_array_video(&gate_array, true, false, 0xFF, 0xFF, samples);
-  gate_array_video(&gate_array, true, false, 0xFF, 0xFF, samples);
+  gate_array_video(&gate_array, true, false, samples);
+  gate_array_fetch(&gate_array, 0xFF, 0xFF);
+  gate_array_video(&gate_array, true, false, samples);
+  gate_array_fetch(&gate_array, 0xFF, 0xFF);
   for (int sample = 0; sample < 8; sample++) {
     TEST_EQUAL(samples[sample], 1);
   }
@@ -527,8 +590,10 @@ static void the_border_can_take_one_byte_of_a_character(void) {
   }
 
   /* And the other way about. */
-  gate_array_video(&gate_array, false, true, 0xFF, 0xFF, samples);
-  gate_array_video(&gate_array, false, true, 0xFF, 0xFF, samples);
+  gate_array_video(&gate_array, false, true, samples);
+  gate_array_fetch(&gate_array, 0xFF, 0xFF);
+  gate_array_video(&gate_array, false, true, samples);
+  gate_array_fetch(&gate_array, 0xFF, 0xFF);
   for (int sample = 0; sample < 8; sample++) {
     TEST_EQUAL(samples[sample], 9);
   }
@@ -557,7 +622,7 @@ static void a_character_reaches_the_screen_a_microsecond_late(void) {
   gate_array_init(&gate_array);
   inks_name_their_pens();
   gate_array_write(&gate_array, 0x8E); /* mode 2 */
-  pulse_hsync();
+  take_the_mode();
   uint8_t samples[16];
   draw_character(true, 0xFF, 0xFF, samples);
   TEST_EQUAL(samples[0], 0); /* what was in the pipeline before */
@@ -683,6 +748,7 @@ int main(void) {
   TEST_RUN(reset_state);
   TEST_RUN(pen_selects_and_ink_paints);
   TEST_RUN(rmr_owns_roms_and_mode);
+  TEST_RUN(a_mode_is_taken_where_the_hsync_ga_period_ends);
   TEST_RUN(an_acknowledge_races_r52_past_31);
   TEST_RUN(only_the_step_past_31_races);
   TEST_RUN(an_hsync_ending_before_the_vsync_is_not_counted_after_it);

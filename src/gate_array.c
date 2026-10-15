@@ -120,7 +120,28 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
   /* H06 restarts on the CRTC's HSYNC and counts characters from there; the
      Gate Array's own pulse runs from the second to the sixth, so it begins
      2µs late and lasts 4µs at most (Compendium ch. 16.2.2-16.2.3). The
-     counter stops where its name does. */
+     counter stops where its name does.
+
+     A mode written before it ends is taken where the period ch. 9.3.1 calls
+     HSYNC-GA ends: it "has a maximum duration capped at 6 μsec and
+     cannot exceed the value defined in R3", and "a HSYNC of at least
+     2 μsec is required for the graphic mode update". So the mode is taken
+     where the sync ends if that is within six characters of its first,
+     else on the clock that brings H06 to 6, and a sync of one character
+     takes none — nor does the pulse ch. 16.2.3's algorithm goes on to
+     raise after such a sync, the counter running on past it, the period
+     having ended with the sync. Ch. 9.3.2 draws R2=46, R3=14 and an OUT
+     whose write is "effective on the 3rd μsecond" changing the mode from
+     C0vs 43 to 52: those begun up to 49, landing their write on C0=51 at
+     the latest, are taken on the line and the rest wait for the next sync;
+     behind an ASIC ch. 9.3.3 takes one more, the syncs reaching it a
+     character late (cpc.c). Shaker's A (E) draws the same edge, and
+     Shakerland's photograph of it on a type 2 shows it where the group's
+     closing line names it for each type: "CRT 0.1.2 >> READABLE MARKER 08
+     / CRT 3.4 >> R. MARKER 09". Where inside the character the new mode
+     begins, "the 6th pixel mode 2" on types 0, 1 and 2 and the 4th on a
+     type 4 (ch. 9.3.4.1), is finer than a character and not here. */
+  bool reached_six = false;
   if (hsync_started) {
     gate_array->h06 = 0;
     gate_array->black_hsync = true;
@@ -130,7 +151,13 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
       gate_array->sig_hsync = true;
     } else if (gate_array->h06 == 6) {
       gate_array->sig_hsync = false;
+      reached_six = true;
     }
+  }
+  bool period_ends_at_six = reached_six && (hsync || hsync_ended);
+  bool period_ends_with_the_sync = hsync_ended && gate_array->h06 >= 2 && gate_array->h06 < 6;
+  if (period_ends_at_six || period_ends_with_the_sync) {
+    gate_array->mode = gate_array->mode_pending;
   }
 
   if (hsync_ended) {
@@ -149,9 +176,6 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
       }
     }
 
-    /* Mode changes take effect after the HSYNC ("The Gate Array"); the
-       sub-microsecond placement waits for Shaker. */
-    gate_array->mode = gate_array->mode_pending;
     gate_array->hsync_end_last_character =
         vsync_check_due(gate_array) ? GATE_ARRAY_FRAME_CHECK : GATE_ARRAY_R52_STEP;
   }
@@ -265,7 +289,6 @@ static void fill_pens_of_byte(void) {
    it: the chip can put the border on one and not the other (ch. 17.6.2,
    18.3.2). A blanked beam takes both. */
 void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool display_second_byte,
-                      uint8_t byte0, uint8_t byte1,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
   bool blanked = gate_array->black_hsync || gate_array->black_vsync;
   for (uint8_t half = 0; half < 2; half++) {
@@ -286,10 +309,13 @@ void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool di
       half_samples[sample] = gate_array->inks[pens[sample]];
     }
   }
-  gate_array->latched_bytes[0] = byte0;
-  gate_array->latched_bytes[1] = byte1;
   gate_array->latched_display[0] = display_first_byte;
   gate_array->latched_display[1] = display_second_byte;
+}
+
+void gate_array_fetch(gate_array_t *gate_array, uint8_t byte0, uint8_t byte1) {
+  gate_array->latched_bytes[0] = byte0;
+  gate_array->latched_bytes[1] = byte1;
 }
 
 uint32_t gate_array_rgb(uint8_t colour_code) {

@@ -8,7 +8,7 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and eight things are not its alone. The
+ * Type 0 is the type implemented, and nine things are not its alone. The
  * first is what a machine can read of the chip, which is what a program names
  * it by (ch. 28.1.8, 28.1.9). Every type answers: types 0, 1 and 2 from ch.
  * 21.2's table, with the status register type 1 alone has, and the two ASICs
@@ -459,6 +459,13 @@
  * second, and its "R7 LAST CHANCE 4TH uSec" on the type 1 and type 2 records
  * with the other comparison.
  *
+ * The ninth is the display delay R8 carries in its high nibble. Ch. 19.1's
+ * table marks those bits x on types 1 and 2, and ch. 19.2 gives the
+ * SKEW-DISPTMG functions to "CRTC's 0, 3 and 4" only, so those two keep R8's
+ * interlace bits alone and a delay written to them does nothing. Shakerland's
+ * photographs of Shaker's A (2) show it on both: the border an R8 of #10 bends
+ * on the other three stands straight there.
+ *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — the character its line ending is decided on
  * held open for a write to cancel it, which is every type's here and the eighth
@@ -488,14 +495,20 @@
  * Above those sit the SKEW-DISPTMG functions, which ch. 19.1 gives this type and
  * withholds from types 1 and 2: a delay of one character or two on both edges of
  * the R1 border, or the display shut outright, which takes the interlace bits
- * with it (ch. 19.2). Nothing outside this repository grades those: what stands
- * behind them is a reading of ch. 19.2's diagrams and no evidence we did not
- * write. The interlace line is asked for on the deadline of its own that ch.
- * 11.9 gives it, later than a type 0's R5 deadline and read on the last line a
- * frame has — which may be one of R5's own, so a program may add the line or
- * take it back from inside an adjustment, and a frame R5 asked nothing of is
- * held open for it. Shaker's C (P) grades that reach into an adjustment on a
- * type 2: were the deadline read only on the last line of a frame's last row,
+ * with it (ch. 19.2). No line the suite grades covers them, and what stands
+ * behind their placement is a reading of ch. 19.2's diagrams. Shakerland's
+ * photographs of Shaker's A (2) show the delay on this type and the two ASICs
+ * and none on types 1 and 2 (the ninth exception); set against the photograph
+ * of its "R8 STORIES 1" page on this type, where R8=#10 is written from
+ * C0=#37 to #3E a line at a time, the border the delay cuts falls here on the
+ * lines written from #39 to #3C and on silicon on those from #3A to #3D, a
+ * microsecond of writing later, which is not yet understood. The interlace
+ * line is asked for on the deadline of its own that ch. 11.9 gives it, later
+ * than a type 0's R5 deadline and read on the last line a frame has — which
+ * may be one of R5's own, so a program may add the line or take it back from
+ * inside an adjustment, and a frame R5 asked nothing of is held open for it.
+ * Shaker's C (P) grades that reach into an adjustment on a type 2: were the
+ * deadline read only on the last line of a frame's last row,
  * never on an adjustment line, two more of the group's graded lines would come
  * out wrong. It bounds the character too. Read at C0=#29, where one of its
  * tests writes R8 on a last line, or at any character before it, the deadline

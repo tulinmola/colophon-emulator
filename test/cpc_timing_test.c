@@ -1,7 +1,7 @@
 /*
  * cpc_timing_test — how long each instruction takes on a CPC, in
- * microseconds, where inside one its write reaches the CRTC, and what taking
- * an interrupt costs.
+ * microseconds, where inside one its write reaches the CRTC, the picture or
+ * the video mode, and what taking an interrupt costs.
  *
  * The Gate Array holds the CPU off the RAM for three cycles in four, so
  * every machine cycle stretches until the next window and every instruction
@@ -15,7 +15,9 @@
  * settles it on hardware.
  *
  * A duration cannot say where inside a run the write lands, and two of them
- * are set here against the microsecond the Compendium puts each on.
+ * are set here against the microsecond the Compendium puts each on, with
+ * three memory writes against the video fetch they meet and a mode written
+ * against the line sync that takes it.
  *
  * Sources:
  * - "Timings" (Kevin Thacker's cpctech),
@@ -336,6 +338,177 @@ static void an_io_cycle_falls_where_its_instruction_puts_it(void) {
       TEST_FAIL("%s reached a type %u CRTC %d characters after its fetch, the Compendium says %d",
                 cases[index].mnemonic, cases[index].type, landed - fetch,
                 cases[index].characters_after_the_fetch);
+    }
+  }
+}
+
+/* Where a memory write meets the picture. The Gate Array reads the two
+   bytes of each character at the address the CRTC hands over, and a byte the
+   processor writes there is seen or not according to which of the two comes
+   first in the microsecond. Ch. 8 draws three instructions begun at C0vs 00
+   against the video pointer, a byte at a time, and says "the RAM reading by
+   the GATE ARRAY/ASIC for data modified by the Z80A is the same for all
+   CPC's": LD (HL),reg8 with reg8=#FF shows nothing new at pointers 0 and 1
+   and #FF at 2 and 3 (8.1); LD (aaaa),HL with H=#FF and L=#55 shows 00 00
+   at aaaa=4 and 5, 55 00 at 6 and 55 FF at 7 (8.2); PUSH DE with D=#FF and
+   E=#55 shows, at SP-2 and SP-1, 00 00 at SP=4, 00 FF at 5, 6 and 7, and
+   55 FF at 8 (8.3). The pointer is counted from the address handed over on
+   the character the opcode fetch falls on, as the test above counts the
+   CRTC's characters, and the instruction is reached through a run of NOPs
+   rather than straight from reset. The three differ in where a write's WR
+   first falls against the character clock: LD (HL),r's on the clock
+   itself, the other two's before it, under the Gate Array's wait. */
+#define POINTERS_WATCHED 12
+#define NOT_FETCHED 0x100
+
+static uint16_t fetches_from_the_opcode_fetch(uint8_t type, const uint8_t *opcodes, size_t length,
+                                              uint16_t hl, uint16_t sp,
+                                              int seen[POINTERS_WATCHED]) {
+  memset(ram, 0, sizeof ram);
+  memset(lower_rom, 0, sizeof lower_rom);
+  cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+  crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+  crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 63));
+  memcpy(lower_rom + UNDER_TEST, opcodes, length);
+  cpc.cpu.pc = UNDER_TEST - 8;
+  cpc.cpu.sp = sp;
+  cpc.cpu.a = 0xFF;
+  cpc.cpu.h = (uint8_t)(hl >> 8);
+  cpc.cpu.l = (uint8_t)hl;
+  cpc.cpu.d = 0xFF;
+  cpc.cpu.e = 0x55;
+  for (int pointer = 0; pointer < POINTERS_WATCHED; pointer++) {
+    seen[pointer] = NOT_FETCHED;
+  }
+  int at_the_fetch = -1;
+  for (int tick = 0; tick < 200; tick++) {
+    cpc_tick(&cpc);
+    if (at_the_fetch < 0 && (cpc.pins & (Z80_M1 | Z80_MREQ)) == (Z80_M1 | Z80_MREQ) &&
+        z80_address(cpc.pins) == UNDER_TEST) {
+      at_the_fetch = cpc_video_address(&cpc);
+    }
+    if (at_the_fetch < 0 || !gate_array_character_clock(&cpc.gate_array)) {
+      continue;
+    }
+    for (int half = 0; half < 2; half++) {
+      int pointer = cpc_video_address(&cpc) + half - at_the_fetch;
+      if (pointer >= 0 && pointer < POINTERS_WATCHED) {
+        seen[pointer] = cpc.gate_array.latched_bytes[half];
+      }
+    }
+  }
+  return (uint16_t)at_the_fetch;
+}
+
+static void a_memory_write_reaches_the_picture_where_its_instruction_puts_it(void) {
+  static const uint8_t nop[] = {0x00};
+  static const struct {
+    uint8_t pointer;
+    uint8_t first;
+  } ld_hl[] = {{0, 0x00}, {1, 0x00}, {2, 0xFF}, {3, 0xFF}};
+  static const struct {
+    uint8_t pointer;
+    uint8_t first;
+    uint8_t second;
+  } ld_nn[] = {{4, 0x00, 0x00}, {5, 0x00, 0x00}, {6, 0x55, 0x00}, {7, 0x55, 0xFF}},
+    push[] = {{4, 0x00, 0x00}, {5, 0x00, 0xFF}, {6, 0x00, 0xFF}, {7, 0x00, 0xFF}, {8, 0x55, 0xFF}};
+  int seen[POINTERS_WATCHED];
+  for (uint8_t type = 0; type <= 4; type++) {
+    uint16_t base = fetches_from_the_opcode_fetch(type, nop, sizeof nop, 0x9000, 0x8000, seen);
+    for (size_t index = 0; index < sizeof ld_hl / sizeof ld_hl[0]; index++) {
+      static const uint8_t ld_hl_a[] = {0x77};
+      fetches_from_the_opcode_fetch(type, ld_hl_a, sizeof ld_hl_a,
+                                    (uint16_t)(base + ld_hl[index].pointer), 0x8000, seen);
+      if (seen[ld_hl[index].pointer] != ld_hl[index].first) {
+        TEST_FAIL("type %u: LD (HL),A at pointer %u showed %02X, ch. 8.1 shows %02X", type,
+                  ld_hl[index].pointer, seen[ld_hl[index].pointer], ld_hl[index].first);
+      }
+    }
+    for (size_t index = 0; index < sizeof ld_nn / sizeof ld_nn[0]; index++) {
+      uint16_t aaaa = (uint16_t)(base + ld_nn[index].pointer);
+      const uint8_t ld_nn_hl[] = {0x22, (uint8_t)aaaa, (uint8_t)(aaaa >> 8)};
+      fetches_from_the_opcode_fetch(type, ld_nn_hl, sizeof ld_nn_hl, 0xFF55, 0x8000, seen);
+      if (seen[ld_nn[index].pointer] != ld_nn[index].first ||
+          seen[ld_nn[index].pointer + 1] != ld_nn[index].second) {
+        TEST_FAIL("type %u: LD (aaaa),HL at pointer %u showed %02X %02X, ch. 8.2 shows %02X %02X",
+                  type, ld_nn[index].pointer, seen[ld_nn[index].pointer],
+                  seen[ld_nn[index].pointer + 1], ld_nn[index].first, ld_nn[index].second);
+      }
+    }
+    for (size_t index = 0; index < sizeof push / sizeof push[0]; index++) {
+      static const uint8_t push_de[] = {0xD5};
+      fetches_from_the_opcode_fetch(type, push_de, sizeof push_de, 0x9000,
+                                    (uint16_t)(base + push[index].pointer), seen);
+      if (seen[push[index].pointer - 2] != push[index].first ||
+          seen[push[index].pointer - 1] != push[index].second) {
+        TEST_FAIL(
+            "type %u: PUSH DE with SP at pointer %u showed %02X %02X, ch. 8.3 shows %02X %02X",
+            type, push[index].pointer, seen[push[index].pointer - 2], seen[push[index].pointer - 1],
+            push[index].first, push[index].second);
+      }
+    }
+  }
+}
+
+/* Where a mode an OUT writes is taken: ch. 9.3.2's diagram walked, R2=46 and
+   R3=14 with mode 2 in force and an OUT(C),r8 asking for mode 0 begun at
+   each C0vs from 43 to 52, its write "effective on the 3rd μsecond" (ch.
+   9.3.1). On types 0, 1 and 2 those begun up to 49 change the line's mode
+   and the rest leave mode 2 standing until the next sync; on the two ASICs
+   one more is taken (ch. 9.3.3), their syncs reaching the Gate Array a
+   character late. Read at C0=61, after the sync. */
+#define OUT_AT 0x0200
+
+static void a_mode_written_by_an_out_is_taken_where_ch9_draws_it(void) {
+  for (uint8_t type = 0; type <= 4; type++) {
+    int at_the_fetch = -1;
+    for (int start = 43; start <= 52; start++) {
+      int nops = 8;
+      if (at_the_fetch >= 0) {
+        nops = 8 + (start - at_the_fetch + 64) % 64;
+      }
+      memset(ram, 0, sizeof ram);
+      memset(lower_rom, 0, sizeof lower_rom);
+      cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+      static const uint8_t standard[][2] = {{0, 63}, {1, 40}, {2, 46}, {3, 0x8E}, {7, 30}};
+      for (size_t index = 0; index < sizeof standard / sizeof standard[0]; index++) {
+        crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, standard[index][0]));
+        crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, standard[index][1]));
+      }
+      gate_array_write(&cpc.gate_array, 0x82); /* RMR: mode 2, the ROMs left on */
+      cpc.gate_array.mode = 2;
+      lower_rom[OUT_AT] = 0xED; /* OUT (C),C */
+      lower_rom[OUT_AT + 1] = 0x49;
+      cpc.cpu.pc = (uint16_t)(OUT_AT - nops);
+      cpc.cpu.b = 0x7F;
+      cpc.cpu.c = 0x80; /* RMR: mode 0 */
+      int fetched_on = -1;
+      int read = -1;
+      for (int tick = 0; tick < 2000 && read < 0; tick++) {
+        cpc_tick(&cpc);
+        if (fetched_on < 0 && (cpc.pins & (Z80_M1 | Z80_MREQ)) == (Z80_M1 | Z80_MREQ) &&
+            z80_address(cpc.pins) == OUT_AT) {
+          fetched_on = cpc.crtc.c0;
+        }
+        if (fetched_on >= 0 && cpc.crtc.c0 == 61 && gate_array_character_clock(&cpc.gate_array)) {
+          read = cpc.gate_array.mode;
+        }
+      }
+      if (at_the_fetch < 0) {
+        at_the_fetch = fetched_on;
+        start--; /* the first pass only finds where eight NOPs put the fetch */
+        continue;
+      }
+      if (fetched_on != start) {
+        TEST_FAIL("type %u: the OUT was fetched on C0=%d, not %d", type, fetched_on, start);
+        continue;
+      }
+      int last_taken = type >= 3 ? 50 : 49;
+      int expected = start <= last_taken ? 0 : 2;
+      if (read != expected) {
+        TEST_FAIL("type %u: an OUT begun at C0vs %d left mode %d after the sync, ch. 9.3 has %d",
+                  type, start, read, expected);
+      }
     }
   }
 }
@@ -687,6 +860,8 @@ static void an_instruction_looping_on_itself_costs_the_same(void) {
 int main(void) {
   TEST_RUN(every_instruction_takes_whole_microseconds);
   TEST_RUN(an_io_cycle_falls_where_its_instruction_puts_it);
+  TEST_RUN(a_memory_write_reaches_the_picture_where_its_instruction_puts_it);
+  TEST_RUN(a_mode_written_by_an_out_is_taken_where_ch9_draws_it);
   TEST_RUN(an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic);
   TEST_RUN(an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);

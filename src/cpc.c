@@ -372,13 +372,9 @@ uint64_t cpc_tick(cpc_t *cpc) {
                     late ? cpc->crtc_vsync_a_character_ago : vsync);
     cpc->crtc_hsync_a_character_ago = hsync;
     cpc->crtc_vsync_a_character_ago = vsync;
-    /* The video hardware reads the base 64K and nothing else: no ROM, no
-       banked RAM, whatever the CPU is looking at ("The Gate Array", MMR). */
-    uint16_t address = cpc_video_address(cpc);
     uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
     gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0,
-                     (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cpc->ram[address],
-                     cpc->ram[address | 1], samples);
+                     (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, samples);
     monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
                     gate_array_csync(&cpc->gate_array));
     /* The controller counts in microseconds, which is the character
@@ -438,6 +434,22 @@ uint64_t cpc_tick(cpc_t *cpc) {
      cycle addresses. */
   if ((pins & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
     cpc->crtc_write_awaits_the_clock = false;
+  }
+  /* The Gate Array reads the character's two bytes after the processor's
+     access on this cycle, the one READY lets every memory cycle finish on:
+     "the RAM reading by the GATE ARRAY/ASIC for data modified by the Z80A
+     is the same for all CPC's" (Compendium ch. 8), and an LD (HL),r begun
+     at C0vs 00 changes the bytes of C0vs 01 (ch. 8.1). A write is made
+     here where its WR first falls, which is this cycle for one no wait
+     stretched, as LD (HL),r's is, and an earlier one for one that waited,
+     as LD (nn),HL's does; read before the processor, the first would go
+     unseen for a microsecond. Shakerland's photographs of Shaker's A (1)
+     show it seen, on every type. The video hardware reads the base 64K and
+     nothing else: no ROM, no banked RAM, whatever the CPU is looking at
+     ("The Gate Array", MMR). */
+  if (gate_array_character_clock(&cpc->gate_array)) {
+    uint16_t address = cpc_video_address(cpc);
+    gate_array_fetch(&cpc->gate_array, cpc->ram[address], cpc->ram[address | 1]);
   }
   /* The Gate Array hears the acknowledge where M1 ends, and drops INT and
      kills R52's bit 5 there: "the end of the M1 signal during an interrupt

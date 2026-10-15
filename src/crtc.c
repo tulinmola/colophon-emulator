@@ -13,6 +13,18 @@ static const uint8_t writable_bits[18] = {
     0x1F, 0x7F, 0x1F, 0x3F, 0xFF, 0x3F, 0xFF, 0x00, 0x00,
 };
 
+/* R8's high nibble on the two types ch. 19.1's table marks x there: they keep
+   its interlace bits alone, ch. 19.2 giving the SKEW-DISPTMG functions to
+   "CRTC's 0, 3 and 4" only. Shakerland's photographs of Shaker's A (2) on
+   both show the border an R8 of #10 bends on the other three standing
+   straight. */
+static uint8_t writable_bits_of(const crtc_t *crtc, uint8_t address) {
+  if (address == 8 && (crtc->type == 1 || crtc->type == 2)) {
+    return 0x03;
+  }
+  return writable_bits[address];
+}
+
 /* The counters are narrower than the bytes that hold them. This is what a
    program overruns when it writes a limit below the counter watching it:
    the counter runs to its own top and loops, rather than never matching
@@ -1973,7 +1985,7 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     return pins;
   }
   if (crtc->address_register < 18) {
-    uint8_t mask = writable_bits[crtc->address_register];
+    uint8_t mask = writable_bits_of(crtc, crtc->address_register);
     if (mask != 0) {
       bool was_video_mode = interlace_video_asked(crtc);
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;

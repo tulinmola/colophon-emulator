@@ -7019,6 +7019,47 @@ static void the_skew_delays_the_border_at_both_ends(void) {
   }
 }
 
+/* Types 1 and 2 keep R8's interlace bits alone: ch. 19.1's table marks the
+   rest x on both, and ch. 19.2 gives the SKEW-DISPTMG functions to "CRTC's
+   0, 3 and 4" only. Shakerland's photographs of Shaker's A (2) on those two
+   show the border an R8 of #10 bends on the other three standing straight.
+   Each of the three functions written to them leaves the window where an R8
+   of 0 leaves it, and the two interlace bits written beside them are kept;
+   the two ASICs keep the one-character delay as type 0 does above. */
+static void only_types_0_3_and_4_take_a_skew(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
+  static const uint8_t types[] = {1, 2};
+  for (size_t index = 0; index < sizeof types; index++) {
+    for (uint8_t function = 1; function <= 3; function++) {
+      crtc_init(&crtc, types[index]);
+      for (int reg = 0; reg < 14; reg++) {
+        write_register(reg, values[reg]);
+      }
+      write_register(8, (uint8_t)(function << 4 | 0x03));
+      TEST_EQUAL(crtc.registers[8], 0x03);
+      TEST_CHECK(run_to_row(1));
+      for (int character = 1; character <= 64; character++) {
+        uint64_t pins = crtc_tick(&crtc);
+        TEST_EQUAL((pins & CRTC_DISPTMG) != 0, crtc.c0 < 40);
+      }
+    }
+  }
+  static const uint8_t asics[] = {3, 4};
+  for (size_t index = 0; index < sizeof asics; index++) {
+    crtc_init(&crtc, asics[index]);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    write_register(8, 0x10);
+    TEST_EQUAL(crtc.registers[8], 0x10);
+    TEST_CHECK(run_to_row(1));
+    for (int character = 1; character <= 64; character++) {
+      uint64_t pins = crtc_tick(&crtc);
+      TEST_EQUAL((pins & CRTC_DISPTMG) != 0, crtc.c0 >= 1 && crtc.c0 < 41);
+    }
+  }
+}
+
 /* Ch. 19.2.3's note: "If R1=R0, then the BORDER is activated on C0=0" — the
    delay carries the closing round the line's end, so the border is the
    line's first character and every other one displays. */
@@ -7680,6 +7721,7 @@ int main(void) {
   TEST_RUN(an_r4_moved_at_a_lines_end_takes_the_carry_away);
   TEST_RUN(the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0);
   TEST_RUN(the_skew_delays_the_border_at_both_ends);
+  TEST_RUN(only_types_0_3_and_4_take_a_skew);
   TEST_RUN(a_skew_carries_the_border_round_the_lines_end);
   TEST_RUN(a_skew_makes_the_early_border_a_whole_character);
   TEST_RUN(the_border_on_function_shuts_the_display);
