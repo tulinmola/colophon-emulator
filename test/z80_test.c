@@ -521,6 +521,49 @@ static void test_interrupt_mode_1(void) {
   TEST_EQUAL(pushed_word(&cpu), 0x1001);
 }
 
+/* Where on the acknowledge cycle its pins move, as Zilog's Figure 9 draws
+   it (UM0080): T1, T2 and two wait states the processor adds itself, IORQ
+   falling in the first of them, WAIT sampled in the second alone, and M1
+   and IORQ released together at T3. Writes the tick IORQ first shows on
+   and the tick M1 has gone again, holding WAIT on the one tick asked for. */
+static void acknowledge_ticks(int wait_tick, int *iorq_tick, int *m1_gone_tick) {
+  z80_t cpu;
+  const uint8_t program[] = {0x00};
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = true;
+  *iorq_tick = -1;
+  *m1_gone_tick = -1;
+  uint64_t pins = 0;
+  for (int ticks = 1; ticks <= TICK_BUDGET && *m1_gone_tick < 0; ticks++) {
+    uint64_t inputs = Z80_INT | (ticks == wait_tick ? Z80_WAIT : 0);
+    pins = z80_tick(&cpu, (pins & ~Z80_WAIT) | inputs);
+    bool acknowledging = (pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ);
+    if (acknowledging && *iorq_tick < 0) {
+      *iorq_tick = ticks;
+    }
+    if (*iorq_tick > 0 && !(pins & Z80_M1)) {
+      *m1_gone_tick = ticks;
+    }
+    pins = acknowledging ? z80_set_data(pins, 0xFF) : service_bus(pins);
+  }
+}
+
+static void test_the_acknowledge_waits_in_its_second_wait_state(void) {
+  int iorq;
+  int m1_gone;
+  acknowledge_ticks(-1, &iorq, &m1_gone);
+  TEST_EQUAL(iorq, 4 + 3); /* after the NOP: T1, T2, then the first wait state */
+  TEST_EQUAL(m1_gone - iorq, 2);
+
+  int iorq_held;
+  int m1_gone_held;
+  acknowledge_ticks(iorq, &iorq_held, &m1_gone_held); /* the first: not sampled */
+  TEST_EQUAL(m1_gone_held, m1_gone);
+  acknowledge_ticks(iorq + 1, &iorq_held, &m1_gone_held); /* the second: sampled */
+  TEST_EQUAL(m1_gone_held, m1_gone + 1);
+}
+
 /* Mode 2 reads its destination from I:vector. The vector's low bit is not
    forced even, whatever Zilog's manual says, so an odd one is used whole and
    the second read crosses into the next page. */
@@ -676,6 +719,7 @@ int main(void) {
   TEST_RUN(test_nmi_triggers_once_per_edge);
   TEST_RUN(test_maskable_interrupt_obeys_iff1);
   TEST_RUN(test_interrupt_mode_1);
+  TEST_RUN(test_the_acknowledge_waits_in_its_second_wait_state);
   TEST_RUN(test_interrupt_mode_2_uses_the_whole_vector);
   TEST_RUN(test_ei_blocks_for_one_instruction);
   TEST_RUN(test_prefix_blocks_acceptance);

@@ -6,6 +6,11 @@
  * address wiring and the clock that divides between the chips; the chips it
  * wires know nothing about it.
  *
+ * Bit 0 of the 8255's port B is the CRTC's VSYNC, taken in and never driven:
+ * a program that turns the port round to drive the line itself, the FAKE
+ * VSYNC of Compendium ch. 7.3, reads back its own latch and reaches neither
+ * the Gate Array nor the CRTC's pin.
+ *
  * Sources:
  * - "The Gate Array" (Grim),
  *   https://www.grimware.org/doku.php/documentations/devices/gatearray — the
@@ -74,7 +79,7 @@
 /* Half of the Gate Array's own 4µs line sync, which is where the middle of
    that pulse lands once the beam is timed from it. A pulse the Gate Array
    cut short walks its middle left and the picture right, half a microsecond
-   for each one taken off (Compendium ch. 14.3). */
+   for each one taken off (Compendium ch. 14.3, 14.4). */
 #define CPC_LINE_SYNC_CENTRE 32
 
 /* One frame of the screen the firmware programs: 312 lines of 64 characters
@@ -103,14 +108,19 @@
 /* A matrix one line short loses a whole row of keys without a word. */
 typedef char cpc_keyboard_fits_the_matrix[CPC_KEYBOARD_LINES <= KEYBOARD_MAX_LINES ? 1 : -1];
 
-/* The keys a text-typing caller needs by name; the rest it finds through
-   cpc_key_for_character. */
+/* The keys a caller needs by name; the rest it finds through
+   cpc_key_for_character, which cannot reach the last four — three of them
+   print nothing at all, and the fourth repeats a character it already returns. */
 #define CPC_RETURN CPC_KEY(2, 2)
 #define CPC_SHIFT CPC_KEY(2, 5)
 #define CPC_SPACE CPC_KEY(5, 7)
 #define CPC_TAB CPC_KEY(8, 4)
 #define CPC_ESCAPE CPC_KEY(8, 2)
 #define CPC_DELETE CPC_KEY(9, 7)
+#define CPC_CONTROL CPC_KEY(2, 7)
+#define CPC_COPY CPC_KEY(1, 1)
+#define CPC_CAPS_LOCK CPC_KEY(8, 6)
+#define CPC_FUNCTION_0 CPC_KEY(1, 7)
 
 /* Where a character lives on a UK CPC keyboard, and whether shift is held to
  * reach it. Returns KEYBOARD_NO_KEY for a character the keyboard cannot
@@ -122,7 +132,20 @@ typedef struct {
   uint64_t pins; /* the bus between ticks */
 
   crtc_t crtc;
+  /* Where the CRTC keeps its last two line ends while a write could still
+     cancel them. */
+  crtc_t crtc_line_end_rooms[2];
   uint64_t crtc_pins; /* the CRTC's outputs as of its last character clock */
+  /* The CRTC's syncs a character ago, which are the ones the Gate Array
+     follows where the chip is one of the two ASICs (Compendium ch. 7.1,
+     15.1, 27.6.1). */
+  bool crtc_hsync_a_character_ago;
+  bool crtc_vsync_a_character_ago;
+  /* A write the CRTC has yet to take where the chip is one of the two ASICs,
+     which this board takes on the first character clock its I/O cycle spans
+     (cpc.c): an OUT (C),r's a microsecond after a Gate Array would
+     (Compendium ch. 4.4.4), an OUTI's where one does. */
+  bool crtc_write_awaits_the_clock;
   gate_array_t gate_array;
   monitor_t monitor;
   ppi_t ppi;
@@ -168,11 +191,16 @@ typedef struct {
   uint8_t *write_page[4];
 } cpc_t;
 
-/* Power-on. The lower ROM is readable at &0000 — it must be, or no first
- * instruction could ever be fetched. Upper ROM enabled and configuration 0
- * are conventions: the firmware writes both registers before anything could
- * observe their reset state. */
-void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom);
+/* Power-on with a CRTC built as the given type. What follows the number is
+ * set out at the head of crtc.h, and the board adds three things where the
+ * chip is one of the two ASICs: the microsecond it holds an OUT's write for,
+ * both syncs a character late, and the interrupt raised a quarter of a
+ * microsecond sooner after them. The lower ROM is readable at &0000 — it must
+ * be, or no first instruction could ever be fetched. Upper ROM enabled and
+ * configuration 0 are conventions: the firmware writes both registers before
+ * anything could observe their reset state. */
+void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
+              uint8_t crtc_type);
 
 /* Fit a 16K ROM as upper ROM `number`; NULL empties the socket. */
 void cpc_set_upper_rom(cpc_t *cpc, uint8_t number, const uint8_t *rom);
