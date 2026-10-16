@@ -9,7 +9,8 @@
  *
  * This is the instrument, not yet the verdict. It boots the disc, walks
  * each module's own menu, presses every key that belongs to this machine's
- * CRTC type, and records what comes back: the screen read as text through
+ * CRTC type, turns each group's pages with the space bar until it goes back
+ * to its menu, and records what comes back: the screen read as text through
  * the character table the ROM carries, and the beam's path as a PNG. What
  * it cannot yet do is decide every screen, because Shaker says so
  * differently in each group — some print a value beside the value they
@@ -47,9 +48,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-/* fork, waitpid and an anonymous shared mapping, so the five modules
-   run at once. These are POSIX rather than C99; the C library declares them
-   without being asked, and nothing in the build asks. */
+/* fork, waitpid and an anonymous shared mapping, so the five modules, and
+   the groups inside each, run at once. These are POSIX rather than C99; the
+   C library declares them without being asked, and nothing in the build
+   asks. */
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -102,20 +104,38 @@
    waits 500, which cost a quarter to two fifths more time than 300 when
    measured on all ten records and moved no other graded line.
 
-   The cap is for the groups that never stop, which are the ones drawing
+   The cap is for the pages that never stop, which are the ones drawing
    something that moves. Module B's status-register check is quieter than
    any of those: it waits past two hundred frames before its first screen,
-   and a threshold that suited the groups a type 0 runs cut it off. */
+   and a threshold that suited the groups a type 0 runs cut it off.
+
+   A group of several pages shows one and waits for the space bar ("PRESS
+   SPACE BAR", the modules say), and most of what the suite grades itself on
+   stands past the first: on a type 2 under 2.6, 94 graded lines in all
+   against 43 on first pages alone. So a page that has gone quiet is turned,
+   and the group watched again by the same rules, until the press brings
+   back the module's menu, or changes nothing on the screen in text or in
+   picture six times running, or the pages reach a cap. A module busy with
+   work of its own reads no keys, and a press made then is lost: module C's
+   (7) on a type 0 under 2.7 lets three go by before it draws again, and
+   module A's (I) on the two ASICs shows "PLEASE WAIT..." for some 1400
+   frames before its last pages. The longest group that comes back to its
+   menu is module D's (U) on the two ASICs, at 42 pages. Two step a value at
+   each press rather than turning a page, module D's (3) through R2 and the
+   last page of its (T) through a length from #40 to #10, and stop at the
+   cap. */
 #define SAMPLE_STEP_FRAMES 5
 #define MAX_SAMPLES_WITHOUT_NEWS 100
-#define MAX_SAMPLES_PER_GROUP 300
+#define MAX_SAMPLES_PER_PAGE 300
+#define MAX_PAGES 48
+#define PRESSES_UNANSWERED 6
 
 /* Every path this file builds names a directory the sweep was pointed at,
    so the bound is the host's rather than ours. */
 #define MAX_PATH_LENGTH 4096
 
 #define MAX_GROUPS 32
-#define MAX_CAPTURES 12
+#define MAX_CAPTURES 128
 
 /* A key on the menu: one character, or a name like COPY. Nothing longer
    than RETURN appears in any of the five. */
@@ -310,6 +330,24 @@ static void run_frames(long frames) {
   }
 }
 
+/* Runs the frames up to the next sample, the last two of them over a
+   picture wiped to the border's colour, so that what is read is what the
+   beam drew in those two frames and nothing older. A row the beam does not
+   reach in that time would otherwise keep what an earlier frame left there,
+   and the search for the display's corner reads every row: where A (U) puts
+   its results up, the rows an older picture left decided whether the page
+   read whole or not at all, and lines of module E's (1) on the records of
+   types 2, 3 and 4 under both versions hung on the same. A tube's phosphor
+   keeps nothing that long. Two frames rather than one, so that a picture
+   whose own frame runs longer than a standard one is still read whole. The
+   machine never reads its picture; what the wipe moves is what the reader
+   sees, and with it when a page is judged quiet and turned. */
+static void run_to_the_next_sample(void) {
+  run_frames(SAMPLE_STEP_FRAMES - 2);
+  memset(framebuffer, cpc.gate_array.inks[16], sizeof framebuffer);
+  run_frames(2);
+}
+
 static void press(keyboard_key key, bool shifted) {
   if (shifted) {
     keyboard_press(&cpc.keyboard, CPC_SHIFT);
@@ -395,9 +433,9 @@ static void save_machine(void) {
   memcpy(saved_ram, ram, sizeof ram);
 }
 
-/* The framebuffer is not restored: a frame of standard timing repaints the
-   whole raster, and a group that does not is a group whose picture is the
-   thing being recorded. */
+/* The framebuffer is not restored: every sample is read over a picture
+   wiped two frames before it (run_to_the_next_sample), so nothing drawn
+   before that is read. */
 static void restore_machine(void) {
   cpc = saved_cpc;
   disc = saved_disc;
@@ -648,6 +686,33 @@ static void trim_trailing_spaces(char *text) {
   }
 }
 
+/* A row as its text, without the unnamed cell a display edge falling inside
+   a character leaves at its head, or the spaces either side. */
+static void row_as_text(const char *row, char text[COLUMNS + 1]) {
+  if (*row == '?') {
+    row++;
+  }
+  while (*row == ' ') {
+    row++;
+  }
+  snprintf(text, COLUMNS + 1, "%s", row);
+  trim_trailing_spaces(text);
+}
+
+static bool rows_read_the_same(const char *row, const char *other) {
+  char texts[2][COLUMNS + 1];
+  row_as_text(row, texts[0]);
+  row_as_text(other, texts[1]);
+  return strcmp(texts[0], texts[1]) == 0;
+}
+
+/* A row carrying text with every glyph of it named. */
+static bool row_read_whole(const char *row) {
+  char text[COLUMNS + 1];
+  row_as_text(row, text);
+  return text[0] != '\0' && strchr(text, '?') == NULL;
+}
+
 static bool begins_with(const char *text, const char *prefix) {
   return strncmp(text, prefix, strlen(prefix)) == 0;
 }
@@ -871,11 +936,43 @@ static bool keep_rasters;
 typedef struct {
   char text[COLUMNS + 1];
   bool failed;
+  int page;
 } verdict;
 
 static verdict verdicts[MAX_VERDICTS];
 static int verdict_count;
 static int verdicts_dropped;
+/* The page a group stands on, which is part of what makes a verdict one:
+   module E's (6) grades three tests in the same words, one on its first
+   page and two on its second, and runs its test 21 at the foot of its
+   second page and again at the head of its third, the suite printing it
+   twice. A line a press of the space bar left standing is still an earlier
+   page's, though: a press made while the module reads no keys turns
+   nothing, and a module may go on drawing the page it was on. So the lines
+   standing when the space bar is pressed are carried, and count as the
+   earlier pages' until the screen shows the page has turned: a row read
+   whole at the press reading whole and otherwise now, as a page's title
+   does from one page to the next. A blank or half-read screen in between
+   proves nothing, a module clearing the screen for a frame or two before
+   the next page as readily as before the same one. A row rewritten on the
+   same page, a "PLEASE WAIT..." giving way to a result or a list moving up
+   a row, is taken for a turn as well, and the lines still standing are
+   counted again. On the ten records every carry that holds a line ends on
+   a new title or subtitle, or on the menu. Where a line stands cannot tell
+   a rewrite from a turn: module E's (2) keeps its graded line on the same
+   row from page to page. */
+static int verdict_page = 1;
+static char verdicts_standing[ROWS][COLUMNS + 1];
+static int verdicts_standing_count;
+static char verdicts_carried[ROWS][COLUMNS + 1];
+static int verdicts_carried_count;
+static char rows_at_the_press[ROWS][COLUMNS + 1];
+
+static void carry_the_verdicts_standing(void) {
+  memcpy(verdicts_carried, verdicts_standing, sizeof verdicts_carried);
+  verdicts_carried_count = verdicts_standing_count;
+  memcpy(rows_at_the_press, screen, sizeof rows_at_the_press);
+}
 
 /* Longshot prints a measurement in four hex digits at most, and one more is
    allowed here. A longer run is something else: the modules print
@@ -954,6 +1051,20 @@ static bool names_the_expected_value(const char *opening, const char *closing) {
     }
   }
   return false;
+}
+
+/* Where the word naming silicon's value ends, its colon taken with it, so
+   that what follows is the bracket's own reading; NULL where the word is
+   not there. The word spelt out leaves "ected" to head the first clause,
+   which names no type and is passed over by the clause that does. */
+static const char *word_naming_the_expected_value(const char *opening, const char *closing) {
+  for (const char *at = opening; at + 3 < closing; at++) {
+    if (!matches_ignoring_case(at, "exp", 3)) {
+      continue;
+    }
+    return at + 3 < closing && at[3] == ':' ? at + 3 : at + 2;
+  }
+  return NULL;
 }
 
 /* And the value before the word cut short, "(#0449 exp)", which module C's
@@ -1056,14 +1167,20 @@ static bool clause_value(const char *at, const char *end, unsigned long *value) 
   return hex_digits_at(at, value);
 }
 
+static bool begins_a_clause(const char *at, const char *closing) {
+  return (closing - at >= 4 && matches_ignoring_case(at, "crtc", 4)) ||
+         (closing - at >= 6 && matches_ignoring_case(at, "others", 6));
+}
+
 /* Some groups name silicon's value for each CRTC type rather than for the
    machine in front of them: "(CRTC 0.3.4:3F2/CRTC 1.2:1F4)", "(CRTC 3+4:#58/
-   OTHERS:#59)". Slashes separate the clauses, each naming the types it
-   speaks for and then their value. The clause to read is the one naming the
-   type this machine was built as, or failing that the one gathering the
-   rest — and a clause that names it and then no value this reader can read
-   takes the whole bracket down with it, rather than letting the rest be
-   answered in its place.
+   OTHERS:#59)", and after the word, "(Exp:CRTC 0:#34 OTHERS:#FF)". Slashes
+   separate the clauses, or a space before the next CRTC or OTHERS, each
+   naming the types it speaks for and then their value. The clause to read
+   is the one naming the type this machine was built as, or failing that
+   the one gathering the rest — and a clause that names it and then no
+   value this reader can read takes the whole bracket down with it, rather
+   than letting the rest be answered in its place.
 
    Naming a type is what tells this rendering from a legend keyed by value,
    "(00:C4ovf 01:C4=0)" or "(01:IO>=5TH NOP / 00:IO ON 4TH NOP)": a clause
@@ -1074,7 +1191,7 @@ static bool value_for_this_crtc_type(const char *opening, const char *closing, u
   bool found = false;
   for (const char *clause = opening + 1; clause < closing;) {
     const char *end = clause;
-    while (end < closing && *end != '/') {
+    while (end < closing && *end != '/' && !(*end == ' ' && begins_a_clause(end + 1, closing))) {
       end++;
     }
     const char *colon = clause;
@@ -1132,7 +1249,15 @@ static bool read_a_measured_verdict(const char *line, uint8_t type, bool *failed
       return false;
     }
     unsigned long expected;
-    if (names_the_expected_value(opening, closing)) {
+    const char *after_the_word = word_naming_the_expected_value(opening, closing);
+    if (after_the_word != NULL && holds_text(after_the_word, closing, "crtc")) {
+      /* The word, then a value for each type: the clause that speaks for
+         this machine, or nothing on the line is graded — a later bracket
+         would be paired with a value standing inside this one. */
+      if (!value_for_this_crtc_type(after_the_word, closing, type, &expected)) {
+        return false;
+      }
+    } else if (names_the_expected_value(opening, closing)) {
       /* A bracket naming silicon's value but carrying no number is not a
          grading this reader knows, and reading past it would pair a later
          bracket with a number standing inside this one. */
@@ -1356,16 +1481,8 @@ static bool read_verdict(const char *line, uint8_t type, bool *failed) {
 static bool appears_in_previous_screen(const char *line) {
   for (int row = 0; row < ROWS; row++) {
     char earlier[COLUMNS + 1];
-    memcpy(earlier, previous_screen[row], sizeof earlier);
-    trim_trailing_spaces(earlier);
-    const char *from = earlier;
-    if (*from == '?') {
-      from++;
-    }
-    while (*from == ' ') {
-      from++;
-    }
-    if (strcmp(from, line) == 0) {
+    row_as_text(previous_screen[row], earlier);
+    if (strcmp(earlier, line) == 0) {
       return true;
     }
   }
@@ -1483,6 +1600,17 @@ static int collect_verdicts(int percentage_named) {
      duplicate at all. The splice this wants in the end — each screen's run
      of verdicts laid on the record at its longest overlap with the record's
      tail — is deferred, not answered. */
+  for (int index = 0; index < standing_count; index++) {
+    memcpy(verdicts_standing[index], standing[index].text, sizeof verdicts_standing[index]);
+  }
+  verdicts_standing_count = standing_count;
+  for (int row = 0; row < ROWS && verdicts_carried_count > 0; row++) {
+    if (row_read_whole(rows_at_the_press[row]) && row_read_whole(screen[row]) &&
+        !rows_read_the_same(rows_at_the_press[row], screen[row])) {
+      verdicts_carried_count = 0;
+    }
+  }
+
   bool read_whole = percentage_named == 100;
   int added = 0;
   for (int index = 0; index < standing_count; index++) {
@@ -1493,11 +1621,24 @@ static int collect_verdicts(int percentage_named) {
       }
     }
     int held = 0;
+    int held_before = 0;
     for (int kept = 0; kept < verdict_count; kept++) {
-      if (strcmp(verdicts[kept].text, standing[index].text) == 0) {
+      if (strcmp(verdicts[kept].text, standing[index].text) != 0) {
+        continue;
+      }
+      if (verdicts[kept].page == verdict_page) {
         held++;
+      } else {
+        held_before++;
       }
     }
+    int carried = 0;
+    for (int line = 0; line < verdicts_carried_count; line++) {
+      if (strcmp(verdicts_carried[line], standing[index].text) == 0) {
+        carried++;
+      }
+    }
+    held += carried < held_before ? carried : held_before;
     if (held >= shown_here || (held > 0 && !read_whole)) {
       continue;
     }
@@ -1507,6 +1648,7 @@ static int collect_verdicts(int percentage_named) {
       continue;
     }
     verdicts[verdict_count] = standing[index];
+    verdicts[verdict_count].page = verdict_page;
     verdict_count++;
     added++;
   }
@@ -1559,15 +1701,59 @@ static void drop_the_tails_of_split_records(void) {
   verdict_count = kept;
 }
 
+/* The picture as a number, to tell whether a press of the space bar changed
+   what a screen read as text cannot show: several groups turn pages that
+   differ in their picture alone. FNV-1a's offset basis and prime. */
+static uint64_t picture_fingerprint(void) {
+  uint64_t fingerprint = 14695981039346656037ULL;
+  for (size_t index = 0; index < sizeof framebuffer; index++) {
+    fingerprint = (fingerprint ^ framebuffer[index]) * 1099511628211ULL;
+  }
+  return fingerprint;
+}
+
+/* Every screen a group has shown, as a number, however many the record has
+   room to keep: whether a screen is news is a question about all of them,
+   and a record that had forgotten one would hand it back as news, keeping a
+   page from ever going quiet. A group shows at most MAX_PAGES times
+   MAX_SAMPLES_PER_PAGE screens, which the table holds at under a quarter
+   full. A slot holding zero is empty, so a fingerprint is kept with its
+   lowest bit set. */
+#define SCREENS_SEEN_SLOTS 65536
+static uint64_t screens_seen[SCREENS_SEEN_SLOTS];
+
+static void forget_the_screens_seen(void) { memset(screens_seen, 0, sizeof screens_seen); }
+
+static bool screen_seen_before(void) {
+  uint64_t fingerprint = 14695981039346656037ULL;
+  for (int row = 0; row < ROWS; row++) {
+    for (int column = 0; column < COLUMNS; column++) {
+      fingerprint = (fingerprint ^ (uint8_t)screen[row][column]) * 1099511628211ULL;
+    }
+  }
+  const size_t home = fingerprint % SCREENS_SEEN_SLOTS;
+  fingerprint |= 1;
+  for (size_t slot = home;; slot = (slot + 1) % SCREENS_SEEN_SLOTS) {
+    if (screens_seen[slot] == fingerprint) {
+      return true;
+    }
+    if (screens_seen[slot] == 0) {
+      screens_seen[slot] = fingerprint;
+      return false;
+    }
+  }
+}
+
 /* Most of these groups say what they have to say in the picture rather than
    in words, so a screen kept by name keeps its beam path too. When the
    record is full the newest replaces the last kept, because a test that
    works through a list puts its result at the end. */
 static bool capture_screen(const char *module, const char *key, long frame, int percentage_named) {
+  const bool news = !screen_seen_before();
   for (int index = 0; index < capture_count; index++) {
     if (memcmp(captures[index].text, screen, sizeof screen) == 0) {
       captures[index].seen++;
-      return false;
+      return news;
     }
   }
   capture *taken = NULL;
@@ -1583,7 +1769,7 @@ static bool capture_screen(const char *module, const char *key, long frame, int 
   taken->seen = 1;
   taken->raster_file[0] = '\0';
   if (!keep_rasters) {
-    return true;
+    return news;
   }
   char path[MAX_PATH_LENGTH];
   snprintf(taken->raster_file, sizeof taken->raster_file, "%.4s-%.7s-%ld.png", module, key, frame);
@@ -1591,7 +1777,7 @@ static bool capture_screen(const char *module, const char *key, long frame, int 
   if (!write_raster(path)) {
     taken->raster_file[0] = '\0';
   }
-  return true;
+  return news;
 }
 
 static void print_capture(FILE *report, const capture *taken) {
@@ -1664,6 +1850,20 @@ static bool a_capture_names_this_crtc_type(void) {
   return false;
 }
 
+/* Whether the module's menu stands on the screen: its title and first entry
+   on two rows running, wherever the reader's grid has put them — a grid left
+   eight rows off by the picture before can read the menu lower down, and
+   one a character off reads it behind an unnamed cell. */
+static bool shows_the_menu(void) {
+  for (int row = 0; row + 1 < ROWS; row++) {
+    if (rows_read_the_same(screen[row], menu_screen[0]) &&
+        rows_read_the_same(screen[row + 1], menu_screen[1])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 static void run_group(const char *module, const group *entry, FILE *report,
                       bool the_menu_gave_it_to_another_type) {
   restore_machine();
@@ -1672,6 +1872,9 @@ static void run_group(const char *module, const group *entry, FILE *report,
   grid_top = NOMINAL_TOP;
   capture_count = 0;
   captures_dropped = 0;
+  forget_the_screens_seen();
+  verdicts_standing_count = 0;
+  verdicts_carried_count = 0;
   verdict_count = 0;
   verdicts_dropped = 0;
 
@@ -1685,21 +1888,78 @@ static void run_group(const char *module, const group *entry, FILE *report,
   }
   press(key, shifted);
 
+  /* The module's own reset entry leaves the suite for the firmware, where a
+     press of the space bar types a space rather than turning a page. */
+  const bool turns_pages = strcmp(entry->label, "RESET CPC") != 0;
+  static char screen_before_the_press[ROWS][COLUMNS + 1];
+  uint64_t picture_before_the_press = 0;
+  long turned_at[MAX_PAGES];
+  long last_press = 0;
+  const char *ending = NULL;
   long frame = 0;
-  int samples_without_news = 0;
-  int samples = 0;
-  while (samples < MAX_SAMPLES_PER_GROUP && samples_without_news < MAX_SAMPLES_WITHOUT_NEWS) {
-    run_frames(SAMPLE_STEP_FRAMES);
-    frame += SAMPLE_STEP_FRAMES;
-    samples++;
-    int percentage_named = read_screen();
-    bool news = capture_screen(module, entry->key, frame, percentage_named);
-    if (collect_verdicts(percentage_named) > 0) {
-      news = true;
+  int pages = 0;
+  bool still_going = false;
+  int unanswered = 0;
+  for (;;) {
+    pages++;
+    bool changed = pages == 1;
+    int samples_without_news = 0;
+    int samples = 0;
+    verdict_page = pages;
+    while (samples < MAX_SAMPLES_PER_PAGE && samples_without_news < MAX_SAMPLES_WITHOUT_NEWS) {
+      run_to_the_next_sample();
+      frame += SAMPLE_STEP_FRAMES;
+      samples++;
+      int percentage_named = read_screen();
+      if (!changed && (memcmp(screen, screen_before_the_press, sizeof screen) != 0 ||
+                       picture_fingerprint() != picture_before_the_press)) {
+        changed = true;
+      }
+      bool news = capture_screen(module, entry->key, frame, percentage_named);
+      if (collect_verdicts(percentage_named) > 0) {
+        news = true;
+      }
+      samples_without_news = news ? 0 : samples_without_news + 1;
     }
-    samples_without_news = news ? 0 : samples_without_news + 1;
+    if (samples_without_news < MAX_SAMPLES_WITHOUT_NEWS) {
+      still_going = true;
+    }
+    const bool at_the_menu = shows_the_menu();
+    if (!changed) {
+      pages--;
+      if (++unanswered < PRESSES_UNANSWERED) {
+        turned_at[pages - 1] = frame;
+        last_press = frame;
+        carry_the_verdicts_standing();
+        press(CPC_SPACE, false);
+        frame += 2L * FRAMES_KEY_HELD;
+        continue;
+      }
+      ending = "went unanswered";
+      break;
+    }
+    unanswered = 0;
+    if (pages > 1 && at_the_menu) {
+      pages--;
+      ending = "went back to the menu";
+      break;
+    }
+    if (!turns_pages || at_the_menu ||
+        (the_menu_gave_it_to_another_type && !a_capture_names_this_crtc_type())) {
+      break;
+    }
+    if (pages == MAX_PAGES) {
+      ending = "was not made: the pages stopped at the cap";
+      break;
+    }
+    memcpy(screen_before_the_press, screen, sizeof screen);
+    picture_before_the_press = picture_fingerprint();
+    turned_at[pages - 1] = frame;
+    last_press = frame;
+    carry_the_verdicts_standing();
+    press(CPC_SPACE, false);
+    frame += 2L * FRAMES_KEY_HELD;
   }
-  bool still_going = samples_without_news < MAX_SAMPLES_WITHOUT_NEWS;
   bool drew_its_own_screen = false;
   for (int index = 0; index < capture_count; index++) {
     if (memcmp(captures[index].text, menu_screen, sizeof menu_screen) != 0) {
@@ -1719,12 +1979,33 @@ static void run_group(const char *module, const group *entry, FILE *report,
     fprintf(report, "  the label declares %d test%s\n", entry->declared_tests,
             entry->declared_tests == 1 ? "" : "s");
   }
-  fprintf(report, "  %d distinct screen%s in %ld frames%s", capture_count,
-          capture_count == 1 ? "" : "s", frame, still_going ? ", and still going" : "");
+  fprintf(report, "  %d distinct screen%s in %ld frames", capture_count,
+          capture_count == 1 ? "" : "s", frame);
+  if (pages > 1) {
+    fprintf(report, " over %d pages", pages);
+  }
+  if (still_going) {
+    fprintf(report, ", and still going");
+  }
   if (captures_dropped > 0) {
     fprintf(report, ", and %d more this record had no room for", captures_dropped);
   }
   fprintf(report, "\n");
+  if (pages > 1) {
+    fprintf(report, "  the space bar turned the page at frame%s", pages > 2 ? "s" : "");
+    for (int page = 1; page < pages; page++) {
+      fprintf(report, "%s %ld", page == 1 ? "" : ",", turned_at[page - 1]);
+    }
+    if (ending != NULL && pages < MAX_PAGES) {
+      fprintf(report, "; the press at frame %ld %s", last_press, ending);
+    } else if (ending != NULL) {
+      fprintf(report, "; the next press %s", ending);
+    }
+    if (unanswered == PRESSES_UNANSWERED) {
+      fprintf(report, ", as did the %d before it", PRESSES_UNANSWERED - 1);
+    }
+    fprintf(report, "\n");
+  }
 
   drop_the_tails_of_split_records();
   int wrong = 0;
@@ -1745,7 +2026,7 @@ static void run_group(const char *module, const group *entry, FILE *report,
   /* The standing carries the two things that do not move when a frame
      lands a sample earlier: what Shaker said, and whether it had finished
      saying it. */
-  char standing[96];
+  char standing[128];
   size_t at = 0;
   if (verdict_count > 0) {
     at += (size_t)snprintf(standing + at, sizeof standing - at, "%d graded, %d wrong",
@@ -1757,6 +2038,14 @@ static void run_group(const char *module, const group *entry, FILE *report,
   }
   if (verdicts_dropped > 0) {
     at += (size_t)snprintf(standing + at, sizeof standing - at, ", and more than the record holds");
+  }
+  if (pages > 1) {
+    at += (size_t)snprintf(standing + at, sizeof standing - at, ", %d pages", pages);
+  }
+  if (pages == MAX_PAGES) {
+    at += (size_t)snprintf(standing + at, sizeof standing - at, " and more");
+  } else if (pages > 1 && unanswered == PRESSES_UNANSWERED) {
+    at += (size_t)snprintf(standing + at, sizeof standing - at, ", then no answer");
   }
   if (still_going) {
     snprintf(standing + at, sizeof standing - at, ", cut off at the cap");
@@ -1773,6 +2062,71 @@ static void run_group(const char *module, const group *entry, FILE *report,
   for (int index = 0; index < capture_count; index++) {
     print_capture(report, &captures[index]);
   }
+}
+
+/* What one group's run hands back to its module: its section of the
+   report, its lines of the record, and its tallies. A section longer than
+   the room here is cut short and says so; the longest yet, a group of many
+   pages keeping every screen it may, is some 290K: module B's (5). */
+#define MAX_GROUP_REPORT 524288
+#define MAX_GROUP_SCOREBOARD 32768
+typedef struct {
+  bool finished;
+  bool skipped;
+  bool graded;
+  int verdicts;
+  int verdicts_wrong;
+  int failures;
+  char report[MAX_GROUP_REPORT];
+  size_t report_length;
+  bool report_cut_short;
+  char scoreboard[MAX_GROUP_SCOREBOARD];
+  size_t scoreboard_length;
+  bool scoreboard_overflowed;
+} group_result;
+
+/* Runs one group and hands back what it added, leaving the module's own
+   report, record and tallies as it found them: the module adds each group's
+   share in the menu's order, however the groups were run. */
+static void run_group_into(const char *module, const group *entry, group_result *result) {
+  const int skipped_before = total_groups_skipped;
+  const int graded_before = total_groups_graded;
+  const int verdicts_before = total_verdicts;
+  const int wrong_before = total_verdicts_wrong;
+  const int failures_before = test_failures;
+  const size_t scoreboard_before = scoreboard_length;
+  FILE *section = tmpfile();
+  if (section == NULL) {
+    TEST_FAIL("module %s: no temporary file to hold the report of group (%s)", module, entry->key);
+  } else {
+    run_group(module, entry, section, !entry->applies_to_this_crtc_type);
+    if (ferror(section) || fseek(section, 0, SEEK_SET) != 0) {
+      TEST_FAIL("module %s: the report of group (%s) could not be kept", module, entry->key);
+    } else {
+      result->report_length = fread(result->report, 1, sizeof result->report, section);
+      result->report_cut_short = fgetc(section) != EOF;
+    }
+    fclose(section);
+  }
+  size_t added = scoreboard_length - scoreboard_before;
+  result->scoreboard_overflowed = scoreboard_overflowed || added > sizeof result->scoreboard;
+  if (added > sizeof result->scoreboard) {
+    added = sizeof result->scoreboard;
+  }
+  memcpy(result->scoreboard, scoreboard + scoreboard_before, added);
+  result->scoreboard_length = added;
+  scoreboard_length = scoreboard_before;
+  result->skipped = total_groups_skipped > skipped_before;
+  result->graded = total_groups_graded > graded_before;
+  result->verdicts = total_verdicts - verdicts_before;
+  result->verdicts_wrong = total_verdicts_wrong - wrong_before;
+  result->failures = test_failures - failures_before;
+  total_groups_skipped = skipped_before;
+  total_groups_graded = graded_before;
+  total_verdicts = verdicts_before;
+  total_verdicts_wrong = wrong_before;
+  test_failures = failures_before;
+  result->finished = true;
 }
 
 static void run_module(const char *module, const char *only_group) {
@@ -1824,22 +2178,92 @@ static void run_module(const char *module, const char *only_group) {
     fprintf(report, "  (%s) %s\n", groups[index].key, groups[index].label);
   }
 
-  int ran = 0;
-  int skipped = 0;
+  /* Every group starts from the machine as the menu left it, and from the
+     same picture, so the groups are independent of one another and run side
+     by side, one process each — which is what lets each be watched page by
+     page without the sweep taking hours. */
+  size_t mapping_length = (size_t)group_count * sizeof(group_result);
+  group_result *results =
+      mmap(NULL, mapping_length, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+  if (results == MAP_FAILED) {
+    TEST_FAIL("module %s: cannot map the memory its groups report through", module);
+    fclose(report);
+    return;
+  }
+  const bool side_by_side = !shaker_trace_is_on();
+  bool wanted_here[MAX_GROUPS] = {false};
+  pid_t children[MAX_GROUPS];
+  fflush(NULL);
   for (int index = 0; index < group_count; index++) {
     const group *entry = &groups[index];
+    children[index] = -1;
     if (only_group != NULL && strcmp(only_group, entry->key) != 0) {
       continue;
     }
-    int skipped_before = total_groups_skipped;
-    run_group(module, entry, report, !entry->applies_to_this_crtc_type);
-    if (total_groups_skipped > skipped_before) {
+    wanted_here[index] = true;
+    if (side_by_side) {
+      fflush(NULL);
+      pid_t child = fork();
+      if (child == 0) {
+        run_group_into(module, entry, &results[index]);
+        fflush(NULL);
+        _exit(0);
+      }
+      if (child > 0) {
+        children[index] = child;
+        continue;
+      }
+    }
+    run_group_into(module, entry, &results[index]);
+  }
+  for (int index = 0; index < group_count; index++) {
+    int status = 0;
+    if (children[index] > 0 && (waitpid(children[index], &status, 0) == -1 || !WIFEXITED(status) ||
+                                WEXITSTATUS(status) != 0)) {
+      results[index].finished = false;
+    }
+  }
+
+  int ran = 0;
+  int skipped = 0;
+  for (int index = 0; index < group_count; index++) {
+    if (!wanted_here[index]) {
+      continue;
+    }
+    const group_result *result = &results[index];
+    if (!result->finished) {
+      TEST_FAIL("module %s: the run for group (%s) did not finish", module, groups[index].key);
+      continue;
+    }
+    fwrite(result->report, 1, result->report_length, report);
+    if (result->report_cut_short) {
+      fprintf(report, "  ... and more than this report holds for one group\n");
+    }
+    scoreboard_overflowed = scoreboard_overflowed || result->scoreboard_overflowed;
+    if (scoreboard_overflowed ||
+        scoreboard_length + result->scoreboard_length > sizeof scoreboard) {
+      /* Stopped rather than skipped, as the modules are: a record missing a
+         group in the middle reads as though the group had nothing to say. */
+      scoreboard_overflowed = true;
+    } else {
+      memcpy(scoreboard + scoreboard_length, result->scoreboard, result->scoreboard_length);
+      scoreboard_length += result->scoreboard_length;
+    }
+    test_failures += result->failures;
+    total_verdicts += result->verdicts;
+    total_verdicts_wrong += result->verdicts_wrong;
+    if (result->graded) {
+      total_groups_graded++;
+    }
+    if (result->skipped) {
+      total_groups_skipped++;
       skipped++;
       continue;
     }
     total_groups_run++;
     ran++;
   }
+  munmap(results, mapping_length);
   if (fclose(report) != 0) {
     TEST_FAIL("module %s: %s was not written whole", module, path);
     return;
@@ -1963,6 +2387,85 @@ static void a_screen_read_in_part_cannot_repeat_a_verdict(void) {
   TEST_EQUAL(collect_verdicts(100), 3);
 
   verdict_count = 0;
+  memset(screen, 0, sizeof screen);
+  memset(previous_screen, 0, sizeof previous_screen);
+}
+
+/* A line a press of the space bar left standing is an earlier page's. Where
+   presses turn nothing and the module draws on beneath, only the new lines
+   are taken, however many presses run so; a blank screen between proves no
+   turn; a title read otherwise does, and the same words beneath it are then
+   a test of their own, as module E's (2) has them on each of its pages. A
+   line carried is the earlier pages' only as many times as they hold it:
+   one refused there for a half-read screen is taken where it reads whole. */
+static void a_line_a_press_left_standing_is_an_earlier_pages(void) {
+  static const char *const one[] = {">>>>>> DELAY TO VSYNC:#001B (EXP:#001B)"};
+  static const char *const two[] = {
+      ">>>>>> DELAY TO VSYNC:#001B (EXP:#001B)",
+      ">>>>>> DELAY TO VSYNC:#0000 (EXP:#0000)",
+  };
+  static const char *const three[] = {
+      ">>>>>> DELAY TO VSYNC:#001B (EXP:#001B)",
+      ">>>>>> DELAY TO VSYNC:#0000 (EXP:#0000)",
+      ">>>>>> DELAY TO VSYNC:#0066 (EXP:#0066)",
+  };
+  static const char *const blank[] = {""};
+  static const char *const first_page[] = {"STAGE 1", "YOU'VE WON THIS STAGE"};
+  static const char *const second_page[] = {"STAGE 2", "YOU'VE WON THIS STAGE"};
+  static const char *const twice[] = {
+      ">>>>>> DELAY TO VSYNC:#001B (EXP:#001B)",
+      ">>>>>> DELAY TO VSYNC:#001B (EXP:#001B)",
+  };
+
+  verdict_count = 0;
+  verdicts_dropped = 0;
+  verdicts_carried_count = 0;
+  verdict_page = 1;
+  show_screen(one, 1);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  carry_the_verdicts_standing();
+  verdict_page = 2;
+  show_screen(two, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  carry_the_verdicts_standing();
+  verdict_page = 3;
+  show_screen(three, 3);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  carry_the_verdicts_standing();
+  verdict_page = 4;
+  show_screen(blank, 1);
+  TEST_EQUAL(collect_verdicts(NOTHING_DRAWN), 0);
+  show_screen(three, 3);
+  TEST_EQUAL(collect_verdicts(100), 0);
+  TEST_EQUAL(verdict_count, 3);
+
+  verdict_count = 0;
+  verdicts_carried_count = 0;
+  verdict_page = 1;
+  show_screen(first_page, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  carry_the_verdicts_standing();
+  verdict_page = 2;
+  show_screen(blank, 1);
+  TEST_EQUAL(collect_verdicts(NOTHING_DRAWN), 0);
+  show_screen(second_page, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+
+  verdict_count = 0;
+  verdicts_carried_count = 0;
+  verdict_page = 1;
+  show_screen(one, 1);
+  TEST_EQUAL(collect_verdicts(100), 1);
+  show_screen(twice, 2);
+  TEST_EQUAL(collect_verdicts(55), 0);
+  carry_the_verdicts_standing();
+  verdict_page = 2;
+  show_screen(twice, 2);
+  TEST_EQUAL(collect_verdicts(100), 1);
+
+  verdict_count = 0;
+  verdicts_carried_count = 0;
+  verdict_page = 1;
   memset(screen, 0, sizeof screen);
   memset(previous_screen, 0, sizeof previous_screen);
 }
@@ -2465,6 +2968,23 @@ static const verdict_case_by_type lines_by_type[] = {
        a machine it passes over, and grades on one it names. */
     {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", 0, false, false},
     {"DELAY VSYNC OFF=#0032 (CRTC 1.2:23A)", 1, true, true},
+    /* Module B's (R) names the values after the word and parts its clauses
+       with a space: #34 is a type 0's answer, and every other type owes
+       #FF. A bracket after the word naming only types this machine is not
+       grades nothing on it. */
+    {"R0=0/R3=1/R52 CALC=#34 (Exp:CRTC 0:#34 OTHERS:#FF)(REF #0168)", 0, true, false},
+    {"R0=0/R3=1/R52 CALC=#34 (Exp:CRTC 0:#34 OTHERS:#FF)(REF #0168)", 2, true, true},
+    {"R0=0/R3=1/R52 CALC=#FF (Exp:CRTC 0:#34 OTHERS:#FF)(REF #0168)", 3, true, false},
+    {"X=#0034 (Exp:CRTC 0:#34)", 0, true, false},
+    {"X=#0034 (Exp:CRTC 0:#34)", 2, false, false},
+    /* Two types named after the word, parted by a space, each read; the
+       word spelt out reads the same; and a bracket naming only other types
+       grades nothing on the line, a later one included. */
+    {"X=#00FF (Exp:CRTC 0:#34 CRTC 2:#FF)", 2, true, false},
+    {"X=#00FF (Exp:CRTC 0:#34 CRTC 2:#FF)", 0, true, true},
+    {"X=#0034 (Expected CRTC 0:#34 OTHERS:#FF)", 2, true, true},
+    {"X=#0034 (Expected CRTC 0:#34 OTHERS:#FF)", 0, true, false},
+    {"X=#0022 (Exp:CRTC 0:#11)(Exp:#22)", 2, false, false},
     /* The digits behind the word are read whole whatever the machine, so 10
        is no more a 1 than it is a 0. */
     {"X=#0022 (CRTC 10:#11/ OTHERS:#22)", 0, true, false},
@@ -2737,6 +3257,7 @@ static void run_the_readers_own_tests(void) {
   TEST_RUN(the_verdict_reader_knows_its_renderings);
   TEST_RUN(the_reader_follows_the_type_the_machine_was_built_as);
   TEST_RUN(a_screen_read_in_part_cannot_repeat_a_verdict);
+  TEST_RUN(a_line_a_press_left_standing_is_an_earlier_pages);
   TEST_RUN(a_record_split_across_rows_is_read_once);
   TEST_RUN(a_page_that_speaks_both_verdicts_yields_neither);
   TEST_RUN(a_title_carries_the_expectation_for_the_lines_below_it);
@@ -2871,8 +3392,18 @@ int main(int argc, char **argv) {
   fprintf(file, "falls on a row boundary is believed, so a group can be recorded printing\n");
   fprintf(file, "the same line twice. Count a group's distinct lines before trusting its\n");
   fprintf(file, "standing.\n\n");
+  fprintf(file, "A group of several pages is watched a page at a time, the space bar\n");
+  fprintf(file, "turning each once it has gone quiet or run out its frames, until the\n");
+  fprintf(file, "module's menu comes back; its standing names how many pages it showed,\n");
+  fprintf(file, "\"and more\" where the turning stopped at a cap rather than at the menu. A\n");
+  fprintf(file, "press that changes nothing is made again, six times in all, for a module\n");
+  fprintf(file, "busy with its own work reads no keys; a group of several pages that goes\n");
+  fprintf(file, "unanswered after that stands with \"then no answer\", and one of a single\n");
+  fprintf(file, "page stands as it was. A page is counted where a press is followed by any\n");
+  fprintf(file, "change on the screen, which a module still drawing the page before can\n");
+  fprintf(file, "make itself.\n\n");
   fprintf(file, "A group marked \"cut off at the cap\" was still drawing screens this reader\n");
-  fprintf(file, "had not seen when its budget of frames ran out, where the rest had gone\n");
+  fprintf(file, "had not seen when a page's budget of frames ran out, where the rest had gone\n");
   fprintf(file, "quiet before theirs did. The mark follows what a group draws rather than\n");
   fprintf(file, "what it grades, so a change to the machine can hand it to one group and\n");
   fprintf(file, "take it from another; arriving or leaving, it is no verdict on either.\n\n");

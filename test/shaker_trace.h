@@ -58,6 +58,10 @@
    says what is wrong with them a single time rather than five. */
 void shaker_trace_configure(void);
 
+/* Whether a trace is being written. A module's trace is one file, so a
+   module writing one runs its groups in turn rather than side by side. */
+bool shaker_trace_is_on(void);
+
 /* In the child, once it knows which module it is running. */
 void shaker_trace_begin(const char *module, uint8_t crtc_type);
 

@@ -7,9 +7,9 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 59 groups run, 23 left to another CRTC type.
-5 of them printed self-graded lines, 24 in all: 24 agree with Longshot's
-silicon and 0 do not. That is 100% of what this reader can score, and no
-measure at all of the other 54 groups.
+7 of them printed self-graded lines, 75 in all: 68 agree with Longshot's
+silicon and 7 do not. That is 91% of what this reader can score, and no
+measure at all of the other 52 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -44,8 +44,19 @@ falls on a row boundary is believed, so a group can be recorded printing
 the same line twice. Count a group's distinct lines before trusting its
 standing.
 
+A group of several pages is watched a page at a time, the space bar
+turning each once it has gone quiet or run out its frames, until the
+module's menu comes back; its standing names how many pages it showed,
+"and more" where the turning stopped at a cap rather than at the menu. A
+press that changes nothing is made again, six times in all, for a module
+busy with its own work reads no keys; a group of several pages that goes
+unanswered after that stands with "then no answer", and one of a single
+page stands as it was. A page is counted where a press is followed by any
+change on the screen, which a module still drawing the page before can
+make itself.
+
 A group marked "cut off at the cap" was still drawing screens this reader
-had not seen when its budget of frames ran out, where the rest had gone
+had not seen when a page's budget of frames ran out, where the rest had gone
 quiet before theirs did. The mark follows what a group draws rather than
 what it grades, so a change to the machine can hand it to one group and
 take it from another; arriving or leaving, it is no verdict on either.
@@ -62,61 +73,82 @@ The copy of this file in the test sources is the one on record, and a sweep
 fails on the first line where the two differ. The screens behind these
 standings are in the module records written beside the sweep's own copy.
 
-A (1)       UPDATE VRAM VS CRTC (79 TST)                                                     recorded, ungraded
-A (2)       SKEW DISP ON R0 RUPTURE (4 TST)                                                  recorded, ungraded
+A (1)       UPDATE VRAM VS CRTC (79 TST)                                                     recorded, ungraded, 5 pages
+A (2)       SKEW DISP ON R0 RUPTURE (4 TST)                                                  recorded, ungraded, 4 pages
 A (3)       CRTC 2 RVMB (22 TST)                                                             another CRTC type's
 A (4)       UPDATE CRTC R0 TIMING (17 TST)                                                   recorded, ungraded
-A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded
-A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded
-A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded
+A (5)       R13 UPDATE IN 4 USEC SCREENS (R0=3) (5 TST)                                      recorded, ungraded, 5 pages
+A (6)       R13 UPDATE IN 2 USEC SCREENS (R0=1) (5 TST)                                      recorded, ungraded, 5 pages
+A (7)       R13 UPDATE IN 1 USEC SCREENS (R0=0) (5 TST)                                      recorded, ungraded, 5 pages
 A (8)       GATE ARRAY PIXELISATION                                                          recorded, ungraded
-A (9)       GATE ARRAY INKERISATION (3 TST)                                                  recorded, ungraded
+A (9)       GATE ARRAY INKERISATION (3 TST)                                                  recorded, ungraded, 3 pages
 A (E)       GATE ARRAY MODERISATION                                                          recorded, ungraded
-A (R)       MODE UPD >HSYNC DELAY< (2.1.0)(3 TST)                                            recorded, ungraded
-A (CAPS)    INTERACTIVE TEST MODE X TO Y (16 INTERACTIVE TST)                                recorded, ungraded
-A (TAB)     HSYNC START POSITION (4 INTERACTIVE TST)                                         recorded, ungraded
-A (T)       R2 UPD DURING & AFTER HSYNC (6 TST)                                              recorded, ungraded
-A (Y)       R3 UPD DURING HSYNC (8 TST)                                                      recorded, ungraded
+A (R)       MODE UPD >HSYNC DELAY< (2.1.0)(3 TST)                                            recorded, ungraded, 3 pages
+A (CAPS)    INTERACTIVE TEST MODE X TO Y (16 INTERACTIVE TST)                                recorded, ungraded, 16 pages
+A (TAB)     HSYNC START POSITION (4 INTERACTIVE TST)                                         recorded, ungraded, 4 pages
+A (T)       R2 UPD DURING & AFTER HSYNC (6 TST)                                              recorded, ungraded, 6 pages
+A (Y)       R3 UPD DURING HSYNC (8 TST)                                                      recorded, ungraded, 8 pages
 A (U)       R4 & R9 CHECKING (54 TST)                                                        1 graded, 0 wrong
       PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):OK
-A (I)       VSYNC CONDITIONS (413 TST)                                                       recorded, ungraded
-A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded
-A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded
+A (I)       VSYNC CONDITIONS (413 TST)                                                       1 graded, 0 wrong, 6 pages
+      WAIT VSYNC ON R7=C4=1, THEN R7=2 > VSYNC LENGTH=#66 (Exp #66)
+A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded, 9 pages
+A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded, 10 pages
 A (COPY)    CRTC 2 OFFSET                                                                    another CRTC type's
-B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (06)              recorded, ungraded
+B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (06)              recorded, ungraded, 11 pages
 B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                               showed only the menu
 B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
 B (4)       CRTC 2 FIND C0 MIN                                                               another CRTC type's
 B (5)       CRTC 2 RLAL                                                                      another CRTC type's
 B (6)       CRTC 1 BUG OUTI R0                                                               another CRTC type's
 B (7)       CRTC 0 BUG OVF C4                                                                another CRTC type's
-B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded
+B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded, 2 pages
 B (O)       CRTC 1-A OR 1-B?                                                                 another CRTC type's
-B (RETURN)  R5 STORIES                                                                       recorded, ungraded
-B (F0)      BOUNGA!                                                                          recorded, ungraded, cut off at the cap
+B (RETURN)  R5 STORIES                                                                       recorded, ungraded, 3 pages
+B (F0)      BOUNGA!                                                                          recorded, ungraded, 2 pages, cut off at the cap
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
-B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded
-B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                recorded, ungraded
-B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded
-B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 4 pages
+B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                20 graded, 2 wrong, 6 pages
+      FROM LAST INTER:#14F6 usec >> NEXT INTER:#0504 usec (Exp:#0504)
+      FROM LAST INTER:#14F7 usec >> NEXT INTER:#0503 usec (Exp:#0503)
+      FROM LAST INTER:#14F8 usec >> NEXT INTER:#0D02 usec (Exp:#0D02)
+      FROM LAST INTER:#14F9 usec >> NEXT INTER:#0D01 usec (Exp:#0D01)
+      FROM LAST INTER:#14FA usec >> NEXT INTER:#0D00 usec (Exp:#0D00)
+      FROM LAST INTER:#14FB usec >> NEXT INTER:#0CFF usec (Exp:#0CFF)
+      FROM LAST INTER:#14F6 usec >> NEXT INTER:#0503 usec (Exp:#0503)
+      FROM LAST INTER:#14F7 usec >> NEXT INTER:#0D02 usec (Exp:#0D02)
+      FROM LAST INTER:#14F8 usec >> NEXT INTER:#0D01 usec (Exp:#0D01)
+      FROM LAST INTER:#14F9 usec >> NEXT INTER:#0D00 usec (Exp:#0D00)
+      FROM LAST INTER:#14FA usec >> NEXT INTER:#0CFF usec (Exp:#0CFF)
+      FROM LAST INTER:#14FB usec >> NEXT INTER:#0CFE usec (Exp:#0CFE)
+      FROM LAST INTER:#14F2 usec >> NEXT INTER:#0504 usec (Exp:#0504)
+      FROM LAST INTER:#14F3 usec >> NEXT INTER:#0503 usec (Exp:#0503)
+      FROM LAST INTER:#14F4 usec >> NEXT INTER:#0D02 usec (Exp:#0D02)
+      FROM LAST INTER:#14F5 usec >> NEXT INTER:#0D01 usec (Exp:#0D01)
+      FROM LAST INTER:#14F6 usec >> NEXT INTER:#0D00 usec (Exp:#0D00)
+      FROM LAST INTER:#14F7 usec >> NEXT INTER:#0CFF usec (Exp:#0CFF)
+    ! R0=1/R3=1/R52 CALC=#33 (Exp:#34)(REF #0267)
+    ! R0=0/R3=1/R52 CALC=#35 (Exp:CRTC 0:#34 OTHERS:#FF)(REF #016A)
+B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded, 11 pages
+B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded, 8 pages
 B (T)       R3 JIT INTERACTIVE MODE ANALYZER                                                 recorded, ungraded
 B (S)       CRTC 1 : BE00 CHECK                                                              another CRTC type's
 B (CTRL)    R5 SCANNER /                                                                     recorded, ungraded, cut off at the cap
-B (COPY)    R5 T2                                                                            recorded, ungraded
-B (TAB)     R5 BENCH (INTERACTIVE)                                                           recorded, ungraded
-B (0)       VERTICAL SCROLL SUB-PIXEL 1/8,1/16,1/32,1/64,1/128                               recorded, ungraded, cut off at the cap
+B (COPY)    R5 T2                                                                            recorded, ungraded, 5 pages
+B (TAB)     R5 BENCH (INTERACTIVE)                                                           recorded, ungraded, 8 pages
+B (0)       VERTICAL SCROLL SUB-PIXEL 1/8,1/16,1/32,1/64,1/128                               recorded, ungraded, 5 pages, cut off at the cap
 C (1)       CRTC 1   : RFD & PARITY STORY                                                    another CRTC type's
 C (2)       CRTC 1   : R8 IVM ON ODD C9                                                      another CRTC type's
 C (3)       CRTC 1   : PARITY SWITCH STATUS                                                  another CRTC type's
 C (4)       CRTC 1   : IVM ON/OFF                                                            another CRTC type's
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   another CRTC type's
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's
-C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, cut off at the cap
+C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, 2 pages, cut off at the cap
 C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                another CRTC type's
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
-C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded
-C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded
-C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              7 graded, 0 wrong
+C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded, 4 pages
+C (RETURN)  CRT2: GHOST VSYNC VS LAST LINE (OPEN TO OTHER CRTC'S)                            recorded, ungraded, 2 pages
+C (E)       ALL      : ADD LINE R5 ON LAST LINE                                              7 graded, 0 wrong, 2 pages
       FROM LAST LINE, R5=1 ON C0=0, CPU TO C4=0 IS #0D (#0D Expected)
       FROM LAST LINE, R5=2 ON C0=0, CPU TO C4=0 IS #14 (#14 Expected)
       FROM LAST LINE, R5=3 ON C0=0, CPU TO C4=0 IS #1C (#1C Expected)
@@ -126,11 +158,11 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
       R5=3 / ON 2ND ADD LINE, R5=1 / CPU TO NEW FRAME:#0004 (#0004 expected)
 C (P)       ALL      : ADD LINE R8                                                           showed only the menu
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
-C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded
-C (Y)       ALL      : CRTC 3/4 PARITY                                                       recorded, ungraded
+C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded, 8 pages
+C (Y)       ALL      : CRTC 3/4 PARITY                                                       recorded, ungraded, 4 pages
 C (R)       CRTC 0   : R9/R4 UPD LAST LIMIT                                                  another CRTC type's
-D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         recorded, ungraded
-D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               3 graded, 0 wrong
+D (U)       CRTC 3/4 : STATUS (DEADLOCK MAY HAPPEN IF BAD EMULATION)                         recorded, ungraded, 42 pages
+D (I)       SHAKER KILLER 2 (WARNING : NOT RELIABLE ON CRTC 1)                               3 graded, 0 wrong, 7 pages
       TEST INT ON INST DEC DE   :#58 (CRTC 3+4:#58/ OTHERS:#59)
       Unbreakable DD Prefix on Pending Int #00 (Exp#00), On R52:#0E18 (Exp#0E18)
       Break ED xx on Pending Int #00 (Exp#00)
@@ -141,23 +173,23 @@ D (R)       VSYNC TORTURE (LOCK MECHANISM)                                      
       R7=0/R4=1/C0=00 VSYNC=#5F
       R7=0/R4=1/C0=01 VSYNC=#5F
       R3h=0/R4=R7=0/ON LINE 9, R4=R7=7F: VSYNC OFF DELAY=#0032 (EXP:#32)
-D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded
-D (H)       HSYNC GATE ARRAY                                                                 recorded, ungraded
+D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded, 48 pages and more, cut off at the cap
+D (H)       HSYNC GATE ARRAY                                                                 recorded, ungraded, 9 pages
 D (1)       CSYNC4 VS 2xCSYNC2                                                               recorded, ungraded
 D (2)       R2.JIT >> NO CSYNC UPD                                                           showed only the menu
-D (3)       2xCSYNC RELATIVE                                                                 recorded, ungraded
-D (4)       CSYNC MULTIPLES                                                                  recorded, ungraded
+D (3)       2xCSYNC RELATIVE                                                                 recorded, ungraded, 48 pages and more
+D (4)       CSYNC MULTIPLES                                                                  recorded, ungraded, 2 pages
 D (5)       WIP (SOME R3.JIT)                                                                recorded, ungraded
-D (6)       HARDWARE SCROLL 1 PIXEL MODE 1/0 (NO BUFFERING)                                  recorded, ungraded, cut off at the cap
-D (7)       R2 OSCILLATION STORY                                                             recorded, ungraded
-D (8)       NO HSYNC FOR XX LINES                                                            recorded, ungraded
+D (6)       HARDWARE SCROLL 1 PIXEL MODE 1/0 (NO BUFFERING)                                  recorded, ungraded, 2 pages, cut off at the cap
+D (7)       R2 OSCILLATION STORY                                                             recorded, ungraded, 10 pages
+D (8)       NO HSYNC FOR XX LINES                                                            recorded, ungraded, 6 pages
 D (9)       CRTC 1 : RFD ROUND 2                                                             another CRTC type's
 D (E)       CRTC 1 : OFS UPD IN ADD MANAGEMENT                                               another CRTC type's
 D (CAPS)    CRTC 1-OUTI R0 AUTOPSY                                                           another CRTC type's
 D (P)       CRTC 2 : VMA' BUG                                                                another CRTC type's
 D (S)       SPLITBORDER POS                                                                  recorded, ungraded
 D (COPY)    RESET CPC                                                                        recorded, ungraded
-E (1)       R5 STORIES 2ND ROUND                                                             7 graded, 0 wrong
+E (1)       R5 STORIES 2ND ROUND                                                             37 graded, 5 wrong, 4 pages
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0005 (exp:#0005)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#01, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#02, R5=0, CPU TO C4=0:#0004 (exp:#0004)
@@ -165,6 +197,36 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R5=0, CPU TO C4=0:#0001 (exp:#0001)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R5=0, CPU TO C4=0:#0001 (exp:#0001)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#01D1 (exp:#01D1)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#01D1 (exp:#01D1)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#01D1 (exp:#01D1)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#0015 (exp:#0015)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#0015 (exp:#0015)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#0015 (exp:#0015)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#0065 (exp:#0065)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#0065 (exp:#0065)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#0065 (exp:#0065)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
+    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#0015 (exp:#FFFF)
+    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#0015 (exp:#FFFF)
+    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0015 (exp:#FFFF)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
+    ! CPU TO C4=R4+1 >> #000D (#FFFF exp)
+      CPU TO C4=0    >> #005D (#005D exp)
+    ! CPU TO C4=R4+1 >> #000D (#FFFF exp)
+      CPU TO C4=0    >> #0021 (#0021 exp)
+      CPU TO C4=R4+1 >> #FFFF (#FFFF exp)
+      CPU TO C4=0    >> #000C (#000C exp)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       another CRTC type's
 E (3)       CRTC 0 C4/C9 COUNTER LOGIC BUG                                                   another CRTC type's
 E (COPY)    RESET CPC                                                                        recorded, ungraded

@@ -84,6 +84,8 @@ void shaker_trace_configure(void) {
   read_events();
 }
 
+bool shaker_trace_is_on(void) { return tracing; }
+
 void shaker_trace_begin(const char *module, uint8_t crtc_type) {
   if (tracing) {
     snprintf(trace_path, sizeof trace_path, "%s-%s-crtc%u.txt", getenv("SHAKER_TRACE"), module,
