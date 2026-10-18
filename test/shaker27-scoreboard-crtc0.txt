@@ -2,8 +2,8 @@ What Longshot's Shaker 2.7 said about this machine, built as a type 0
 CRTC, module by module and in the order each module's own menu prints.
 
 65 groups run, 21 left to another CRTC type.
-11 of them printed self-graded lines, 132 in all: 126 agree with Longshot's
-silicon and 6 do not. That is 95% of what this reader can score, and no
+11 of them printed self-graded lines, 132 in all: 130 agree with Longshot's
+silicon and 2 do not. That is 98% of what this reader can score, and no
 measure at all of the other 54 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -198,7 +198,7 @@ D (CAPS)    CRTC 1-OUTI R0 AUTOPSY                                              
 D (P)       CRTC 2 : VMA' BUG                                                                another CRTC type's
 D (S)       SPLITBORDER POS                                                                  recorded, ungraded
 D (COPY)    RESET CPC                                                                        recorded, ungraded
-E (1)       R5 STORIES 2ND ROUND                                                             47 graded, 4 wrong, 4 pages
+E (1)       R5 STORIES 2ND ROUND                                                             47 graded, 0 wrong, 4 pages
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#01, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#02, R5=0, CPU TO C4=0:#0004 (exp:#0004)
@@ -208,25 +208,25 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#0031 (exp:#0031)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#0031 (exp:#0051)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#0051 (exp:#0051)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#0511 (exp:#0511)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#0511 (exp:#0511)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#0511 (exp:#0001)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#081D (exp:#081D)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#081D (exp:#081D)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#081D (exp:#081D)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#0065 (exp:#0065)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#0065 (exp:#0065)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#0065 (exp:#0031)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#0031 (exp:#0031)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0015 (exp:#0001)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#081D (exp:#081D)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#081D (exp:#081D)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#081D (exp:#081D)

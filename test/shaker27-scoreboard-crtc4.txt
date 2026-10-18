@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 63 groups run, 23 left to another CRTC type.
-8 of them printed self-graded lines, 81 in all: 74 agree with Longshot's
-silicon and 7 do not. That is 91% of what this reader can score, and no
+8 of them printed self-graded lines, 81 in all: 79 agree with Longshot's
+silicon and 2 do not. That is 98% of what this reader can score, and no
 measure at all of the other 55 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -195,7 +195,7 @@ D (CAPS)    CRTC 1-OUTI R0 AUTOPSY                                              
 D (P)       CRTC 2 : VMA' BUG                                                                another CRTC type's
 D (S)       SPLITBORDER POS                                                                  recorded, ungraded
 D (COPY)    RESET CPC                                                                        recorded, ungraded
-E (1)       R5 STORIES 2ND ROUND                                                             37 graded, 5 wrong, 4 pages
+E (1)       R5 STORIES 2ND ROUND                                                             37 graded, 0 wrong, 4 pages
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0005 (exp:#0005)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#01, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#02, R5=0, CPU TO C4=0:#0004 (exp:#0004)
@@ -221,15 +221,15 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#0015 (exp:#FFFF)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#0015 (exp:#FFFF)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0015 (exp:#FFFF)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#FFFF (exp:#FFFF)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#FFFF (exp:#FFFF)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#FFFF (exp:#FFFF)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
-    ! CPU TO C4=R4+1 >> #000D (#FFFF exp)
+      CPU TO C4=R4+1 >> #FFFF (#FFFF exp)
       CPU TO C4=0    >> #005D (#005D exp)
-    ! CPU TO C4=R4+1 >> #000D (#FFFF exp)
+      CPU TO C4=R4+1 >> #FFFF (#FFFF exp)
       CPU TO C4=0    >> #0021 (#0021 exp)
       CPU TO C4=R4+1 >> #FFFF (#FFFF exp)
       CPU TO C4=0    >> #000C (#000C exp)

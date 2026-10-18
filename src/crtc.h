@@ -220,7 +220,9 @@
  * C9" (ch. 11.1), so on those two the row goes on being counted and C4 on
  * advancing through the lines — "regardless of the value of R4 each time
  * C9=R9, as long as C5 has not reached R5" — where the other three hold the
- * row where it stands. No line the disc grades moves on the counter itself:
+ * row: a type 0 one past R4, types 3 and 4 on R4 itself, "C4 does not increment
+ * and is equal to R4" (ch. 11.1), ch. 11.2.1's third column, which Shaker's E
+ * (1) grades on both. No line the disc grades moves on the C5 counter itself:
  * what stands behind that is ch. 11.2.2 and 11.2.3's own tables and a test of
  * our own. A type 1 alone latches a state with the counter, "if R5>0 when C4
  * should return to 0 at the end of the frame", which an R5 taken back to 0
@@ -270,17 +272,23 @@
  * "if the I/O on the CRTC is performed at the same time as a ROM selection",
  * which "is active during the I/O if bit 5 of the Z80A B register is 0", and
  * nothing here tells the chip what else an access selects. The disc names both
- * ASICs a type 4, and asks for the exception of neither. Every other behaviour
- * below is type 0's whatever the type is set to, and a number naming none of
- * the five is neither refused nor corrected. One of those is worth naming
- * because the disc grades it: a type 1 takes R4 written with the value C4
- * already holds as the frame's end wherever on the line it lands — "if we were
- * on the last line (C9=R9), then C9 goes to 0, C4=0" (ch. 12.3) — where a type
- * 0 reads that comparison only while C0 is under 2, and it is a type 0's window
- * this chip keeps; a type 1 is also left a type 0's R5 deadline, ch. 11.4.1
- * notwithstanding, for want of anything the disc grades that asks for it —
- * an R5 raised from 0 at C0=R0 would also set off a bug of that chip's own
- * (ch. 11.6), which is not here. A type 2 asks R5 of its last line to the
+ * ASICs a type 4, and asks for the exception of neither. A type 1 decides its
+ * frame's end and the padding after it where the line ends as well, having none
+ * of a type 0's exceptions — "everything is pure logic" (ch. 10.3.2.2): R4
+ * written with the value C4 holds on a row's last line ends the frame wherever
+ * on the line it lands, "if we were on the last line (C9=R9), then C9 goes to
+ * 0, C4=0" (ch. 12.3), and an R4 or R9 moved off a last line while R5 asks for
+ * padding "is taken into account immediately to postpone the end of the frame"
+ * (ch. 11.2.4). Only a write made on the line's last character comes too late
+ * for one thing, the padding the last line stood on there, which "remains true"
+ * with the lines counted against the registers written (ch. 11.2.4). Shaker's E
+ * (1) grades the postponing and that exception, and its A (U), photographed on
+ * a real type 1, reads R4 written onto C4 and moved off it on a last line's
+ * last four characters as taken, on five lines this chip had wrong while it
+ * kept a type 0's window. An R5 raised from 0 at C0=R0 would also set off a bug
+ * of that chip's own (ch. 11.6), which is not here. Every other behaviour below
+ * is type 0's whatever the type is set to, and a number naming none of the five
+ * is neither refused nor corrected. A type 2 asks R5 of its last line to the
  * line's end (crtc.c), and settles that line by ch. 12.4.1's rules rather than
  * a type 0's: at the line's head, with R4 and R9 as the writes made before it
  * left them, refused where the last character of the line before's HSYNC found
@@ -476,7 +484,9 @@
  * on all four of them; it is not the overflow a width narrowed under a running
  * counter gives), its register widths, its VMA/VMA' reload rules, the counter
  * widths a program can overrun, the last line decided while C0 is 0 or 1 and
- * made at C0=2 by a write that lands there, the vertical adjustment a type 0
+ * made at C0=2 by a write that lands there, a row's end taken for C4 where the
+ * line's last character found it or a write made there leaves it, and for C9 as
+ * that write leaves it (ch. 10.3.1.2, 11.2.2), the vertical adjustment a type 0
  * spends on C9 — armed on every last line, taken back where R5 is cancelled in
  * time or the last line itself is unmade, opened by an R4 or R9 moved under a
  * standing last line, and past taking back once begun — and the block that
@@ -751,10 +761,10 @@ typedef struct crtc_t {
   /* This line ends the frame. Decided while C0 is 0 or 1 and held for the
      rest of the line, so a register written afterwards cannot take it back;
      and once more at C0=2 where it is not yet true, which is where a write
-     made at C0=1 lands (ch. 10.3.1.2, 12.2). The two ASICs decide it again
-     where the line ends, and that is the answer the frame ends on (ch.
-     12.5). A type 2 decides it at the head and wherever R4 or R9 is written,
-     by rules of its own (ch. 12.4.1). */
+     made at C0=1 lands (ch. 10.3.1.2, 12.2). A type 1 and the two ASICs
+     decide it again where the line ends, and that is the answer the frame
+     ends on (ch. 10.3.2.2, 12.3, 12.5). A type 2 decides it at the head and
+     wherever R4 or R9 is written, by rules of its own (ch. 12.4.1). */
   bool last_line;
   /* The two states a type 2 keeps beside it (ch. 12.4.1). "Previous Last
      Line" is the comparison the last character of a line's HSYNC found, and
@@ -820,6 +830,19 @@ typedef struct crtc_t {
      not — and made where C0 stood on R0. Written afresh by every R4 write,
      so a later one anywhere takes an earlier one's answer away. */
   bool r4_moved_at_a_lines_end;
+  /* An R4 or R9 write made while C0 names R0 lands as the line ends, and
+     what the line's last character compared before it is kept for the
+     comparisons that write cannot take back: on a type 0 the two that move
+     C4, "when R9 is modified exactly at the position C0 equals R0, while C9
+     was equal to R9 before C0 reached R0. In this case, C4 is still
+     incremented" (ch. 10.3.1.2); on a type 1 the last line an adjustment
+     stands on, "if C4==R4 and C9==R9 in position C0==R0, and R4 or R9 is
+     modified in this position, then the additional management remains true"
+     (ch. 11.2.4). Taken by the first such write of the character and cleared
+     after the tick that reads it. */
+  bool r4_or_r9_written_on_the_last_character;
+  bool row_ended_before_that_write;
+  bool c4_stood_on_r4_before_that_write;
 
   /* Whether the chip stood on a frame's first character last time it was
      asked. ParityFrame turns as that character is entered (ch. 19.5.2), and

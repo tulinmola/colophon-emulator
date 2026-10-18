@@ -6,10 +6,10 @@ is, and of its own timing keeps only what the head of crtc.h names. The
 rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
-70 groups run, 16 left to another CRTC type.
-10 of them printed self-graded lines, 87 in all: 71 agree with Longshot's
-silicon and 16 do not. That is 82% of what this reader can score, and no
-measure at all of the other 60 groups.
+71 groups run, 15 left to another CRTC type.
+10 of them printed self-graded lines, 87 in all: 86 agree with Longshot's
+silicon and 1 do not. That is 99% of what this reader can score, and no
+measure at all of the other 61 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
 said what it had to say in a picture or a legend rather than in words
@@ -99,7 +99,7 @@ B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (07) 
 B (2)       INTERLACE CRTC 2 C9 STRANGER THING                                               showed only the menu
 B (3)       FAKE VSYNC ON CRTC 2                                                             recorded, ungraded
 B (4)       CRTC 2 FIND C0 MIN                                                               another CRTC type's
-B (5)       CRTC 2 RLAL                                                                      another CRTC type's
+B (5)       CRTC 2 RLAL                                                                      recorded, ungraded, 2 pages, cut off at the cap
 B (6)       CRTC 1 BUG OUTI R0                                                               6 graded, 0 wrong
       OUTI ON R0.JIT 5TH uSec ON C0=0 - RES: #13 :GOOD
       OUTI ON R0.JIT 4TH uSec ON C0=0 - RES: #14 :GOOD
@@ -111,7 +111,7 @@ B (7)       CRTC 0 BUG OVF C4                                                   
 B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded, 2 pages
 B (O)       CRTC 1-A OR 1-B?                                                                 recorded, ungraded
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded, 3 pages
-B (F0)      BOUNGA!                                                                          recorded, ungraded
+B (F0)      BOUNGA!                                                                          recorded, ungraded, 2 pages, cut off at the cap
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded, 3 pages
 B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 4 pages
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                20 graded, 1 wrong, 6 pages
@@ -149,7 +149,7 @@ C (3)       CRTC 1   : PARITY SWITCH STATUS                                     
 C (4)       CRTC 1   : IVM ON/OFF                                                            recorded, ungraded, 30 pages
 C (5)       CRTC 0.2 : PARITY CHECK SELECT                                                   another CRTC type's
 C (6)       CRTC 2   : C9.IVM SWITCH                                                         another CRTC type's
-C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, 4 pages
+C (7)       CRTC 2   : LAST LINE COND (OPEN TO OTHER CRTC'S)                                 recorded, ungraded, 3 pages
 C (8)       CRTC 2   : ADD LINE ON PARITY BUG                                                another CRTC type's
 C (9)       CRTC 2   : ADD LINE RQ & TRIGGER                                                 another CRTC type's
 C (T)       CRTC 2   : VMA' ON R1=0 (OPEN TO OTHER CRTC'S)                                   recorded, ungraded, 4 pages
@@ -163,8 +163,8 @@ C (E)       ALL      : ADD LINE R5 ON LAST LINE                                 
       DEADLOCK G ADD T3 / CPU TO NEW FRAME:#04A0 (#04A0 expected)
       DEADLOCK G ADD T4 / CPU TO NEW FRAME:#0B20 (#0B20 expected)
       DEADLOCK G ADD T5 / CPU TO NEW FRAME:#0223 (#0223 expected)
-C (P)       ALL      : ADD LINE R8                                                           1 graded, 1 wrong, 2 pages
-    ! R8=0/R5=1/R9=6 ON LAST LINE. C4=#80 (exp #26)
+C (P)       ALL      : ADD LINE R8                                                           1 graded, 0 wrong
+      R8=0/R5=1/R9=6 ON LAST LINE. C4=#26 (exp #26)
 C (S)       ALL      : R5 AND INTERLACE MANAGEMENT                                           recorded, ungraded
 C (O)       ALL      : INTERLACE VSYNC NIGHTMARE                                             recorded, ungraded, 15 pages
 C (Y)       ALL      : CRTC 3/4 PARITY                                                       showed only the menu
@@ -198,7 +198,7 @@ D (CAPS)    CRTC 1-OUTI R0 AUTOPSY                                              
 D (P)       CRTC 2 : VMA' BUG                                                                another CRTC type's
 D (S)       SPLITBORDER POS                                                                  recorded, ungraded
 D (COPY)    RESET CPC                                                                        recorded, ungraded
-E (1)       R5 STORIES 2ND ROUND                                                             37 graded, 14 wrong, 4 pages
+E (1)       R5 STORIES 2ND ROUND                                                             37 graded, 0 wrong, 4 pages
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#01, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#02, R5=0, CPU TO C4=0:#0004 (exp:#0004)
@@ -206,24 +206,24 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R5=0, CPU TO C4=0:#0001 (exp:#0001)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R5=0, CPU TO C4=0:#0001 (exp:#0001)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R5=0, CPU TO C4=0:#0001 (exp:#0001)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#0051 (exp:#01D1)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#0051 (exp:#01D1)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#01D1 (exp:#01D1)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#01D1 (exp:#01D1)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#0051 (exp:#0051)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#0051 (exp:#02D5)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#0051 (exp:#02D5)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#0051 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#02D5 (exp:#02D5)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#0015 (exp:#0015)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#0051 (exp:#0065)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#0051 (exp:#0065)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#0065 (exp:#0065)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#0065 (exp:#0065)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#0051 (exp:#0051)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#0051 (exp:#02D5)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#0051 (exp:#02D5)
-    ! R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#0051 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#00:#02D5 (exp:#02D5)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
@@ -231,11 +231,11 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R9=12, CPU TO C4=#27:#0015 (exp:#0015)
       CPU TO C4=R4+1 >> #000D (#000D exp)
-    ! CPU TO C4=0    >> #0051 (#005D exp)
+      CPU TO C4=0    >> #005D (#005D exp)
       CPU TO C4=R4+1 >> #000D (#000D exp)
-    ! CPU TO C4=0    >> #0015 (#0021 exp)
-    ! CPU TO C4=R4+1 >> #000C (#FFFF exp)
-    ! CPU TO C4=0    >> #0080 (#000C exp)
+      CPU TO C4=0    >> #0021 (#0021 exp)
+      CPU TO C4=R4+1 >> #FFFF (#FFFF exp)
+      CPU TO C4=0    >> #000C (#000C exp)
 E (2)       CRTC 1 VMA TRT C4=R4=0 ON ADJ LINE C4=1 ON NO-EXTENT FRAME                       3 graded, 0 wrong, 3 pages
       YOU'VE WON THIS STAGE (UNLESS A PROBLEM IS INDICATED ON THIS PAGE)
       YOU'VE WON THIS STAGE (UNLESS A PROBLEM IS INDICATED ON THIS PAGE)

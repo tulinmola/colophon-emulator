@@ -507,23 +507,23 @@ static void the_two_asics_take_the_frames_end_where_the_line_ends(void) {
 }
 
 /* And the padding after it: an R5 asked for late in a frame's last line is
-   taken on a type 2 and the two ASICs, and not on a type 0. "R5 management is
-   considered on each C0 position" on types 1 to 4 (ch. 11.4.1), where of a
-   type 0 "the R5>0 update after position C0>2 on the last line of the frame
-   is not considered because its evaluation is completed" (ch. 11.4.2). Three
-   lines asked for at C0=40: a type 2 and the ASICs pad the frame by three, a
-   type 0 begins the next, and so does a type 1, left a type 0's deadline
-   (crtc.c). A type 2 asks its last line, not the row's own comparison: with
-   R9 moved off C9 at C0=25, after the "Last Line" state was settled — which
-   "can no longer be modified during the current line" (ch. 12.4.1) — an R5 of
-   1 at C0=38 still pads it by one, as Shaker's C (P) has silicon do. */
-static void a_type_2_and_the_two_asics_take_r5_on_any_character_of_a_last_line(void) {
+   taken on types 1 to 4, and not on a type 0. "R5 management is considered
+   on each C0 position" on types 1 to 4 (ch. 11.4.1), where of a type 0 "the
+   R5>0 update after position C0>2 on the last line of the frame is not
+   considered because its evaluation is completed" (ch. 11.4.2). Three lines
+   asked for at C0=40: types 1 to 4 pad the frame by three, and a type 0
+   begins the next. A type 2 asks its last line, not the row's own
+   comparison: with R9 moved off C9 at C0=25, after the "Last Line" state was
+   settled — which "can no longer be modified during the current line" (ch.
+   12.4.1) — an R5 of 1 at C0=38 still pads it by one, as Shaker's C (P) has
+   silicon do. */
+static void types_1_to_4_take_r5_on_any_character_of_a_last_line(void) {
   static const struct {
     uint8_t type;
     uint8_t r9_moved_to; /* at C0=25, or 7 to leave it */
     uint8_t r5;          /* at C0=40, or at C0=38 where R9 moves */
     unsigned lines_before_the_next_frame;
-  } cases[] = {{0, 7, 3, 0}, {1, 7, 3, 0}, {2, 7, 3, 3}, {3, 7, 3, 3}, {4, 7, 3, 3}, {2, 6, 1, 1}};
+  } cases[] = {{0, 7, 3, 0}, {1, 7, 3, 3}, {2, 7, 3, 3}, {3, 7, 3, 3}, {4, 7, 3, 3}, {2, 6, 1, 1}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, cases[index].type);
     write_register(0, 63);
@@ -1809,6 +1809,58 @@ static void the_asic_status_bytes_trace_rather_than_stand(void) {
        the one character that ends the row: "(C9=R9 and C0=R0) or (C9=0 and
        C0=0 to R0-1)", which over four rows of this frame is four of each. */
     TEST_EQUAL(characters_bit_7_stood, 4u * (63u + 1u));
+  }
+}
+
+/* And "Last char of screen" falls once a frame on a frame that is padded:
+   C4 stands on R4 through the padding on these two (ch. 11.1), but no row
+   ends there, "C9 is only compared with R5". Shaker's D (U) reads the bit
+   once a frame, and a chip that let it fall on the padding's last line too
+   answers "WRONG AT #4DFFth uSEC OF FRAME", the frame's last microsecond.
+   The two beside it name the rows R6 and R7 put before the border and the
+   frame sync, and with both put after R4 they name the row the padding
+   stands on: once a frame each, likewise, which is ours (crtc.c). */
+static void the_asic_screen_ends_once_in_a_padded_frame(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 3);
+    write_register(5, 12);
+    write_register(6, 4);
+    write_register(7, 4);
+    write_register(9, 7);
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    unsigned times_clear[3] = {0, 0, 0};
+    bool padded = false;
+    for (long waited = 0;; waited++) {
+      TEST_CHECK(waited < 4L * FRAME_TICKS);
+      if (waited >= 4L * FRAME_TICKS) {
+        break;
+      }
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      for (unsigned bit = 0; bit < 3; bit++) {
+        if ((status & (1u << bit)) == 0) {
+          times_clear[bit]++;
+          TEST_CHECK(!crtc.vertical_adjustment_in_progress);
+        }
+      }
+      padded = padded || crtc.vertical_adjustment_in_progress;
+      crtc_tick(&crtc);
+      if (crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) {
+        break;
+      }
+    }
+    TEST_CHECK(padded);
+    for (unsigned bit = 0; bit < 3; bit++) {
+      TEST_EQUAL(times_clear[bit], 1u);
+    }
   }
 }
 
@@ -4349,6 +4401,65 @@ static void an_interlace_pulse_fixes_a_type_1_on_an_even_field(void) {
   }
 }
 
+/* Ch. 11.2.1 draws a frame's additional lines on all five types before any
+   register is moved under them, in three columns: a type 0 stands at R4+1
+   and spends C9 on them, types 1 and 2 count the row on beneath them, and
+   types 3 and 4 stand at R4 itself — "C4 does not increment and is equal to
+   R4. C9 is only compared with R5" (ch. 11.1). The registers are the
+   chapter's own (R4=10, R5=16, R9=3, R1=40, R0=63), the rest a standard
+   frame's. */
+static void each_type_draws_the_first_table_of_adjustment_lines(void) {
+  static const struct {
+    uint8_t type;
+    const char *drawn; /* the row and scanline of each line, as the page has it */
+  } cases[] = {
+      {0, "11/0 11/1 11/2 11/3 11/4 11/5 11/6 11/7 11/8 11/9 11/10 11/11 11/12 11/13 11/14 11/15"},
+      {1, "11/0 11/1 11/2 11/3 12/0 12/1 12/2 12/3 13/0 13/1 13/2 13/3 14/0 14/1 14/2 14/3"},
+      {2, "11/0 11/1 11/2 11/3 12/0 12/1 12/2 12/3 13/0 13/1 13/2 13/3 14/0 14/1 14/2 14/3"},
+      {3, "10/0 10/1 10/2 10/3 10/4 10/5 10/6 10/7 10/8 10/9 10/10 10/11 10/12 10/13 10/14 10/15"},
+      {4, "10/0 10/1 10/2 10/3 10/4 10/5 10/6 10/7 10/8 10/9 10/10 10/11 10/12 10/13 10/14 10/15"},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    crtc_init(&crtc, cases[index].type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 10);
+    write_register(9, 3);
+    write_register(5, 16);
+    write_register(6, 25);
+    write_register(7, 60);
+    char drawn[128] = "";
+    int length = 0;
+    int counted = 0;
+    bool standing = false;
+    for (long character = 0; character < 40L * 64 * 400 && counted < 16; character++) {
+      crtc_tick(&crtc);
+      if (crtc.c0 != 0) {
+        continue;
+      }
+      bool running = crtc.vertical_adjustment_in_progress;
+      if (running && !standing) {
+        length = 0;
+        counted = 0;
+      }
+      standing = running;
+      if (!running) {
+        continue;
+      }
+      length += snprintf(drawn + length, sizeof drawn - (size_t)length,
+                         counted ? " %d/%d" : "%d/%d", crtc.c4, crtc.c9);
+      counted++;
+    }
+    TEST_EQUAL(counted, 16);
+    if (strcmp(drawn, cases[index].drawn) != 0) {
+      TEST_FAIL("type %u drew %s, where the table says %s", cases[index].type, drawn,
+                cases[index].drawn);
+    }
+  }
+}
+
 /* Ch. 11.2.2 and 11.2.3 each draw the frame's additional lines, one table
    for each way a chip counts them, and the two are the test below. A type 0
    holds the row still and spends C9 on them, so C4 stays where the last row
@@ -4555,17 +4666,15 @@ static void a_type_1_holds_a_frame_open_where_r5_is_cancelled(void) {
 
 /* The state is taken where a run opens, and a frame is never held by the R5
    of the frame before it. The path that tells a taken state from a carried
-   one is a last line unmade by an R9 write at C0=1, where "the current line
-   becomes the 'first' adjustment line" (ch. 10.3.1.2): the run that opens
-   there opens with "C4 should return to 0 at the end of the frame (C4=R4,
-   C9=R9)" false, which is the one comparison ch. 11.3.2 puts its state
-   behind. R5 stands above 0 over that opening and is cancelled inside the
-   run, so a chip that took no state counts the plain five-bit overflow,
-   where one that took the state here — or carried it from the two frames
-   before, which did open with the comparison true — would hold the frame
-   past that count, to the row C4 comes round to R4 on — R9 is moved and R4
-   is not, so C4 must climb all 128 rows to get there, and the difference is
-   a whole frame rather than a line of it. */
+   one is a run opened on a row whose C4 has gone past R4 (below), where "C4
+   should return to 0 at the end of the frame (C4=R4, C9=R9)" is false, which
+   is the one comparison ch. 11.3.2 puts its state behind. R5 stands above 0
+   over that opening and is cancelled inside the run, so a chip that took no
+   state counts the plain five-bit overflow, where one that carried it from
+   the two frames before, which did open with the comparison true, would hold
+   the frame past that count, to the row C4 comes round to R4 on — and C4
+   must climb its whole counter to get there, so the difference is a frame
+   rather than a line of it. */
 static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
   enum { GIVE_UP_AFTER = 4096 };
   crtc_init(&crtc, 1);
@@ -4581,24 +4690,15 @@ static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
   int spent_runs = 0;
   int lines = 0;
   bool standing = false;
-  bool unmade = false;
-  bool opened_mid_line = false;
+  bool moved = false;
   bool cancelled = false;
   bool ended = false;
   for (long character = 0; character < 400L * 64 * 400 && !ended; character++) {
-    /* The write that unmakes the last line is made during the character C0
-       names 1, the only one that can leave the state true and the
-       comparison false: one made at C0=0 would have been seen by the line's
-       own second look, and one made later leaves the state standing
-       (ch. 12.2, 10.3.1.2, both headed for a type 0 and read here whatever
-       the type). */
-    if (spent_runs == 2 && !unmade && crtc.c0 == 1 && crtc.c4 == 10 && crtc.c9 == 3) {
-      write_register(9, 4);
-      unmade = true;
-      /* That line is the run's first and is already past its own C0=0,
-         which is where the lines below are counted, so it is counted
-         here instead. */
-      opened_mid_line = true;
+    /* R4 taken below C4 on a row's last scanline, which leaves the row
+       armed for a run it cannot end a frame with. */
+    if (spent_runs == 2 && !moved && crtc.c0 == 0 && crtc.c4 == 4 && crtc.c9 == 3) {
+      write_register(4, 2);
+      moved = true;
     }
     crtc_tick(&crtc);
     if (crtc.c0 != 0) {
@@ -4606,8 +4706,7 @@ static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
     }
     bool running = crtc.vertical_adjustment_in_progress;
     if (running && !standing) {
-      lines = opened_mid_line ? 1 : 0;
-      opened_mid_line = false;
+      lines = 0;
     }
     if (running) {
       lines++;
@@ -4619,7 +4718,7 @@ static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
          would have to climb the whole counter to find R4 again, where one
          cancelled while C4 still stood on R4 would be released on the very
          next line and tell us nothing. */
-      if (unmade && !cancelled && lines == 3) {
+      if (moved && !cancelled && lines == 3) {
         write_register(5, 0);
         cancelled = true;
       }
@@ -4630,7 +4729,7 @@ static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
     if (standing && !running) {
       spent_runs++;
       /* Two runs spent with R5 above 0, and the state stands latched. */
-      if (unmade) {
+      if (moved) {
         ended = true;
       }
     }
@@ -4640,16 +4739,15 @@ static void a_type_1_opens_each_run_with_the_r5_it_has(void) {
   TEST_EQUAL(lines, 32);
 }
 
-/* The other half of that parenthesis. A line whose C4 has already gone past
-   R4 can still arm a run on a type 1, which keeps a type 0's padding past R4
-   (pads_a_row_past_r4; ch. 12.2's note gives it a type 0, no chapter a type
-   1) — so a program that moves R4 down under its own row counter opens a run
-   on a line that was never going to end the frame. "C4 should return to 0 at
-   the end of the frame (C4=R4, C9=R9)" is false there as surely as it is on a
-   last line unmade, and no state is taken: an R5 cancelled inside such a run
-   is ch. 11.3.1's plain overflow, the thirty-two a five-bit counter has. A
-   chip that read only the C9 half of the parenthesis would hold the frame
-   instead, until C4 had climbed its whole counter to find R4 again. */
+/* A line whose C4 has already gone past R4 can still arm a run on a type 1,
+   which keeps a type 0's padding past R4 (pads_a_row_past_r4; ch. 12.2's
+   note gives it a type 0, no chapter a type 1) — so a program that moves R4
+   down under its own row counter opens a run on a line that was never going
+   to end the frame. "C4 should return to 0 at the end of the frame (C4=R4,
+   C9=R9)" is false there, and no state is taken: an R5 cancelled inside such
+   a run is ch. 11.3.1's plain overflow, the thirty-two a five-bit counter
+   has. A chip that read only the C9 half of the parenthesis would hold the
+   frame instead, until C4 had climbed its whole counter to find R4 again. */
 static void a_type_1_takes_no_state_where_c4_is_past_r4(void) {
   enum { GIVE_UP_AFTER = 4096 };
   crtc_init(&crtc, 1);
@@ -5064,6 +5162,359 @@ static void a_late_write_cannot_begin_an_adjustment(void) {
   write_register(4, 20);
   run_scanlines(1);
   TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* A write made while C0 names R0 lands as the line ends, and a type 0 has
+   already compared C9 with R9 and C4 with R4 for C4 by then: "there is a
+   special case in this counting logic when R9 is modified exactly at the
+   position C0 equals R0, while C9 was equal to R9 before C0 reached R0. In
+   this case, C4 is still incremented ... both C4 and C9 are incremented
+   simultaneously" (ch. 10.3.1.2). Ch. 11.2.2 walks the same frame's last
+   line through its three examples and that fourth case, with R5 above 0:
+   nothing moved, "C4==39/C9==0"; R4 moved inside the line, C9 "incremented
+   until it reaches the value of R5"; R9 moved inside it, "C4==38, C9==8";
+   R9 moved on the last character, "C4==39 and C9==8". Shaker's E (1) times
+   the last three on silicon, R5 at 20 and R4 moved to 50, R9 to 12, and adds
+   R4 moved on the last character: silicon opens the adjustment as though
+   nothing were written. One character earlier the write is in force on the
+   last character itself, inside the chapter's window. The write can make a
+   comparison hold there as well as find it holding: Shaker's E (3) writes R9
+   onto C9 on a row's last character, C9 at 3 and R9 at 7 before it, and
+   silicon's C4 moves on at once, with C4 on R4 as with C4 off it. */
+static void a_type_0_moves_c4_on_what_its_last_character_compared(void) {
+  static const struct {
+    uint8_t r4;
+    uint8_t row;  /* the row the line is in */
+    uint8_t line; /* and the line */
+    uint8_t r5;
+    uint8_t moved; /* the register written, or 0 for none */
+    uint8_t to;
+    uint8_t at_c0; /* the character the write is made on */
+    uint8_t next_c4;
+    uint8_t next_c9;
+  } cases[] = {
+      {38, 38, 7, 20, 0, 0, 63, 39, 0},  /* example 1 */
+      {38, 38, 7, 20, 4, 50, 62, 38, 8}, /* example 2, E (1) at #3E */
+      {38, 38, 7, 20, 4, 50, 63, 39, 0}, /* E (1) at #3F */
+      {38, 38, 7, 20, 9, 12, 62, 38, 8}, /* example 3, E (1) at #3E */
+      {38, 38, 7, 20, 9, 12, 63, 39, 8}, /* the fourth case, E (1) at #3F */
+      {38, 5, 7, 0, 9, 12, 62, 5, 8},    /* an ordinary row: C9 counts on to the new R9 */
+      {38, 5, 7, 0, 9, 12, 63, 6, 8},    /* and on its last character, both move */
+      {38, 3, 3, 0, 9, 3, 63, 4, 0},     /* E (3): C4 off R4, C9 made R9 */
+      {3, 3, 3, 0, 9, 3, 63, 4, 0},      /* E (3): C4 on R4, C9 made R9 */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
+    crtc_init(&crtc, 0);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    write_register(4, cases[index].r4);
+    write_register(5, cases[index].r5);
+    TEST_CHECK(run_to_row(cases[index].row));
+    run_scanlines(cases[index].line);
+    run_characters(cases[index].at_c0);
+    if (cases[index].moved != 0) {
+      write_register(cases[index].moved, cases[index].to);
+    }
+    run_characters(64 - cases[index].at_c0);
+    TEST_EQUAL(crtc.c0, 0);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, cases[index].next_c9);
+  }
+}
+
+/* A type 1 settles its frame's end where the line ends, from R4 and R9 as
+   they then stand: "everything is pure logic" (ch. 10.3.2.2). With R5
+   asking for padding, an R4 or R9 moved on the last line "is taken into
+   account immediately to postpone the end of the frame (in other words the
+   additional management is deactivated)", save on the last character: "if
+   C4==R4 and C9==R9 in position C0==R0, and R4 or R9 is modified in this
+   position, then the additional management remains true. The values of R4
+   and R9 are used for counting" (ch. 11.2.4). Shaker's E (1) times all four
+   on silicon with R5 at 20. With no padding asked for, R4 written onto C4
+   ends the frame — "if we were on the last line (C9=R9), then C9 goes to 0,
+   C4=0" (ch. 12.3) — and R4 moved off it does not, on the last character
+   too: Shaker's A (U), photographed on a real type 1, writes R4=1 and R4=0
+   on characters #3C to #3F of C4=1's last line and reads both taken. Nor
+   does a type 1 keep a type 0's exception at C0=1, an R9 moved there
+   spending the last line on an adjustment (ch. 10.3.1.2): "no exception"
+   (ch. 10.3.2.2), and the line is an ordinary one. */
+static void a_type_1_settles_its_frame_end_where_the_line_ends(void) {
+  static const struct {
+    uint8_t r4;  /* programmed before */
+    uint8_t row; /* the row whose last line it is */
+    uint8_t r5;
+    uint8_t moved; /* the register written, or 0 for none */
+    uint8_t to;
+    uint8_t at_c0; /* the character the write is made on */
+    bool padding;  /* the next line is an additional one */
+    uint8_t next_c4;
+    uint8_t next_c9;
+  } cases[] = {
+      {38, 38, 20, 0, 0, 63, true, 39, 0},   /* "for the first additional line, C4=R4+1" */
+      {38, 38, 20, 4, 50, 62, false, 39, 0}, /* postponed, E (1) at #3E */
+      {38, 38, 20, 4, 50, 63, true, 39, 0},  /* remains true, E (1) at #3F */
+      {38, 38, 20, 9, 12, 62, false, 38, 8}, /* postponed, E (1) at #3E */
+      {38, 38, 20, 9, 12, 63, true, 38, 8},  /* remains true, counting on to R9 */
+      {38, 38, 0, 9, 6, 1, false, 38, 8},    /* moved at C0=1: no exception of a type 0's */
+      {38, 5, 20, 9, 12, 63, false, 5, 8},   /* an ordinary row's last character: no padding */
+      {38, 1, 0, 4, 1, 60, false, 0, 0},     /* R4 written onto C4: A (U) at #3C */
+      {38, 1, 0, 4, 1, 63, false, 0, 0},     /* and at #3F */
+      {1, 1, 0, 4, 0, 60, false, 2, 0},      /* R4 moved off it: A (U) at #3C */
+      {1, 1, 0, 4, 0, 63, false, 2, 0},      /* and at #3F */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    write_register(4, cases[index].r4);
+    write_register(5, cases[index].r5);
+    TEST_CHECK(run_to_row(cases[index].row));
+    run_scanlines(7);
+    run_characters(cases[index].at_c0);
+    if (cases[index].moved != 0) {
+      write_register(cases[index].moved, cases[index].to);
+    }
+    run_characters(64 - cases[index].at_c0);
+    TEST_EQUAL(crtc.c0, 0);
+    TEST_EQUAL(crtc.vertical_adjustment_in_progress, cases[index].padding);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, cases[index].next_c9);
+  }
+}
+
+/* On a line of two characters C0=1 is both the line's last character and
+   the character ch. 10.3.1.2 names for a type 0's exception, made "at
+   position C0==1": that the exception governs it there is ours, and the
+   last line it unmakes becomes "the 'first' adjustment line", whose counts
+   ch. 11.2.2's third example gives, "C4==38, C9==8". A type 1 has no such
+   exception — "no exception" (ch. 10.3.2.2), its R0 "accepts all values"
+   (ch. 13.3) — so there C0=1 is C0=R0, and ch. 11.2.4's padding "remains
+   true", counted on the registers written. */
+static void a_two_character_line_keeps_each_types_own_rule(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r5;
+    uint8_t moved; /* the register written at C0=1 */
+    uint8_t to;
+    uint8_t next_c4;
+    uint8_t next_c9;
+  } cases[] = {
+      {0, 0, 4, 50, 38, 8},  /* the C0=1 exception */
+      {0, 0, 9, 12, 38, 8},  /* likewise */
+      {1, 20, 4, 50, 39, 0}, /* remains true: C9 meets R9, C4 moves on */
+      {1, 20, 9, 12, 38, 8}, /* remains true: C9 counts on to R9 written */
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x30, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    write_register(5, cases[index].r5);
+    TEST_CHECK(run_to_row(38));
+    run_scanlines(7);
+    write_register(0, 1);
+    run_characters(1);
+    write_register(cases[index].moved, cases[index].to);
+    run_characters(1);
+    TEST_EQUAL(crtc.c0, 0);
+    TEST_CHECK(crtc.vertical_adjustment_in_progress);
+    TEST_EQUAL(crtc.c4, cases[index].next_c4);
+    TEST_EQUAL(crtc.c9, cases[index].next_c9);
+  }
+}
+
+/* The padding a type 1's last line stood on at C0=R0 "remains true" through
+   a write on that character (ch. 11.2.4), and the line interlace adds is
+   additional management as R5's lines are: "an additional adjustment line is
+   added on the even frames" (ch. 11.1), "at the end of the frame (after the
+   R5 lines if necessary)" (ch. 19.6.2, a type 1's). On the even frame that
+   is owed it, R4 moved on the last character keeps the line; that the
+   "remains true" reaches this line is ours. */
+static void a_type_1s_interlace_line_outlives_a_write_on_the_last_character(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 1, 7, 0, 0, 0x30, 0};
+  crtc_init(&crtc, 1);
+  for (int reg = 0; reg < 14; reg++) {
+    write_register(reg, values[reg]);
+  }
+  bool tried = false;
+  for (int frame = 0; frame < 4 && !tried; frame++) {
+    TICK_UNTIL(crtc.c4 == 38 && crtc.c9 == 7 && crtc.c0 == 63);
+    if (crtc.interlace_line_owed) {
+      write_register(4, 50);
+      crtc_tick(&crtc);
+      TEST_CHECK(crtc.vertical_adjustment_in_progress);
+      tried = true;
+    } else {
+      crtc_tick(&crtc);
+    }
+  }
+  TEST_CHECK(tried);
+}
+
+/* And a padding that outlives the write is the management ch. 11.3.2 has a
+   type 1 latch its state on, "if R5>0 when C4 should return to 0 at the end
+   of the frame (C4=R4, C9=R9)", which held at C0=R0. Ours, that the state
+   goes with the padding the write cannot take back; R5 cancelled inside the
+   run then holds the frame until C4 comes round to R4, past the thirty-two
+   lines a run without the state would last. */
+static void a_padding_kept_through_a_last_character_write_takes_the_r5_state(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 20, 25, 30, 0, 7, 0, 0, 0x30, 0};
+  crtc_init(&crtc, 1);
+  for (int reg = 0; reg < 14; reg++) {
+    write_register(reg, values[reg]);
+  }
+  TICK_UNTIL(crtc.c4 == 38 && crtc.c9 == 7 && crtc.c0 == 63 && crtc.frames_counted >= 2);
+  write_register(4, 50);
+  crtc_tick(&crtc);
+  TEST_CHECK(crtc.vertical_adjustment_in_progress);
+  TEST_CHECK(crtc.r5_opened_the_run);
+  int lines = 0;
+  while (crtc.vertical_adjustment_in_progress && lines < 1000) {
+    lines++;
+    if (lines == 3) {
+      write_register(5, 0);
+    }
+    do {
+      crtc_tick(&crtc);
+    } while (crtc.c0 != 0);
+  }
+  TEST_CHECK(lines > 32);
+}
+
+/* On the two ASICs C4 stands on R4 through the padding, so with an R4 of 0
+   the padding's first line reads C4, C9 and C0 at 0 as a frame's head does,
+   without being one. The pointer is left alone, the padding going on
+   "without updating the video pointer" (ch. 11.2.6), and the frame parity
+   turns once a frame, "between each frame" (ch. 19.5.5). The frame sync is
+   another matter: "if the condition C4=R7 and C9=C0=0 has not changed and
+   is renewed in the absence of an active VSYNC, then a VSYNC starts again"
+   (ch. 16.4.4), and the padding's first line renews it — so a sync of two
+   lines starts there as well as at the frame's head, twice a frame. */
+static void an_asic_padding_on_an_r4_of_0_is_no_frame_head(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x2E, 0, 8, 1, 0, 0, 7, 0, 0, 0x30, 0};
+    crtc_init(&crtc, type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    for (long tick = 0; tick < 100L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0 &&
+               !crtc.vertical_adjustment_in_progress);
+    unsigned frames = crtc.frames_counted;
+    bool parity = crtc.parity_frame;
+    unsigned turns = 0;
+    unsigned vsyncs = 0;
+    bool vsync_before = crtc.vsync; /* the head's own sync is not counted */
+    bool pointer_kept = true;
+    while ((unsigned)(crtc.frames_counted - frames) < 8) {
+      uint64_t pins = crtc_tick(&crtc);
+      bool vsync = (pins & CRTC_VSYNC) != 0;
+      vsyncs += vsync && !vsync_before ? 1 : 0;
+      vsync_before = vsync;
+      turns += crtc.parity_frame != parity ? 1 : 0;
+      parity = crtc.parity_frame;
+      if (crtc.vertical_adjustment_in_progress && crtc.c0 == 0 && crtc.vma == 0x3000) {
+        pointer_kept = false;
+      }
+    }
+    TEST_CHECK(pointer_kept);
+    TEST_EQUAL(turns, 8u);
+    TEST_EQUAL(vsyncs, 16u);
+  }
+}
+
+/* And a line of one character inside that padding lands no C4 increment on
+   them, the body never moving C4 there: "If R0 is 0, then C9 and R4
+   continue to be managed normally" (ch. 13.5). */
+static void an_asic_padding_stands_on_r4_through_a_line_of_one_character(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 10, 16, 25, 60, 0, 3, 0, 0, 0x30, 0};
+    crtc_init(&crtc, type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    TICK_UNTIL(crtc.vertical_adjustment_in_progress && crtc.c9 == 5 && crtc.c0 == 10);
+    write_register(0, 0);
+    run_characters(4);
+    write_register(0, 63);
+    bool held = true;
+    for (long waited = 0; waited < 40L * SCANLINE && crtc.vertical_adjustment_in_progress;
+         waited++) {
+      crtc_tick(&crtc);
+      if (crtc.vertical_adjustment_in_progress && crtc.c4 != 10) {
+        held = false;
+      }
+    }
+    TEST_CHECK(held);
+  }
+}
+
+/* R6's border "shuts where C4 meets R6 and nothing but a new frame opens it"
+   (crtc.c; ch. 18.2.1, 18.2.2), and the first line of a padding the two
+   ASICs hold on an R4 of 0 is no new frame for all that it reads like one.
+   R6 at 0 borders the frame's row; written to 1 inside it and back to 0
+   inside the padding, it leaves nothing to open the border before the next
+   frame. */
+static void an_asic_padding_on_an_r4_of_0_keeps_r6s_border(void) {
+  for (uint8_t type = 3; type <= 4; type++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 4, 0, 10, 0, 7, 0, 0, 0x30, 0};
+    crtc_init(&crtc, type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    for (long tick = 0; tick < 200L * SCANLINE; tick++) {
+      crtc_tick(&crtc);
+    }
+    unsigned padding_lines = 0;
+    bool displayed_in_the_padding = false;
+    for (long tick = 0; tick < 40L * SCANLINE; tick++) {
+      if (!crtc.vertical_adjustment_in_progress && crtc.c4 == 0 && crtc.c9 == 3 && crtc.c0 == 10) {
+        write_register(6, 1);
+      }
+      if (crtc.vertical_adjustment_in_progress && crtc.c9 == 3 && crtc.c0 == 10) {
+        write_register(6, 0);
+      }
+      uint64_t pins = crtc_tick(&crtc);
+      if (crtc.vertical_adjustment_in_progress) {
+        padding_lines += crtc.c0 == 0 ? 1 : 0;
+        displayed_in_the_padding = displayed_in_the_padding || (pins & CRTC_DISPTMG) != 0;
+      }
+    }
+    TEST_CHECK(padding_lines > 0);
+    TEST_CHECK(!displayed_in_the_padding);
+  }
+}
+
+/* A write on a type 0's last character can make the comparison that moves
+   C4 hold inside an adjustment as on an ordinary row: a row armed for
+   padding with C4 carried past R4 (ch. 12.2's note), R4 written onto C4 on
+   its last line's last character, and C4 moves on with C9 at 0 rather than
+   standing while C9 climbs to R5. Ours, and nothing grades it
+   (keeps_its_last_characters_comparisons). */
+static void a_type_0_write_on_the_last_character_makes_c4_stand_on_r4(void) {
+  static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 4, 25, 30, 0, 7, 0, 0, 0x30, 0};
+  crtc_init(&crtc, 0);
+  for (int reg = 0; reg < 14; reg++) {
+    write_register(reg, values[reg]);
+  }
+  TEST_CHECK(run_to_row(10));
+  run_characters(5);
+  write_register(4, 5);
+  run_scanlines(7);
+  run_characters(58);
+  TEST_EQUAL(crtc.c0, 63);
+  write_register(4, 10);
+  run_characters(1);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 11);
   TEST_EQUAL(crtc.c9, 0);
 }
 
@@ -6865,10 +7316,11 @@ static void a_type_1_carries_its_offset_into_the_added_lines(void) {
 
    Both halves of what the chapter names of that write are here: the value
    above 0, which an R4 of 0 or of &80 — seven bits, so also 0 — does not
-   meet, and the position C0=R0, which a write made along the line does not.
-   That row reaches its run the ordinary way, at the end of the frame's last
-   line and with C4 still at 0, so the carry stands because the write was not
-   where the exception wants it and not because the run was made otherwise. */
+   meet, and the position C0=R0. A write made along the line does not reach
+   the run at all: R4 moved on a frame's last line while R5 asks for padding
+   "is taken into account immediately to postpone the end of the frame (in
+   other words the additional management is deactivated)", and only one made
+   at C0=R0 leaves the run standing (ch. 11.2.4). */
 static void an_r4_moved_at_a_lines_end_takes_the_carry_away(void) {
   static const struct {
     uint8_t at_c9; /* the line of the frame's last row the write lands on */
@@ -6876,15 +7328,16 @@ static void an_r4_moved_at_a_lines_end_takes_the_carry_away(void) {
     uint8_t to;
     bool then_taken_back; /* a later write, away from a line's end */
     bool moved_inside_the_run;
+    bool opens; /* a run with C4 at 1 */
     bool carries;
   } cases[] = {
-      {7, -1, 5, false, false, true},    /* nothing moved */
-      {7, 63, 5, false, false, false},   /* the chapter's own exception */
-      {7, 63, 0, false, false, true},    /* moved there, but not above 0 */
-      {7, 63, 0x80, false, false, true}, /* nor is &80, which R4 keeps seven bits of */
-      {7, 30, 5, false, false, true},    /* moved above 0, but not at the line's end */
-      {3, 63, 5, true, false, true},     /* and taken back by a later write */
-      {7, -1, 5, false, true, true},     /* moved once the run had opened */
+      {7, -1, 5, false, false, true, true},    /* nothing moved */
+      {7, 63, 5, false, false, true, false},   /* the chapter's own exception */
+      {7, 63, 0, false, false, true, true},    /* moved there, but not above 0 */
+      {7, 63, 0x80, false, false, true, true}, /* nor is &80, which R4 keeps seven bits of */
+      {7, 30, 5, false, false, false, false},  /* moved above 0 along the line: postponed */
+      {3, 63, 5, true, false, true, true},     /* and taken back by a later write */
+      {7, -1, 5, false, true, true, true},     /* moved once the run had opened */
   };
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 20, 25, 30, 0, 7, 0, 0, 0x10, 0};
@@ -6920,7 +7373,7 @@ static void an_r4_moved_at_a_lines_end_takes_the_carry_away(void) {
       crtc_tick(&crtc);
       reached = crtc.vertical_adjustment_in_progress && crtc.c4 == 1 && crtc.c0 == 0 && crtc.c9 > 0;
     }
-    TEST_CHECK(reached);
+    TEST_EQUAL(reached, cases[index].opens);
     if (!reached) {
       continue;
     }
@@ -6946,47 +7399,6 @@ static void an_r4_moved_at_a_lines_end_takes_the_carry_away(void) {
       TEST_CHECK(crtc.vma != 0x2040);
     }
   }
-}
-
-/* The exception wants C0 standing on R0, and not merely at or past it. An R0
-   pulled under C0 and left there for a character tells the two apart: the
-   write that follows lands where C0 is past R0 without being on it, so a
-   chip reading the comparison the other way would refuse a carry this one
-   grants. */
-static void the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0(void) {
-  static const uint8_t values[14] = {63, 40, 46, 0x8E, 0, 20, 25, 30, 0, 7, 0, 0, 0x10, 0};
-  crtc_init(&crtc, 1);
-  for (int reg = 0; reg < 14; reg++) {
-    write_register(reg, values[reg]);
-  }
-  bool there = false;
-  for (long character = 0; character < 8L * 64 * 40 && !there; character++) {
-    crtc_tick(&crtc);
-    there = !crtc.vertical_adjustment_in_progress && crtc.c4 == 0 && crtc.c9 == 7 && crtc.c0 == 30;
-  }
-  TEST_CHECK(there);
-  if (!there) {
-    return;
-  }
-  write_register(0, 10); /* R0 pulled under C0, which stands at 30 */
-  crtc_tick(&crtc);      /* and a character drawn with it there */
-  write_register(4, 5);  /* above 0, past R0, and not on it */
-  write_register(0, 63); /* the line put back */
-  bool reached = false;
-  for (long character = 0; character < 8L * 64 * 40 && !reached; character++) {
-    crtc_tick(&crtc);
-    reached = crtc.vertical_adjustment_in_progress && crtc.c4 == 1 && crtc.c0 == 0 && crtc.c9 > 0;
-  }
-  TEST_CHECK(reached);
-  if (!reached) {
-    return;
-  }
-  write_register(12, 0x20);
-  write_register(13, 0x40);
-  do {
-    crtc_tick(&crtc);
-  } while (crtc.c0 != 0);
-  TEST_EQUAL(crtc.vma, 0x2040);
 }
 
 /* R8's bits 5 and 4 are the SKEW-DISPTMG delays, which ch. 19.1's table
@@ -7578,7 +7990,7 @@ int main(void) {
   TEST_RUN(a_run_opened_past_r4_is_the_same_length_on_the_types_that_open_one);
   TEST_RUN(the_two_asics_raise_a_sync_only_at_a_frames_corner);
   TEST_RUN(the_two_asics_take_the_frames_end_where_the_line_ends);
-  TEST_RUN(a_type_2_and_the_two_asics_take_r5_on_any_character_of_a_last_line);
+  TEST_RUN(types_1_to_4_take_r5_on_any_character_of_a_last_line);
   TEST_RUN(a_type_2_makes_a_last_line_where_r4_or_r9_is_written);
   TEST_RUN(a_type_2_reads_a_write_of_r4_or_r9_on_its_own_character);
   TEST_RUN(a_type_2_takes_its_management_back_only_on_a_mismatch);
@@ -7609,6 +8021,7 @@ int main(void) {
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
   TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);
   TEST_RUN(the_asic_hsync_end_bit_follows_a_width_of_nothing);
+  TEST_RUN(the_asic_screen_ends_once_in_a_padded_frame);
   TEST_RUN(the_asic_row_end_bit_stands_for_the_line_the_row_ends_on);
   TEST_RUN(the_asic_frame_timer_turns_every_sixteenth_frame);
   TEST_RUN(each_type_keeps_its_own_vsync_length);
@@ -7638,6 +8051,7 @@ int main(void) {
   TEST_RUN(a_pulse_on_an_odd_line_lengthens_an_even_frame);
   TEST_RUN(types_3_and_4_count_the_interlace_as_their_chapter_gives_it);
   TEST_RUN(types_0_and_2_alone_can_freeze_their_frame_parity);
+  TEST_RUN(each_type_draws_the_first_table_of_adjustment_lines);
   TEST_RUN(each_type_counts_the_adjustment_lines_its_own_way);
   TEST_RUN(a_type_1_holds_a_frame_open_where_r5_is_cancelled);
   TEST_RUN(a_type_1_opens_each_run_with_the_r5_it_has);
@@ -7664,6 +8078,15 @@ int main(void) {
   TEST_RUN(r9_moved_at_c0_1_makes_the_line_an_adjustment);
   TEST_RUN(r4_moved_at_c0_1_makes_the_line_an_adjustment);
   TEST_RUN(a_late_write_cannot_begin_an_adjustment);
+  TEST_RUN(a_type_0_moves_c4_on_what_its_last_character_compared);
+  TEST_RUN(a_type_1_settles_its_frame_end_where_the_line_ends);
+  TEST_RUN(a_two_character_line_keeps_each_types_own_rule);
+  TEST_RUN(a_type_1s_interlace_line_outlives_a_write_on_the_last_character);
+  TEST_RUN(a_padding_kept_through_a_last_character_write_takes_the_r5_state);
+  TEST_RUN(an_asic_padding_on_an_r4_of_0_is_no_frame_head);
+  TEST_RUN(an_asic_padding_stands_on_r4_through_a_line_of_one_character);
+  TEST_RUN(an_asic_padding_on_an_r4_of_0_keeps_r6s_border);
+  TEST_RUN(a_type_0_write_on_the_last_character_makes_c4_stand_on_r4);
   TEST_RUN(an_r5_cancelled_in_time_adds_no_line);
   TEST_RUN(an_interlace_mode_adds_a_line_to_the_even_frames);
   TEST_RUN(an_interlace_mode_holds_the_even_frames_vsync_back);
@@ -7719,7 +8142,6 @@ int main(void) {
   TEST_RUN(types_1_and_2_leave_their_latch_frozen_where_c0_cannot_reach_r1);
   TEST_RUN(a_type_1_carries_its_offset_into_the_added_lines);
   TEST_RUN(an_r4_moved_at_a_lines_end_takes_the_carry_away);
-  TEST_RUN(the_carry_survives_an_r4_moved_where_r0_has_been_pulled_under_c0);
   TEST_RUN(the_skew_delays_the_border_at_both_ends);
   TEST_RUN(only_types_0_3_and_4_take_a_skew);
   TEST_RUN(a_skew_carries_the_border_round_the_lines_end);
