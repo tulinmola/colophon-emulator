@@ -72,7 +72,7 @@ The core stays as it is. A host-side module owns buffers, flag tables, rings and
 
 This is not a new rule. It is the existing one, applied without amendment: the core allocates nothing and does no I/O, and observation *is* buffers and policy.
 
-Two observers exist so far, and they share almost nothing. The command line's [map of writes](command-line.en.md#the-map-of-writes) is an array of counters; the [player](https://github.com/tulinmola/colophon-player) is a page of elements watching one chip each. What is common between them is one line of pin masking, which is why there is no shared observation framework: inventing one for consumers that do not exist is the mistake this whole argument is a record of not making.
+The observers that exist share almost nothing. The command line's [map of writes](command-line.en.md#the-map-of-writes) is an array of counters; the [player](https://github.com/tulinmola/colophon-player) is a page of elements watching one chip each. What is common between them is one line of pin masking, which is why there is no shared observation framework: inventing one for consumers that do not exist is the mistake this whole argument is a record of not making.
 
 ## The company we keep
 

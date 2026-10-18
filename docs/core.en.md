@@ -96,6 +96,6 @@ That is no longer a claim. A ZX Spectrum was built beside the CPC out of the sam
 
 ## What this interface promises
 
-It is young, and it is shaped by its two hosts: the command line in this repository, and the [player](https://github.com/tulinmola/colophon-player), which compiles the same C to WebAssembly. It will change as the machine grows, and no version of it has been declared stable.
+It is young, and it is shaped by the hosts built on it: the command line in this repository, and every project that carries the same C beside a bridge of its own, the [player](https://github.com/tulinmola/colophon-player) among them, which compiles it to WebAssembly. It will change as the machine grows, and no version of it has been declared stable.
 
 A host that needs to reach into a structure from another language should generate what it needs from these headers rather than write it down. The player does exactly that: the field offsets its panels read are produced by a generator at build time, so renaming a field breaks a build instead of leaving a table quietly reporting a number that is no longer true.
