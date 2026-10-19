@@ -93,6 +93,14 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
     *problem = "holds more RAM than this machine has";
     return false;
   }
+  /* With no PAL fitted, io_write never moves the MMR from &C0, so any other
+     value comes from a machine of another shape — and configurations 1-7
+     would map banks past the end of the RAM. */
+  bool pal_fitted = cpc->ram_size >= 0x20000;
+  if ((bytes[AT_RAM_CONFIGURATION] & 0x3F) != 0 && !pal_fitted) {
+    *problem = "needs a PAL this machine does not have";
+    return false;
+  }
 
   /* The CPU resumes between instructions: everything mid-flight in its
      micro-program is cleared, then the registers are laid in. */

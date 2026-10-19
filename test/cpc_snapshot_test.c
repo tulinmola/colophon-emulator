@@ -257,6 +257,31 @@ static void a_64k_snapshot_loads_into_a_64k_machine(void) {
   TEST_CHECK(!cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
 }
 
+/* Without a PAL, a banking command dies on the empty socket, so a snapshot
+   that records one was taken on a machine of another shape. It is refused,
+   and the machine it was offered to is left as it was. */
+static void a_64k_machine_refuses_a_banked_snapshot(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, 0x10000);
+  run(&cpc, 40000);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  power_on(&restored, other_ram, 0x10000);
+  TEST_CHECK(restored.cpu.pc != cpc.cpu.pc); /* a half-done load would show */
+
+  /* Configurations 1-7 each map a bank above 3; &08 maps nothing new, but
+     selects page 1, which no 64K machine can latch. */
+  static const uint8_t banked[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+  for (size_t index = 0; index < sizeof banked; index++) {
+    bytes[0x41] = banked[index];
+    problem = NULL;
+    TEST_CHECK(!cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+    TEST_CHECK(problem != NULL);
+  }
+  TEST_EQUAL(restored.cpu.pc, 0x0000);
+  TEST_EQUAL(restored.mmr, 0xC0);
+}
+
 int main(void) {
   TEST_RUN(a_snapshot_is_refused_unless_it_is_one);
   TEST_RUN(a_machine_survives_the_round_trip);
@@ -265,5 +290,6 @@ int main(void) {
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
+  TEST_RUN(a_64k_machine_refuses_a_banked_snapshot);
   return TEST_REPORT("cpc snapshot");
 }

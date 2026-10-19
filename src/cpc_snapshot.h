@@ -42,7 +42,9 @@
 size_t cpc_snapshot_size(const cpc_t *cpc);
 
 /* Restore a machine from a snapshot. Returns false having pointed `problem`
- * at a sentence saying what is wrong with the bytes. */
+ * at a sentence saying what is wrong with the bytes, or why this machine
+ * cannot take them: a dump larger than its RAM, or, with no PAL fitted, an
+ * MMR other than &C0, the only value it can then hold. */
 bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const char **problem);
 
 /* Write a machine as a version 1 snapshot; `capacity` must be at least

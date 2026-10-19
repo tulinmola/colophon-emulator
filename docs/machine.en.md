@@ -81,6 +81,8 @@ The format is the `.cdt`, which is a `.tzx` under another name, so one reader se
 
 A machine writes itself out as an SNA snapshot and another reads it back and carries on. Versions 1, 2 and 3 are read, taking the fields they share; version 1 is written, because every emulator can read it.
 
+A snapshot loads only into a machine that can hold it. A 128K dump will not go into a 64K machine, and neither will a snapshot that records the PAL holding anything but zero: a 64K machine has no PAL, so that snapshot was taken on a machine of another shape.
+
 What version 1 cannot carry is the CRTC's internal counters, so a machine resumed from one restarts its frame instead of continuing mid-raster. Version 3 has room for them, along with the CRTC type and the drive's motor and head — worth reading the day there is something here that can act on them.
 
 ### Discs
