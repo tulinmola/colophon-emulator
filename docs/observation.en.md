@@ -52,6 +52,8 @@ Which means the design question was never performance. It is where the code shou
 
 One detail a prototype turned up: latch the address of the last opcode fetch as it goes past. By the time a write lands the program counter has moved on, and what a debugger must report is the instruction that did it.
 
+One question the pins cannot settle. An opcode fetch carries M1, but the bytes of an instruction after it — an immediate, an address, a displacement — are read with MREQ and RD alone, as a byte of data is, so a watch on reads built from the pins alone stops on an instruction's own operands. The processor knows which is which, and [the rule](#the-rule) is why it says so.
+
 Time travel falls out of the same properties. A snapshot is 131,328 bytes and takes 3.2 µs to write, so a ring of 128 frames is 16.8 MB, holds 2.6 seconds of history, and costs 1.7% to keep filled. Rewind is a ring of a thing that already exists.
 
 ## The rule
@@ -65,6 +67,8 @@ A **T-state counter** was the first casualty. How time is measured, when it rese
 The **physical address of a write** went the same way. It looked like reaching into internals and it is not: `write_page` and `ram` are public and the rest is pointer subtraction. Nothing was hidden, so nothing needed exposing.
 
 The **video fetch address** is the one that survived, and it survived because it is a hardware fact with a citation rather than a policy: it encodes how *this board* routes the 6845's address lines to RAM. It was file-local, so a host had to keep a second copy of the wiring, which would diverge silently the day the wiring was corrected. It is now [`cpc_video_address`](core.en.md#reading-and-writing-a-machine), and it is the only file-local function in the core a host could ever have wanted — every other one either mutates state or is internal to the processor.
+
+One fact internal to the processor was wanted all the same: whether a read takes a byte of the instruction or a byte of data. It is the processor's own knowledge, which the emulator keeps only in its micro-program, in enumerations private to `z80.c`, so a host that worked it out from the public `step`, `program` and `program_index` fields would keep a second copy of them, diverging silently the day the micro-program changed. It is now [`z80_reading_operand`](core.en.md#reading-and-writing-a-machine).
 
 ## The layering
 

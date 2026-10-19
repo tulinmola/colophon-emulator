@@ -656,6 +656,195 @@ static void test_prefix_is_not_a_complete_instruction(void) {
   TEST_EQUAL(cpu.r, 2); /* one refresh per fetch */
 }
 
+/* A memory read without M1, as a host watching the bus sees it begin. */
+typedef struct {
+  uint16_t address;
+  bool operand;
+} memory_read;
+
+#define MOST_READS 4
+
+typedef struct {
+  const char *name;
+  uint8_t program[4];
+  size_t length;
+  memory_read reads[MOST_READS];
+  int read_count;
+} reading_case;
+
+/* Runs one instruction and whatever interrupt sequence follows it, as
+   run_with_interrupt does, holding WAIT on the ticks wait_pattern names, and
+   records each read as it reaches the bus with whether the processor says it
+   takes an operand. The answer is asked before every tick too: it must hold
+   through each machine cycle from its first tick, and be true only for a
+   cycle that reads. Returns how many reads began, which may be more than it
+   had room to record. */
+static int record_reads(const char *name, z80_t *cpu, uint64_t inputs, uint8_t vector,
+                        unsigned wait_pattern, memory_read *reads) {
+  const uint64_t read = Z80_MREQ | Z80_RD;
+  uint64_t pins = 0;
+  uint64_t pins_before = 0;
+  bool cycle_operand = false;
+  bool cycle_read = false;
+  int count = 0;
+  for (int ticks = 1; ticks <= TICK_BUDGET; ticks++) {
+    if ((wait_pattern >> (ticks % 8)) & 1) {
+      pins |= Z80_WAIT;
+    } else {
+      pins &= ~Z80_WAIT;
+    }
+    const bool operand = z80_reading_operand(cpu);
+    if (z80_next_cycle(cpu) != Z80_CYCLE_NONE) {
+      if (cycle_operand && !cycle_read) {
+        TEST_FAIL("%s: an operand was answered for a cycle that read nothing", name);
+      }
+      cycle_operand = operand;
+      cycle_read = false;
+    } else if (operand != cycle_operand) {
+      TEST_FAIL("%s: the answer changed inside a machine cycle, on tick %d", name, ticks);
+    }
+    pins = z80_tick(cpu, pins | inputs);
+    if ((pins & (read | Z80_M1)) == read && (pins_before & read) != read) {
+      if (z80_reading_operand(cpu) != cycle_operand) {
+        TEST_FAIL("%s: the answer changed as the read reached the bus", name);
+      }
+      if (count < MOST_READS) {
+        reads[count] = (memory_read){z80_address(pins), cycle_operand};
+      }
+      count++;
+      cycle_read = true;
+    }
+    pins_before = pins;
+    if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
+      pins = z80_set_data(pins, vector);
+    } else {
+      pins = service_bus(pins);
+    }
+    if (z80_instruction_complete(cpu)) {
+      if (cycle_operand && !cycle_read) {
+        TEST_FAIL("%s: an operand was answered for a cycle that read nothing", name);
+      }
+      return count;
+    }
+  }
+  TEST_FAIL("%s: the instruction did not finish within %d T-states", name, TICK_BUDGET);
+  return count;
+}
+
+/* The layouts are the ones "Decoding Z80 Opcodes" gives
+   (http://www.z80.info/decoding.htm): n, nn and d follow the opcode, and
+   under DD CB the displacement comes before the opcode. The program stands
+   at &1000, HL at &3000, IX at &2000 and SP at &8000. LD A,(nn) reads the
+   last byte of its own address as data, just behind where PC then points. */
+static const reading_case reading_cases[] = {
+    {"LD A,n", {0x3E, 0x42}, 2, {{0x1001, true}}, 1},
+    {"LD A,(nn) reading its own operand",
+     {0x3A, 0x02, 0x10},
+     3,
+     {{0x1001, true}, {0x1002, true}, {0x1002, false}},
+     3},
+    {"JP nn", {0xC3, 0x00, 0x20}, 3, {{0x1001, true}, {0x1002, true}}, 2},
+    {"JR e", {0x18, 0x10}, 2, {{0x1001, true}}, 1},
+    {"IN A,(n)", {0xDB, 0xFE}, 2, {{0x1001, true}}, 1},
+    {"LD A,(HL)", {0x7E}, 1, {{0x3000, false}}, 1},
+    {"LD (IX+d),n", {0xDD, 0x36, 0x05, 0x99}, 4, {{0x1002, true}, {0x1003, true}}, 2},
+    {"BIT 0,(IX+d)",
+     {0xDD, 0xCB, 0x05, 0x46},
+     4,
+     {{0x1002, true}, {0x1003, true}, {0x2005, false}},
+     3},
+    {"LD BC,(nn)",
+     {0xED, 0x4B, 0x00, 0x30},
+     4,
+     {{0x1002, true}, {0x1003, true}, {0x3000, false}, {0x3001, false}},
+     4},
+    {"POP BC", {0xC1}, 1, {{0x8000, false}, {0x8001, false}}, 2},
+    {"EX (SP),HL", {0xE3}, 1, {{0x8000, false}, {0x8001, false}}, 2},
+    {"LDI", {0xED, 0xA0}, 2, {{0x3000, false}}, 1},
+};
+
+static void check_reads(const char *name, const memory_read *reads, int count,
+                        const memory_read *expected, int expected_count) {
+  if (count != expected_count) {
+    TEST_FAIL("%s: %d reads, expected %d", name, count, expected_count);
+    return;
+  }
+  for (int index = 0; index < count; index++) {
+    if (reads[index].address != expected[index].address ||
+        reads[index].operand != expected[index].operand) {
+      TEST_FAIL("%s: read number %d, of &%04X %s, expected of &%04X %s", name, index + 1,
+                reads[index].address, reads[index].operand ? "as an operand" : "as data",
+                expected[index].address, expected[index].operand ? "as an operand" : "as data");
+    }
+  }
+}
+
+/* Each case runs free, and then under a WAIT that holds some reads of each
+   kind at their second tick. */
+static void test_operand_reads_are_told_from_data(void) {
+  const unsigned wait_patterns[] = {0x00, 0x66};
+  for (size_t pattern = 0; pattern < sizeof wait_patterns / sizeof *wait_patterns; pattern++) {
+    for (size_t index = 0; index < sizeof reading_cases / sizeof *reading_cases; index++) {
+      const reading_case *reading = &reading_cases[index];
+      z80_t cpu;
+      start_at(&cpu, reading->program, reading->length);
+      cpu.h = 0x30;
+      cpu.l = 0x00;
+      cpu.ixh = 0x20;
+      cpu.ixl = 0x00;
+      memory_read reads[MOST_READS];
+      int count = record_reads(reading->name, &cpu, 0, 0xFF, wait_patterns[pattern], reads);
+      check_reads(reading->name, reads, count, reading->reads, reading->read_count);
+    }
+  }
+}
+
+/* The response to an interrupt in mode 2 reads its destination from the
+   table at I:vector, which is data, not an operand. */
+static void test_a_vector_read_is_data(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x00};
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 2;
+  cpu.i = 0x40;
+  cpu.iff1 = cpu.iff2 = true;
+  memory_read reads[MOST_READS];
+  int count = record_reads("mode 2", &cpu, Z80_INT, 0xFE, 0, reads);
+  const memory_read expected[] = {{0x40FE, false}, {0x40FF, false}};
+  check_reads("mode 2", reads, count, expected, sizeof expected / sizeof *expected);
+}
+
+/* A host that writes the step a cycle is at can leave no program behind it,
+   and the answer is false rather than read from before the program. The
+   instruction run first is LD BC,nn, whose opcode the processor keeps just
+   before the program, so that a read from there answers an operand; the
+   sanitized tier sees such a read whatever lies there. */
+static void test_a_step_written_without_a_program_reads_no_operand(void) {
+  z80_t cpu;
+  const uint8_t program[] = {0x01, 0x00, 0x00};
+  start_at(&cpu, program, sizeof program);
+  const uint64_t read = Z80_MREQ | Z80_RD;
+  uint64_t pins = 0;
+  for (int ticks = 0; ticks < 10; ticks++) {
+    pins = service_bus(z80_tick(&cpu, pins));
+  }
+  /* Between instructions, with program_length and program_index at 0, every
+     step the processor has and some past them; a read's first step puts the
+     read on the bus on the second tick after it. */
+  for (uint8_t step = 0; step < 32; step++) {
+    z80_t written = cpu;
+    written.step = step;
+    uint64_t bus = 0;
+    for (int ticks = 0; ticks < 2; ticks++) {
+      bus = z80_tick(&written, bus);
+      if ((bus & (read | Z80_M1)) == read) {
+        TEST_CHECK(!z80_reading_operand(&written));
+      }
+      bus = service_bus(bus);
+    }
+  }
+}
+
 int main(void) {
   TEST_RUN(test_reset_state);
   TEST_RUN(test_unprefixed_page_completes);
@@ -666,6 +855,9 @@ int main(void) {
   TEST_RUN(test_ddcb_page_completes);
   TEST_RUN(test_fdcb_page_completes);
   TEST_RUN(test_prefix_is_not_a_complete_instruction);
+  TEST_RUN(test_operand_reads_are_told_from_data);
+  TEST_RUN(test_a_vector_read_is_data);
+  TEST_RUN(test_a_step_written_without_a_program_reads_no_operand);
   TEST_RUN(test_wait_stretches_every_kind_of_cycle);
   TEST_RUN(test_wait_adds_one_tstate_per_held_tick);
   TEST_RUN(test_wait_holds_the_bus_steady);

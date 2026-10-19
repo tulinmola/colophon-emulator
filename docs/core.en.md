@@ -78,11 +78,13 @@ A CPC's links are the ones soldered on its board: the refresh rate, which decide
 
 Every field of every chip is public. This is deliberate and not an oversight: there is no encapsulation to work around anywhere in the core, which is the property [observation](observation.en.md) is built on.
 
-Three functions exist anyway, because each encodes something a host would otherwise have to know for itself:
+A few functions exist anyway, because each encodes something a host would otherwise have to know for itself:
 
 `cpc_peek` and `cpc_poke` resolve through the same mapping the processor's own memory cycles use, so a peek under an enabled ROM sees the ROM and a poke lands in the RAM beneath it.
 
 `cpc_video_address` applies the board's rewiring of the 6845's address lines — which is what scatters a character row across eight blocks two kilobytes apart — to the pins the chip put out on its last character clock. It takes the machine and not the chip, and that is not an accident: by the time a caller holds the pins, the chip's counters have already moved past the values that went out on the wires, so a function reading the counters would name an address the machine never fetched from.
+
+`z80_reading_operand` says whether the memory read on the bus takes one of the instruction's bytes after its opcode or a byte of data, which the pins cannot: both drive MREQ and RD without M1. A host watching what a program reads asks it, and keeps an instruction's operands out.
 
 A host that sets the registers behind the memory map from outside — restoring a snapshot, say — owes the machine a `cpc_remap` afterwards.
 
