@@ -220,12 +220,12 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
 }
 
 /* Nor is a restore a write a program made on a character: the chip must not
-   read it as one, where an R3 would let a sync through on the first tick
-   back and an R4 or R9 make a type 2's last line of the line it stands on —
-   here one whose C4 and C9 the restored R4 and R9 meet — and an R4 written
-   during a type 2's line head compares with the R9 restored. Nor may a type
-   2's load of R12/R13 on the character just drawn take the restored ones as
-   a late write. */
+   read it as one, where an R3 would let a type 0's second sync through on
+   the first tick back and an R4 or R9 make a type 2's last line of the line
+   it stands on — here one whose C4 and C9 the restored R4 and R9 meet — and
+   an R4 written during a type 2's line head compares with the R9 restored.
+   Nor may a type 2's load of R12/R13 on the character just drawn take the
+   restored ones as a late write. */
 static void a_restore_is_no_write_on_a_character(void) {
   load_a_running_program();
   power_on(&cpc, ram, sizeof ram);
@@ -247,6 +247,46 @@ static void a_restore_is_no_write_on_a_character(void) {
   TEST_CHECK(!restored.crtc.r3_written_for_this_character);
   TEST_CHECK(!restored.crtc.last_line);
   TEST_EQUAL(restored.crtc.r9_at_the_line_head, 5);
+}
+
+/* A CRTC write the board holds for the next character clock belongs to the
+   instruction that made it, and a restore restarts the processor: an ASIC
+   machine stopped inside an OUT to R0, on the quarter before the clock the
+   write waits for, keeps the R0 it is given back, whether a snapshot gives it
+   or a processor restarted bare leaves the one it had. */
+static void a_restore_leaves_a_held_write_behind(void) {
+  for (int restart = 0; restart < 2; restart++) {
+    memset(lower_rom, 0, sizeof lower_rom);
+    cpc_init(&cpc, ram, sizeof ram, lower_rom, 4);
+    cpc_set_upper_rom(&cpc, 0, upper_rom);
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0, selected in the snapshot too */
+    crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 63));
+    const char *problem = NULL;
+    TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+
+    lower_rom[0x45] = 0xED;
+    lower_rom[0x46] = 0x49; /* OUT (C),C */
+    cpc.cpu.pc = 0x40;
+    cpc.cpu.b = 0xBD;
+    cpc.cpu.c = 0x30;
+    for (int tick = 0; tick < 200; tick++) {
+      cpc_tick(&cpc);
+      if (cpc.crtc_write_awaits_the_clock && cpc.gate_array.cpu_phase == 3) {
+        break;
+      }
+    }
+    TEST_CHECK(cpc.crtc_write_awaits_the_clock);
+    TEST_EQUAL(cpc.gate_array.cpu_phase, 3);
+    if (restart == 0) {
+      TEST_CHECK(cpc_snapshot_load(&cpc, bytes, sizeof bytes, &problem));
+    } else {
+      z80_init(&cpc.cpu);
+    }
+    for (int tick = 0; tick < 8; tick++) {
+      cpc_tick(&cpc);
+    }
+    TEST_EQUAL(cpc.crtc.registers[0], 63);
+  }
 }
 
 /* A snapshot restores the memory map, not just the registers behind it. */
@@ -297,6 +337,7 @@ int main(void) {
   TEST_RUN(machines_restored_from_one_snapshot_agree);
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
   TEST_RUN(a_restore_is_no_write_on_a_character);
+  TEST_RUN(a_restore_leaves_a_held_write_behind);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
   return TEST_REPORT("cpc snapshot");

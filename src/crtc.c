@@ -935,21 +935,25 @@ static void enter_character(crtc_t *crtc) {
 }
 
 /* Whether an HSYNC begins on this character, where C0 meets R2 with a width
-   asked for (begin_the_hsync). "On CRTC 0, two HSYNC's cannot be contiguous
-   if position C0=R2 is encountered when C3l reaches R3l, and R3l has not been
-   modified on this position" (ch. 15.3.1), which is how a line shorter than
-   its own sync avoids the endless one the other types fall into: at R0=0,
-   R2=0 and an R3l of 1, "on a CRTC 0, the HSYNC will not take place. It will
-   occur on the 3rd C0=0" (ch. 15.3.2). A write to R3 there is the exception,
-   taken as the modification whatever value it carries: an OUT lands a whole
-   byte on R3, and ch. 16.3 states that reading outright for R7, "whatever
-   the value written". */
+   asked for (begin_the_hsync). Where it meets R2 on the character a sync has
+   just ended on, the types part ways. "On CRTC 0, two HSYNC's cannot be
+   contiguous if position C0=R2 is encountered when C3l reaches R3l, and R3l
+   has not been modified on this position" (ch. 15.3.1), which is how a line
+   shorter than its own sync avoids the endless one: at R0=0, R2=0 and an R3l
+   of 1, "on a CRTC 0, the HSYNC will not take place. It will occur on the 3rd
+   C0=0" (ch. 15.3.2). A write to R3 there is a type 0's exception, taken as
+   the modification whatever value it carries: an OUT lands a whole byte on
+   R3, and ch. 16.3 states that reading outright for R7, "whatever the value
+   written". "On the CRTC's 1, 2, 3 and 4, there is a bug if C0=R2 on
+   C0=R2+R3" (ch. 15.3.1), and there "the HSYNC does not end and C3 will
+   overflow" (ch. 15.3.2): the sync runs on with C3l not zeroed, which counts
+   on round to R3l, as ch. 15.3.4 and 15.3.5 draw it. */
 static bool hsync_begins_here(const crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
-  bool blocked = crtc->hsync_ended_here && !crtc->r3_written_for_this_character;
+  bool refused = crtc->type == 0 && crtc->hsync_ended_here && !crtc->r3_written_for_this_character;
   bool width_of_nothing_is_sixteen = crtc->type == 2 || crtc->type == 3 || crtc->type == 4;
   bool a_width_asked = (r[3] & 0x0F) != 0 || width_of_nothing_is_sixteen;
-  return crtc->c0 == r[2] && !crtc->hsync && !blocked && a_width_asked;
+  return crtc->c0 == r[2] && !crtc->hsync && !refused && a_width_asked;
 }
 
 /* A type 2 keeps a "Last Line" of its own, which ch. 12.4.1 describes: it is

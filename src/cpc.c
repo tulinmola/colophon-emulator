@@ -130,13 +130,42 @@ static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
    13.6.1 puts a type 0's OUTI at #3B as well. They draw at the grain of a
    microsecond and say nothing finer. Taking both writes on the clock is the
    board's own choice, and it agrees with those two placements through the
-   window this chip keeps a line's end in. Ch. 4.4.4's diagram C draws the
+   window this chip keeps a line's end in, an OUT's R0 handed over ahead of
+   the tick (hand_over_a_held_r0_write). Ch. 4.4.4's diagram C draws the
    ASIC's sampling window straddling each edge and names no instant inside
    it. A read of one of the CRTC's write ports, which writes it (io_read), is
    taken where it falls, as behind a Gate Array: the chapter speaks of OUTs,
    and nothing grades it. */
 static bool crtc_takes_writes_on_its_clock(const cpc_t *cpc) {
   return cpc->crtc.type == 3 || cpc->crtc.type == 4;
+}
+
+/* An R0 written by an OUT the board holds to this clock is handed to the chip
+   ahead of the clock's tick, so that the comparison of C0 with R0 made there
+   reads it whichever way it moves the line's end. Shaker's B (R) writes R0=1
+   with an OUT on C0=1 on every type, its build for these two a microsecond
+   shorter to make up for their later interrupt, and silicon's two ASICs end
+   that line there: Shakerland photographs "R0=1/R3=1/R52 CALC=#34 (Exp:#34)(REF
+   #0169)" on both, the other types' #0168 and the microsecond of ch. 27.6.1.
+   Handed over after the tick, the write would find C0 already moved to 2 and
+   run the counter 254 characters round. It reaches the chip off the clock, the
+   ending the clock before took being no longer the chip's to take back. A width
+   of nothing written so puts C0 at nothing ahead of the comparison, which then
+   ends the line on that clock, a microsecond sooner than a write landing after
+   it would; no line the suite grades tells the two apart, and Shaker's B (P),
+   which moves with it, is photographed agreeing with neither. Every other
+   register keeps the microsecond ch. 4.4.4 gives these two: handing every held
+   write over ahead of the tick puts six of Shaker's E (4) lines wrong on both
+   ASIC records. Only a write whose instruction is still under way is handed
+   over, a processor restarted under one having left nothing to hand. */
+static void hand_over_a_held_r0_write(cpc_t *cpc) {
+  uint16_t address = z80_address(cpc->pins);
+  bool to_the_data_port = (address & 0x4000) == 0 && (address & 0x0300) == 0x0100;
+  if (cpc->crtc_write_awaits_the_clock && !z80_instruction_complete(&cpc->cpu) &&
+      to_the_data_port && cpc->crtc.address_register == 0) {
+    cpc->crtc_write_awaits_the_clock = false;
+    crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, z80_data(cpc->pins)));
+  }
 }
 
 /* Whether the syncs the Gate Array follows are the CRTC's a character late,
@@ -363,6 +392,7 @@ uint64_t cpc_tick(cpc_t *cpc) {
     tape_tick(cpc->tape);
   }
   if (gate_array_character_clock(&cpc->gate_array)) {
+    hand_over_a_held_r0_write(cpc);
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
     bool hsync = (cpc->crtc_pins & CRTC_HSYNC) != 0;
     bool vsync = (cpc->crtc_pins & CRTC_VSYNC) != 0;

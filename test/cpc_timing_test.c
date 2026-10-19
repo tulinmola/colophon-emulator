@@ -722,6 +722,123 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
   TEST_EQUAL(out_edge[4], out_edge[3]);
 }
 
+/* An OUT lowering R0 onto the character it writes on ends the line there
+   behind an ASIC as behind a Gate Array, and one writing on the character
+   after runs the counter the long way round on every type. Shaker's B (R)
+   writes R0=1 with an OUT on C0=1 on every type, its build for the ASICs a
+   microsecond shorter to make up for their later interrupt, and Shakerland
+   photographs that line ending there on both ASICs: "R0=1/R3=1/R52
+   CALC=#34 (Exp:#34)(REF #0169)", the other types' #0168 and the
+   microsecond ch. 27.6.1 gives their interrupt. The board holds the OUT to
+   the next character clock and hands it to the chip ahead of the
+   comparison made there (cpc.c). The width is lowered mid-line here, clear
+   of what a type 0 makes of a line of one or two characters. */
+static void an_out_lowering_r0_onto_its_own_character_ends_the_line_there(void) {
+  static const uint8_t width = 0x30;
+  for (uint8_t type = 0; type <= 4; type++) {
+    bool seen_on_its_character = false;
+    bool seen_on_the_one_after = false;
+    for (int lead = 20; lead <= 70; lead++) {
+      memset(ram, 0, sizeof ram);
+      memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of it */
+      cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+      crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+      crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 0x3F));
+      crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0 stays selected */
+      lower_rom[UNDER_TEST + lead] = 0xED;
+      lower_rom[UNDER_TEST + lead + 1] = 0x49; /* OUT (C),C */
+      cpc.cpu.pc = UNDER_TEST;
+      cpc.cpu.b = 0xBD;
+      cpc.cpu.c = width;
+      cpc.cpu.sp = 0x8000;
+      int written_on = -1;
+      bool ended_there = false;
+      bool ran_past = false;
+      uint8_t previous = cpc.crtc.c0;
+      for (int tick = 0; tick < 4 * 140 && !ended_there && !ran_past; tick++) {
+        uint64_t pins = cpc_tick(&cpc);
+        if (written_on < 0 && (pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
+          written_on = cpc.crtc.c0; /* the character the processor wrote on */
+        }
+        if (written_on >= 0 && previous == width && cpc.crtc.c0 == 0) {
+          ended_there = true;
+        }
+        if (written_on >= 0 && cpc.crtc.c0 > width + 1) {
+          ran_past = true;
+        }
+        previous = cpc.crtc.c0;
+      }
+      if (written_on == width) {
+        seen_on_its_character = true;
+        TEST_CHECK(ended_there);
+      }
+      if (written_on == width + 1) {
+        seen_on_the_one_after = true;
+        TEST_CHECK(ran_past);
+      }
+    }
+    TEST_CHECK(seen_on_its_character);
+    TEST_CHECK(seen_on_the_one_after);
+  }
+}
+
+/* Every other register an ASIC's OUT writes keeps the microsecond ch. 4.4.4
+   gives it, "on the 3rd NOP for a CRTC equipped with a GATE ARRAY, and on the
+   4th NOP for an ASIC that emulates a CRTC": an OUT whose write the processor
+   makes on a line's last character reaches an ASIC on the next line's first,
+   too late for the end of the line it was made on, which is what Shaker's E
+   (4) grades on both ASIC records with R4 and R9 written at a line's end
+   (crtc.h). R9 written there with the value C9 holds would end the row on
+   that line; behind an ASIC the row runs a line more and ends where C9 has
+   passed R9, these two reading R9 reached or passed: "If R9 is changed with
+   a value less than or equal to C9, then C9 changes to 0 on the next line"
+   (ch. 10.3.4.1). */
+static void an_asic_takes_an_r9_written_on_a_lines_last_character_on_the_next(void) {
+  static const uint8_t row_line = 3;
+  for (uint8_t type = 3; type <= 4; type++) {
+    bool seen = false;
+    for (int lead = 200; lead <= 280 && !seen; lead++) {
+      memset(ram, 0, sizeof ram);
+      memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of it */
+      cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+      static const uint8_t setup[][2] = {{0, 0x3F}, {4, 0x26}, {9, 7}};
+      for (unsigned index = 0; index < sizeof setup / sizeof *setup; index++) {
+        crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, setup[index][0]));
+        crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, setup[index][1]));
+      }
+      crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 9)); /* R9 stays selected */
+      lower_rom[UNDER_TEST + lead] = 0xED;
+      lower_rom[UNDER_TEST + lead + 1] = 0x49; /* OUT (C),C */
+      cpc.cpu.pc = UNDER_TEST;
+      cpc.cpu.b = 0xBD;
+      cpc.cpu.c = row_line;
+      cpc.cpu.sp = 0x8000;
+      int written_on = -1;
+      int written_on_line = -1;
+      int lines_after[2] = {-1, -1};
+      int lines_seen = 0;
+      uint8_t previous = cpc.crtc.c0;
+      for (int tick = 0; tick < 4 * 450 && lines_seen < 2; tick++) {
+        uint64_t pins = cpc_tick(&cpc);
+        if (written_on < 0 && (pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
+          written_on = cpc.crtc.c0;
+          written_on_line = cpc.crtc.c9;
+        }
+        if (written_on >= 0 && previous == 0x3F && cpc.crtc.c0 == 0) {
+          lines_after[lines_seen++] = cpc.crtc.c9;
+        }
+        previous = cpc.crtc.c0;
+      }
+      if (written_on == 0x3F && written_on_line == row_line) {
+        seen = true;
+        TEST_EQUAL(lines_after[0], row_line + 1); /* too late for the line it was made on */
+        TEST_EQUAL(lines_after[1], 0);            /* and in time for the next */
+      }
+    }
+    TEST_CHECK(seen);
+  }
+}
+
 /* How long an interrupt costs, which no duration in the tables above covers.
    "The Z80A RST #38 instruction lasts 4 µsec when called by code. When an
    interrupt occurs, the call in #38 lasts 5 µsec" (ch. 27.4), and the chapter
@@ -864,6 +981,8 @@ int main(void) {
   TEST_RUN(a_mode_written_by_an_out_is_taken_where_ch9_draws_it);
   TEST_RUN(an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic);
   TEST_RUN(an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest);
+  TEST_RUN(an_out_lowering_r0_onto_its_own_character_ends_the_line_there);
+  TEST_RUN(an_asic_takes_an_r9_written_on_a_lines_last_character_on_the_next);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("cpc timing");

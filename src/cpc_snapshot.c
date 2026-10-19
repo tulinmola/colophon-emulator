@@ -151,13 +151,13 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
   }
   crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
   /* Restoring R3 is not a write made on a character, and leaving the chip
-     believing it was would let a HSYNC through on the first tick back; nor is
-     restoring R4 or R9, which a type 2 reads where it is made and would make a
-     last line of the line it stands on, and an R4 written during a head's own
-     character later compares with the R9 restored. Nor is any of this a line's
-     end: a chip loaded with one still armed would take the whole of itself back
-     on the next R0 written to a character clock, registers and all; nor is
-     restoring R7 a write a program made inside a sync. */
+     believing it was would let a type 0's second sync through on the first tick
+     back; nor is restoring R4 or R9, which a type 2 reads where it is made and
+     would make a last line of the line it stands on, and an R4 written during a
+     head's own character later compares with the R9 restored. Nor is any of
+     this a line's end: a chip loaded with one still armed would take the whole
+     of itself back on the next R0 written to a character clock, registers and
+     all; nor is restoring R7 a write a program made inside a sync. */
   cpc->crtc.r3_written_for_this_character = false;
   cpc->crtc.last_line = last_line;
   cpc->crtc.r9_at_the_line_head = cpc->crtc.registers[9];

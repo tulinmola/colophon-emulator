@@ -8,7 +8,7 @@
  * asynchronously through crtc_access(), the way the E strobe reaches the
  * chip regardless of CCLK.
  *
- * Type 0 is the type implemented, and nine things are not its alone. The
+ * Type 0 is the type implemented, and ten things are not its alone. The
  * first is what a machine can read of the chip, which is what a program names
  * it by (ch. 28.1.8, 28.1.9). Every type answers: types 0, 1 and 2 from ch.
  * 21.2's table, with the status register type 1 alone has, and the two ASICs
@@ -409,14 +409,31 @@
  * since the board gives the ASICs their syncs a character late (cpc.c), the
  * group counting from an interrupt. Behind the two ASICs the board takes the
  * OUT's write in the microsecond ch. 4.4.4 names, and on the next character
- * clock by its own choice (cpc.c), so both instructions reach the window there,
- * and their last placements in time stand the one microsecond apart ch. 13.6.3
- * draws for those two. The *Not yet* list below carries what the shift leaves
- * unsettled. A character was drawn in that second microsecond and it counts:
- * the counter goes on from what was drawn and not from the ending, or the line
- * comes out a microsecond too long. On a line of one character that second
- * microsecond is the next line's end, and a type 1's write reaches past it to
- * the end before, which is why the chip keeps two. Ch. 13.6.2 draws the
+ * clock by its own choice (cpc.c), handing a width written so to the chip
+ * ahead of that clock's comparison, so both instructions reach it there — the
+ * OUTI through the window — and their last placements in time stand the one
+ * microsecond apart ch. 13.6.3 draws for those two. Ahead of it the OUT reaches
+ * the comparison whichever way it moves the line's end: Shaker's B (R) writes
+ * R0=1 on C0=1 on every type, its build for these two a microsecond shorter to
+ * make up for their later interrupt, and silicon ends that line there on both,
+ * "R0=1/R3=1/R52 CALC=#34 (Exp:#34)(REF #0169)" photographed, where a write
+ * landing after it would find C0 past the new width and run it the long way.
+ * The window itself only takes an ending back, so an OUTI landing on the clock
+ * with a width that names the character just left does not end that line
+ * there on any type, and nothing here grades it. Nor do these two have ch.
+ * 13.6.3's "The C0 counter never exceeds the value of R0 when R0 is updated
+ * according to the timing described in the previous diagrams": a width written
+ * under C0 runs the counter the long way round here, as on the other three.
+ * Shaker's D (U), photographed on both, reads status 1 under widths of 1 and 2
+ * written so as #FC or #F8, a counter come home, where this chip reads #FE; a
+ * comparison made C0 ≥ R0 for these two reads those, but puts A (4)'s "OUTI ON
+ * C0vs=#3b" and one of D (U)'s status plots against their photographs, so what
+ * they do there is not settled. The *Not yet* list below carries what the shift
+ * leaves unsettled. A character was drawn in that second microsecond and it
+ * counts: the counter goes on from what was drawn and not from the ending, or
+ * the line comes out a microsecond too long. On a line of one character that
+ * second microsecond is the next line's end, and a type 1's write reaches past
+ * it to the end before, which is why the chip keeps two. Ch. 13.6.2 draws the
  * "Previous R0=0" line with a type 1's OUTI going on a character further than
  * ch. 13.6.1 draws a type 0's or 2's at both placements they give, and B (6)'s
  * "OUTI ON C0=0,R0=0" asks the same of the type 1 record.
@@ -473,6 +490,34 @@
  * interlace bits alone and a delay written to them does nothing. Shakerland's
  * photographs of Shaker's A (2) show it on both: the border an R8 of #10 bends
  * on the other three stands straight there.
+ *
+ * The tenth is a line sync that ends on a character where C0 meets R2 again. A
+ * type 0 refuses the second sync there unless R3 is written on that character
+ * (below); "On the CRTC's 1, 2, 3 and 4, there is a bug if C0=R2 on C0=R2+R3"
+ * (ch. 15.3.1), and there "the HSYNC does not end and C3 will overflow" (ch.
+ * 15.3.2), counting on round to R3l as ch. 15.3.4 and 15.3.5 draw it for an R2
+ * moved onto the sync's end, an R3l written during the run "considered
+ * immediately to bypass the absence of a C3l zeroing" (ch. 15.3.4). So R0=0,
+ * R2=0 and an R3l of 1 make a sync that never ends, and the Gate Array, which
+ * counts its interrupts on the ends, counts none: "the re-entrance prevention
+ * mechanism is bugged on CRTC's from 1 to 4, which allows the creation of an
+ * infinite HSYNC" (ch. 27.1). Shaker's B (R) reads that on all four records,
+ * "R0=0/R3=1/R52 CALC=#FF", and Shakerland photographs it on all four. Its D
+ * (H) PG 2 is photographed on both ASICs drawing a run-on: on lines of two
+ * characters with R2=0 a six-wide sync ends on C0=0 and runs on, the R3 of 1
+ * written on that character arriving with C3l already past it, so the sync
+ * counts round to it, seventeen characters in all — in the page's first form
+ * the last of it black at the band's visible left edge, in its second, with two
+ * syncs a line, the whole of it a block of black. The page is photographed on
+ * the other three types too: on a type 0 the second form's block is six
+ * characters, the refusal, and on a type 2 the first form's tail stands at the
+ * band's edge as on the ASICs, a character further from the text, the ASICs
+ * handing their syncs on a character late (cpc.c); on a type 1 the band is
+ * drawn slanting, which this machine does not draw. Not here: the "invisible"
+ * end ch. 15.3.4 gives a type 1 where the sync runs on, after which the Gate
+ * Array restarts its own count and sends a second monitor sync, a pin reported
+ * once a character having no instant inside one to fall and rise in (Shaker's B
+ * (R) reads no interrupt counted there on silicon).
  *
  * Implemented: the frame construction of Compendium ch. 6 as type 0
  * (HD6845S/UM6845) performs it — the character its line ending is decided on
@@ -587,7 +632,7 @@
  * which no host here wires. Two HSYNCs cannot be contiguous on this type — "if
  * position C0=R2 is encountered when C3l reaches R3l, and R3l has not been
  * modified on this position" — which is what keeps a line shorter than its own
- * sync out of the endless HSYNC the other types fall into (ch. 15.3.1, 15.3.2).
+ * sync out of the endless HSYNC of the tenth exception (ch. 15.3.1, 15.3.2).
  * A write to R3 there is the exception, taken as the modification whatever value
  * it carries, and the sync it lets through carries the old count on rather than
  * starting from nothing, which is where a R2.JIT HSYNC begins (ch. 15.3.3). That
@@ -605,18 +650,25 @@
  * ended" where a pin reported once per character can only stay high, so the
  * Gate Array is given one sync here where the chip gives it two; a write that
  * changes R3l on that character, seen here by the comparison that ends the sync
- * as well, where the chip's is not; the R0 of ch. 13.7.2 enlarged on the
- * character C0 names 1, where the old value ends the line and the new one counts
- * C0 on; whatever would place this chip's line endings where ch. 13.6 draws
- * them — ch. 13.6.1's last OUTI row, ch. 13.6.3's third and ch. 13.6.2's fifth
- * all draw wrapping a placement this chip lets run on, and Shaker's B (6) says it
- * runs on, so the disc is followed and every placement here sits one character
- * late against all three chronograms, a shift the window above compensates and
- * nothing yet explains, and the reason the two microseconds ch. 13.3 sets "in
- * principle" between an OUT(C),R8 and an OUTI stand at one here behind a Gate
- * Array, the OUT never being rescued there where the OUTI is; what the
- * chronograms are about, a type 1's OUTI one placement beyond the rest,
- * survives it; the first of ch. 16.3's two protections against one C4/R7
+ * as well, where the chip's is not; an R2 written onto the character C0 stands
+ * on, whose sync the chapters raise on that character and this chip puts off
+ * for the line after: by an OUT, in its third microsecond on types 0 to 2, "the
+ * CRTC sends the HSYNC signal later to the GATE ARRAY" (ch. 14.7.1), and in its
+ * fourth on the ASICs the sync, "deferred", shows where any other would (ch.
+ * 14.7.2), and one an OUTI writes "behaves as if R2 had been programmed before
+ * that C0=R2" on types 0 to 2 (ch. 14.7.1), ch. 14.9's type 4 schematic drawing
+ * its sync with the OUT's ("R2-JIT / OUTI"); the R0 of ch. 13.7.2 enlarged on
+ * the character C0 names 1, where the old value ends the line and the new one
+ * counts C0 on; whatever would place this chip's line endings where ch. 13.6
+ * draws them — ch. 13.6.1's last OUTI row, ch. 13.6.3's third and ch. 13.6.2's
+ * fifth all draw wrapping a placement this chip lets run on, and Shaker's B (6)
+ * says it runs on, so the disc is followed and every placement here sits one
+ * character late against all three chronograms, a shift the window above
+ * compensates and nothing yet explains, and the reason the two microseconds ch.
+ * 13.3 sets "in principle" between an OUT(C),R8 and an OUTI stand at one here
+ * behind a Gate Array, the OUT never being rescued there where the OUTI is;
+ * what the chronograms are about, a type 1's OUTI one placement beyond the
+ * rest, survives it; the first of ch. 16.3's two protections against one C4/R7
  * equality raising two pulses, "it is not possible to trigger or inhibit a
  * VSYNC during a VSYNC. Thus, modifying the value of R7 with a value of C4
  * reached during the VSYNC does not cause a new VSYNC", where an R7 write here
@@ -996,11 +1048,12 @@ typedef struct crtc_t {
   bool hsync;
   /* Whether the character being drawn is the one an HSYNC ended on: "two
      HSYNC's cannot be contiguous if position C0=R2 is encountered when C3l
-     reaches R3l, and R3l has not been modified on this position"
-     (ch. 15.3.1). */
+     reaches R3l, and R3l has not been modified on this position" on a type 0,
+     where on the other four "there is a bug if C0=R2 on C0=R2+R3" and the
+     sync runs on (ch. 15.3.1). */
   bool hsync_ended_here;
   /* Whether R3 was written in time to be read on that character, which is
-     the modification that same sentence exempts. */
+     the modification that same sentence exempts on a type 0. */
   bool r3_written_for_this_character;
   bool vsync;
   /* A type 2's VSYNC begun while its HSYNC is in progress, which counts its

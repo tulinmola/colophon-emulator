@@ -6480,6 +6480,143 @@ static void an_r3_written_in_time_carries_the_hsync_on(void) {
   TEST_CHECK(!(crtc_tick(&crtc) & CRTC_HSYNC));
 }
 
+/* "On the CRTC's 1, 2, 3 and 4, there is a bug if C0=R2 on C0=R2+R3"
+   (ch. 15.3.1). Ch. 15.3.2's R0=0, R2=0 and R3l of 1: "On the other CRTC's,
+   the HSYNC does not end and C3 will overflow ... At the end of the overflow
+   of C3, if C0 is still equal to R2 (= 0), then the HSYNC will again
+   continue its route", so the sync a type 0 raises on every other character
+   (two_hsyncs_cannot_be_contiguous) never falls on the other four. A sync
+   four characters wide on a line of four ends where it began on them too. */
+static void a_sync_ending_where_c0_meets_r2_runs_on_past_type_0(void) {
+  static const uint8_t widths[2][2] = {{0, 0x01}, {3, 0x04}}; /* R0, R3 */
+  for (uint8_t type = 1; type <= 4; type++) {
+    for (int which = 0; which < 2; which++) {
+      crtc_init(&crtc, type);
+      write_register(0, widths[which][0]);
+      write_register(2, 0);
+      write_register(3, widths[which][1]);
+      write_register(4, 4);
+      write_register(9, 1);
+      for (int character = 0; character < 48; character++) {
+        TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC);
+      }
+    }
+  }
+}
+
+/* The rows ch. 15.3.3, 15.3.4 and 15.3.5 draw for R2=11 and R3l=10 with R2
+   rewritten during the sync. Moved to 21, where C3l reaches R3l, a type 0's
+   sync ends after its ten characters and none follows ("C3: 0 1 2 3 4 5 6 7 8 9
+   10"), and the other four run on, "C3: 0 1 2 ... 10 11 12 13 14 15 0 1 2 ...
+   10", twenty-six characters. Moved to 22, one past it, the first ends and a
+   second begins there ("C3: 0 1 2 ... 10 0 1 2 ... 10", ch. 15.3.3 and 15.3.4;
+   ch. 15.3.5 draws every ASIC sync a column later, "delaying the display of the
+   HSYNC by 1 μsec" (ch. 15.1), which here is the board's (cpc.c), and numbers
+   their C3 "1 2 ... 10 10 1 2 ... 10 10", the lengths the same). */
+static void an_r2_moved_onto_the_syncs_end_runs_it_on_past_type_0(void) {
+  for (uint8_t type = 0; type <= 4; type++) {
+    for (uint8_t moved_to = 21; moved_to <= 22; moved_to++) {
+      crtc_init(&crtc, type);
+      write_register(0, 63);
+      write_register(2, 11);
+      write_register(3, 0x8A);
+      write_register(4, 4);
+      write_register(9, 1);
+      int runs[3] = {0, 0, 0};
+      int run = 0;
+      bool written = false;
+      bool high_before = false;
+      for (int character = 0; character < 64; character++) {
+        bool high = (crtc_tick(&crtc) & CRTC_HSYNC) != 0;
+        if (high && run < 3) {
+          runs[run]++;
+        }
+        if (!high && high_before) {
+          run++;
+        }
+        high_before = high;
+        if (runs[0] == 5 && !written) {
+          write_register(2, moved_to);
+          written = true;
+        }
+      }
+      bool runs_on = type != 0 && moved_to == 21;
+      TEST_EQUAL(runs[0], runs_on ? 26 : 10);
+      TEST_EQUAL(runs[1], moved_to == 22 ? 10 : 0);
+    }
+  }
+}
+
+/* Shaker's D (H) "HSYNC GATE ARRAY" PG 2 runs lines of two characters with R2=0
+   and writes R3=6 on a C0=0 and R3=1 seven characters later, the R3 of 1
+   landing behind an ASIC on the character the six-wide sync ends on, C0 meeting
+   R2 there, and behind a Gate Array on the character after. The sync runs on,
+   and the 1 written finds C3l at 6 or 7, past it: "If R3l is changed with a
+   value less than C3l, then C3l is overflowing" (ch. 14.5), "considered
+   immediately to bypass the absence of a C3l zeroing" (ch. 15.3.4), so it
+   counts round to 1, seventeen characters, and the one-character syncs follow.
+   Both ASICs are photographed so: in the page's first form the last of those
+   characters stand black at the band's visible left edge, in its second, with
+   two syncs a line, the whole seventeen stand as a block. The same holds of a
+   write made before that character with the value R3l holds, which a type 0
+   lets through (an_r3_written_in_time_carries_the_hsync_on) and the other four
+   run on from regardless; nothing graded asks it of them. */
+static void a_run_on_counts_round_to_an_r3_written_on_its_end(void) {
+  for (uint8_t type = 1; type <= 4; type++) {
+    for (int landing = 0; landing < 2; landing++) {
+      crtc_init(&crtc, type);
+      write_register(0, 1);
+      write_register(2, 0);
+      write_register(3, 0x06);
+      write_register(4, 4);
+      write_register(9, 1);
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 3));
+      for (int character = 0; character < 6; character++) {
+        TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC);
+      }
+      if (landing == 0) {
+        write_register(3, 0x06); /* before the character, with the value held */
+        TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC);
+        write_register(3, 0x01);
+      } else {
+        TEST_CHECK(crtc_tick(&crtc) & CRTC_HSYNC); /* ended where C0 meets R2, and run on */
+        crtc_access(&crtc,
+                    CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 0x01));
+      }
+      for (int character = 0; character < 40; character++) {
+        bool high = (crtc_tick(&crtc) & CRTC_HSYNC) != 0;
+        TEST_EQUAL(high, character < 10 || character % 2 == 1); /* seventeen, then one a line */
+      }
+    }
+  }
+
+  /* And a write on the clock inside an ordinary sync changes only the width,
+     as ch. 14.5 has it: the value it already holds, written on the clock
+     that drew its fifth character, leaves the sync its ten. */
+  for (uint8_t type = 1; type <= 4; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(2, 11);
+    write_register(3, 0x8A);
+    write_register(4, 4);
+    write_register(9, 1);
+    crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 3));
+    int characters = 0;
+    for (int character = 0; character < 40; character++) {
+      if (crtc_tick(&crtc) & CRTC_HSYNC) {
+        characters++;
+        if (characters == 5) {
+          crtc_access(&crtc,
+                      CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, 0x8A));
+        }
+      } else if (characters > 0) {
+        break;
+      }
+    }
+    TEST_EQUAL(characters, 10);
+  }
+}
+
 /* Ch. 14.5: "it is possible to change the value of R3l when C3l counts,
    which can affect the length of the HSYNC. If R3l is changed with a value
    less than C3l, then C3l is overflowing". Ch. 14.5.1 draws it for types 0
@@ -8109,6 +8246,9 @@ int main(void) {
   TEST_RUN(a_run_begun_under_a_stopped_picture_ends_on_r5);
   TEST_RUN(two_hsyncs_cannot_be_contiguous);
   TEST_RUN(an_r3_written_in_time_carries_the_hsync_on);
+  TEST_RUN(a_sync_ending_where_c0_meets_r2_runs_on_past_type_0);
+  TEST_RUN(an_r2_moved_onto_the_syncs_end_runs_it_on_past_type_0);
+  TEST_RUN(a_run_on_counts_round_to_an_r3_written_on_its_end);
   TEST_RUN(an_r3l_written_during_a_hsync_stops_it_or_overflows);
   TEST_RUN(a_line_of_one_character_freezes_the_counters);
   TEST_RUN(a_line_of_one_character_leaves_a_vsync_running_where_two_do_not);

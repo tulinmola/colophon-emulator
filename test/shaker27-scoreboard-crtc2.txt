@@ -7,8 +7,8 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
-9 of them printed self-graded lines, 94 in all: 93 agree with Longshot's
-silicon and 1 do not. That is 99% of what this reader can score, and no
+9 of them printed self-graded lines, 94 in all: 94 agree with Longshot's
+silicon and 0 do not. That is 100% of what this reader can score, and no
 measure at all of the other 61 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -114,7 +114,7 @@ B (RETURN)  R5 STORIES                                                          
 B (F0)      BOUNGA!                                                                          recorded, ungraded
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded, 3 pages
 B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 16 pages
-B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                20 graded, 1 wrong, 6 pages
+B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                20 graded, 0 wrong, 6 pages
       FROM LAST INTER:#14F6 usec >> NEXT INTER:#0504 usec (Exp:#0504)
       FROM LAST INTER:#14F7 usec >> NEXT INTER:#0503 usec (Exp:#0503)
       FROM LAST INTER:#14F8 usec >> NEXT INTER:#0D02 usec (Exp:#0D02)
@@ -134,7 +134,7 @@ B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                   
       FROM LAST INTER:#14F6 usec >> NEXT INTER:#0D00 usec (Exp:#0D00)
       FROM LAST INTER:#14F7 usec >> NEXT INTER:#0CFF usec (Exp:#0CFF)
       R0=1/R3=1/R52 CALC=#34 (Exp:#34)(REF #0168)
-    ! R0=0/R3=1/R52 CALC=#34 (Exp:CRTC 0:#34 OTHERS:#FF)(REF #0168)
+      R0=0/R3=1/R52 CALC=#FF (Exp:CRTC 0:#34 OTHERS:#FF)(REF #0168)
 B (U)       CRT 000 (CRTC 0)                                                                 recorded, ungraded, 11 pages
 B (I)       R3 JIT (8 TST)                                                                   recorded, ungraded, 8 pages
 B (T)       R3 JIT INTERACTIVE MODE ANALYZER                                                 recorded, ungraded
