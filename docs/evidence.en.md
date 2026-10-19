@@ -62,6 +62,8 @@ It matters just as much that we did not write it. It has already caught a real e
 
 Today every instruction the Z80 knows passes it, per cycle.
 
+The tier grades one thing the corpus does not mark: which reads take an instruction's own operands. A case's memory holds the instruction's bytes from its program counter on, among the bytes it reads and writes as data, so the fewest bytes any case of a file holds there are the instruction that file tests. Every one of them must be fetched once and in order, by an opcode fetch or by a read the processor calls an operand, and no other read may be called one.
+
 The first run downloads the corpus, which takes a few minutes; after that it is local.
 
 ## The acceptance tier
