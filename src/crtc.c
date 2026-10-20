@@ -578,6 +578,19 @@ static bool spends_an_unmade_last_line_on_an_adjustment(const crtc_t *crtc) {
   return crtc->type == 0;
 }
 
+/* Whether the block is lifted without the comparison changing, which is the
+   two ASICs' exception. Ch. 16.3's second protection, the equality having to
+   change, "was not renewed" on them: "There is no VSYNC reentrancy protection
+   mechanism on these circuits. If the condition C4=R7 and C9=C0=0 has not
+   changed and is renewed in the absence of an active VSYNC, then a VSYNC
+   starts again" (ch. 16.4.4). So every line C9 begins at 0 lifts their block
+   (enter_scanline). Every R7 write that does not set it lifts it as well
+   (crtc_access), a reading of ours that no chapter asks for and nothing
+   grades, ch. 16.4.4 speaking only of the condition renewed at C9=C0=0. */
+static bool has_no_vsync_reentrancy_protection(const crtc_t *crtc) {
+  return crtc->type == 3 || crtc->type == 4;
+}
+
 /* A line that never reaches C0=1 leaves C9's management disabled, and then
    "all of the CRTC counters are frozen as long as R0=0" (ch. 13.2.1) — the
    VSYNC's line counter with them, which is why a VSYNC begun there "is not
@@ -824,13 +837,20 @@ static void enter_scanline(crtc_t *crtc) {
      raster address from moving under a line already being drawn. */
   crtc->interlace_video_mode = interlace_video_asked(crtc);
 
-  /* "There is no VSYNC reentrancy protection mechanism on these circuits. If
-     the condition C4=R7 and C9=C0=0 has not changed and is renewed in the
-     absence of an active VSYNC, then a VSYNC starts again" (ch. 16.4.4), so
-     the two ASICs' block is lifted at every line C9 begins at 0. That moves
-     nothing where C4 has moved and lifted it already; it matters at a
-     frame's head on an R4 of 0 and at the head of a padding held there. */
-  if ((crtc->type == 3 || crtc->type == 4) && crtc->c9 == 0) {
+  /* A line C9 begins at 0 with R7 away from C4 lifts the block: "If R7 is
+     modified and C4 is different from R7 when C9 goes back to 0, this allows
+     the VSYNC blocking mechanism to be lifted" (ch. 16.3). Ch. 16.3's "if R7
+     is changed" and ch. 16.4.1.2's "(C4 or R7 update)" are read as this
+     condition shortened, ch. 13.2.2 allowing "two specific conditions" and
+     no more. C4 moving has lifted the block already, so what this reads is
+     an R7 written off C4 since the block was set, and one moved off and back
+     before the next line C9 begins at 0 lifts nothing: in a BLOCKED VSYNC
+     the VSYNC "can no longer occur on the value of C4=R7 until an unblocking
+     condition is produced" (ch. 16.4.1.1). The two ASICs' block is lifted at
+     every line C9 begins at 0, the equality changed or not. That moves
+     nothing where C4 has moved; it matters at a frame's head on an R4 of 0
+     and at the head of a padding held there. */
+  if (crtc->c9 == 0 && (crtc->c4 != r[7] || has_no_vsync_reentrancy_protection(crtc))) {
     crtc->vsync_blocked = false;
   }
 
@@ -943,11 +963,11 @@ static void enter_character(crtc_t *crtc) {
    of 1, "on a CRTC 0, the HSYNC will not take place. It will occur on the 3rd
    C0=0" (ch. 15.3.2). A write to R3 there is a type 0's exception, taken as
    the modification whatever value it carries: an OUT lands a whole byte on
-   R3, and ch. 16.3 states that reading outright for R7, "whatever the value
-   written". "On the CRTC's 1, 2, 3 and 4, there is a bug if C0=R2 on
-   C0=R2+R3" (ch. 15.3.1), and there "the HSYNC does not end and C3 will
-   overflow" (ch. 15.3.2): the sync runs on with C3l not zeroed, which counts
-   on round to R3l, as ch. 15.3.4 and 15.3.5 draw it. */
+   R3, and ch. 15.3 does not say whether one carrying the value R3l holds
+   counts, so that is our reading. "On the CRTC's 1, 2, 3 and 4, there is a
+   bug if C0=R2 on C0=R2+R3" (ch. 15.3.1), and there "the HSYNC does not end
+   and C3 will overflow" (ch. 15.3.2): the sync runs on with C3l not zeroed,
+   which counts on round to R3l, as ch. 15.3.4 and 15.3.5 draw it. */
 static bool hsync_begins_here(const crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   bool refused = crtc->type == 0 && crtc->hsync_ended_here && !crtc->r3_written_for_this_character;
@@ -1360,7 +1380,11 @@ static bool c4_stands_on_r7(const crtc_t *crtc) { return crtc->c4 == crtc->regis
    place" (ch. 16.4.1.2). Unread is therefore spent, and the block is what
    carries it, so the comparison itself is left to stand as it stands and
    only the liftings of ch. 16.3 bring it round again. C4 cannot move inside
-   a line, and where it does move the block is lifted with it. */
+   a line, and where it does move the block is lifted with it. The block is
+   set only where the equality stands at the unarmed line's head, "to block
+   for the value C4=R7" (ch. 13.2.2): an R7 written onto C4 later in a line
+   whose head found R7 away from C4 triggers as ch. 16.4.1.1 has it past
+   C0vs=1. */
 static void authorize_vsync(crtc_t *crtc) {
   if (crtc->c0 == 2) {
     crtc->vsync_armed = true;
@@ -1369,7 +1393,7 @@ static void authorize_vsync(crtc_t *crtc) {
   if (crtc->c0 != 0) {
     return;
   }
-  if (!crtc->vsync_armed) {
+  if (!crtc->vsync_armed && c4_stands_on_r7(crtc)) {
     crtc->vsync_blocked = true;
   }
   crtc->vsync_armed = false;
@@ -1419,8 +1443,8 @@ static void begin_the_hsync(crtc_t *crtc) {
    start leaves the frame's corner — a MID-VSYNC's R0/2, or the delayed line.
    Every line C9 begins at 0 lifts it on these two (enter_scanline), so an
    R4 of 0 bringing C4 back to the corner unmoved starts a sync there again:
-   Shaker's D (R) reads that endless sync on both records, as its own legend
-   gives the two, "3.4:#FFFF=DEADLOCK". */
+   Shaker's D (R) reads that endless sync on both, on a line it does not grade,
+   as its own legend gives them, "3.4:#FFFF=DEADLOCK". */
 static bool blocks_an_equality_made_by_hand(const crtc_t *crtc) {
   return crtc->type != 1 && crtc->type != 2 && crtc->c0 < 2;
 }
@@ -2261,13 +2285,23 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
         crtc->display_r1 = true;
       }
       if (crtc->address_register == 7) {
-        /* Writing R7 changes the comparison whatever the value written, so
-           it can serve again (ch. 16.3) — except where an equality made by
-           hand is a blocked VSYNC rather than one: on a type 0 "if the
+        /* Where blocks_an_equality_made_by_hand says, an equality made by
+           hand is a blocked VSYNC rather than a VSYNC: on a type 0 "if the
            modification of R7 with the value of C4 took place when C0vs<2, we
-           are in a BLOCKED VSYNC" (ch. 16.4.1.1), and the other types as
-           blocks_an_equality_made_by_hand says. */
-        crtc->vsync_blocked = c4_stands_on_r7(crtc) && blocks_an_equality_made_by_hand(crtc);
+           are in a BLOCKED VSYNC" (ch. 16.4.1.1). Otherwise the write lifts
+           no block on types 0 to 2: ch. 16.3 lifts it where C4 moves or where
+           "R7 is modified and C4 is different from R7 when C9 goes back to 0"
+           (enter_scanline). Shaker's A (I) reads it so on silicon: an R7
+           written onto C4 at C0=0 or 1, then moved off and back on that line
+           and on the next, raises nothing in the row on Shakerland's
+           photograph of a type 0, where the same writes begun at C0=2 raise
+           the pulse at the first. A write that does not set the block lifts
+           it on the two ASICs (has_no_vsync_reentrancy_protection). */
+        if (c4_stands_on_r7(crtc) && blocks_an_equality_made_by_hand(crtc)) {
+          crtc->vsync_blocked = true;
+        } else if (has_no_vsync_reentrancy_protection(crtc)) {
+          crtc->vsync_blocked = false;
+        }
         /* And on a type 1 the equality a write makes is read on the character
            the write lands on, not on the one after it, where the board
            reports the write finishing on the character clock. It is the same

@@ -375,8 +375,8 @@ static void an_r5_under_the_count_ends_the_padding_on_the_asics(void) {
 
    Nothing on any record grades it: the group that detects a row counter's
    overflow does so by watching this very pin, and neither this rule nor the
-   reentrancy its chapter denies these chips moves one of its lines. What
-   stands behind it is those two sentences. */
+   lack of the reentrancy protection its chapter denies these chips moves one
+   of its lines. What stands behind it is those two sentences. */
 static void the_two_asics_raise_a_sync_only_at_a_frames_corner(void) {
   static const struct {
     uint8_t type;
@@ -3086,23 +3086,21 @@ static void an_r7_written_on_c4_raises_or_blocks_a_vsync_as_each_type_reads_it(v
     TEST_EQUAL(heads, cases[index].lines);
   }
 
-  /* And the write lifts the block before it reads its own equality, which
-     matters wherever the chip arrives at the write already blocked. A line of
-     two characters never reaches the C0=2 that authorizes the pulse, so every
-     head of one blocks it (ch. 13.2.2); the write is what brings the
-     comparison round again, "whatever the value written" (ch. 16.3), and the
-     same character then reads it. */
+  /* And on lines of two characters, which never reach the C0=2 that
+     authorizes the pulse (ch. 13.2.2), a head blocks only "for the value
+     C4=R7" it stands on, so an R7 written onto C4 after a head that found R7
+     away from it is read on the same character as on any other line. */
   crtc_init(&crtc, 1);
   write_register(0, 1);
   write_register(4, 38);
   write_register(9, 7);
   write_register(7, 60);
-  bool blocked_at_a_head = false;
-  for (long tick = 0; tick < 64L * SCANLINE && !blocked_at_a_head; tick++) {
+  bool at_a_head = false;
+  for (long tick = 0; tick < 64L * SCANLINE && !at_a_head; tick++) {
     crtc_tick(&crtc);
-    blocked_at_a_head = crtc.c0 == 0 && crtc.vsync_blocked && crtc.c4 == 4;
+    at_a_head = crtc.c0 == 0 && crtc.c4 == 4;
   }
-  TEST_CHECK(blocked_at_a_head);
+  TEST_CHECK(at_a_head);
   TEST_CHECK(!crtc.vsync);
   crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 7));
   crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_ON_THE_CHARACTER_CLOCK | crtc_set_data(0, crtc.c4));
@@ -5866,9 +5864,9 @@ static void an_r0_restored_before_c0_2_keeps_the_vsync(void) {
 /* The equality is not merely missed but spent: "This will also cause the
    VSYNC to block for the value C4=R7", so a program that widens R0 again
    on the same line does not get the VSYNC back, and only the liftings of
-   ch. 16.3 — a C4 that moves, or an R7 written — bring it round again. The
-   widening here comes two short lines later, on a later line of the same
-   row, which is as long as C4 stands still. */
+   ch. 16.3 — a C4 that moves, or a line C9 begins at 0 finding R7 away from
+   C4 — bring it round again. The widening here comes two short lines later,
+   on a later line of the same row, which is as long as C4 stands still. */
 static void a_vsync_lost_to_a_short_line_stays_lost_for_that_row(void) {
   program_standard();
   TEST_CHECK(run_to_row(29));
@@ -5879,20 +5877,20 @@ static void a_vsync_lost_to_a_short_line_stays_lost_for_that_row(void) {
   for (int character = 0; character < 4 * SCANLINE; character++) {
     TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
   }
-  /* R7 written lifts the block, and the equality serves again (ch. 16.3).
-     Begun away from the head of a line, the pulse runs R3's eight lines and
-     the rest of the line it began in besides (ch. 16.4.1). */
+  /* Nor does R7 moved off C4 and back within a line, past C0vs=1 where an
+     equality made by hand would otherwise trigger (ch. 16.4.1.1): the VSYNC
+     "can no longer occur on the value of C4=R7 until an unblocking condition
+     is produced", and no line began between the two writes. */
   while (crtc.c0 != 2) {
     crtc_tick(&crtc);
   }
-  write_register(7, crtc.c4);
-  int vsync_characters = 0;
+  uint8_t row = crtc.c4;
+  write_register(7, row + 1);
+  run_characters(8);
+  write_register(7, row);
   for (int character = 0; character < 12 * SCANLINE; character++) {
-    if (crtc_tick(&crtc) & CRTC_VSYNC) {
-      vsync_characters++;
-    }
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
   }
-  TEST_EQUAL(vsync_characters, 8 * SCANLINE + (63 - 2));
 }
 
 /* "A value lower than 2" is the whole of the condition, and 2 itself is on
@@ -5936,6 +5934,37 @@ static void an_r7_and_r4_of_zero_give_one_vsync_and_no_more(void) {
   TEST_EQUAL(vsync_characters, 8 * SCANLINE);
 }
 
+/* And the chapter's way out of it: "If R7 is modified and C4 is different
+   from R7 when C9 goes back to 0, this allows the VSYNC blocking mechanism
+   to be lifted" (ch. 16.3), which it gives every type but the two ASICs. R7
+   moved off C4 and back before C9 returns to 0 lifts nothing; moved off
+   across a line C9 begins at 0, it does, and written back onto C4 past
+   C0vs=1 it triggers (ch. 16.4.1.1, 16.4.2, 16.4.3). */
+static void an_r7_moved_off_c4_lifts_the_block_where_c9_goes_back_to_0(void) {
+  for (uint8_t type = 0; type <= 2; type++) {
+    crtc_init(&crtc, type);
+    write_register(0, 63);
+    write_register(1, 40);
+    write_register(2, 46);
+    write_register(3, 0x8E);
+    write_register(4, 0);
+    write_register(9, 3);
+    TICK_UNTIL(crtc.vsync);
+    TICK_UNTIL(!crtc.vsync);
+    TICK_UNTIL(crtc.c9 == 1 && crtc.c0 == 10);
+    write_register(7, 5);
+    TICK_UNTIL(crtc.c9 == 2 && crtc.c0 == 10);
+    write_register(7, 0);
+    for (int character = 0; character < 8 * SCANLINE; character++) {
+      TEST_CHECK(!(crtc_tick(&crtc) & CRTC_VSYNC));
+    }
+    write_register(7, 5);
+    TICK_UNTIL(crtc.c9 == 0 && crtc.c0 == 10);
+    write_register(7, 0);
+    TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
+  }
+}
+
 /* Ch. 16.4.1.1 gives the equality made by hand a rule of its own, which is
    not the arming of ch. 13.2.2: "the VSYNC is triggered immediately if it
    was not already in progress, except if this modification occurs when
@@ -5961,8 +5990,10 @@ static void an_r7_written_at_a_lines_head_blocks_instead_of_triggering(void) {
 
 /* And that is the whole of the condition on it: a line that never armed
    still takes the VSYNC an R7 write makes on it, because the arming governs
-   the equality C4 walks into, while "when R7=C4 with C0vs>1, the VSYNC is
-   'triggered' during the line" carries no such clause (ch. 16.4.1.1). */
+   the equality C4 walks into and blocks only "for the value C4=R7"
+   (ch. 13.2.2), which this line's head did not stand on, while "when R7=C4
+   with C0vs>1, the VSYNC is 'triggered' during the line" carries no such
+   clause (ch. 16.4.1.1). */
 static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
   program_standard();
   write_register(7, 100);
@@ -5975,6 +6006,49 @@ static void an_r7_written_on_an_unarmed_line_still_triggers(void) {
   }
   write_register(7, crtc.c4);
   TEST_CHECK(crtc_tick(&crtc) & CRTC_VSYNC);
+}
+
+/* Shaker's A (I) puts the block to the test on its last page, "CRTC 0 LOST
+   & DEAD VSYNC": R7 written onto C4 on a row's first line, moved off and
+   back on that line and again on the next, then written onto the next row's
+   C4, each at the character the page writes it on. Shakerland's photograph
+   of a type 0 has no sync before the last write where the first came at C0=0
+   or 1, a BLOCKED VSYNC that the writes after it do not lift, and one from
+   the first where it came at C0=2 (ch. 16.3, 16.4.1.1). */
+static void an_r7_moved_off_c4_and_back_leaves_the_block_standing(void) {
+  for (uint8_t at = 0; at <= 2; at++) {
+    const struct {
+      uint8_t c4;
+      uint8_t c9;
+      uint8_t c0;
+      uint8_t r7;
+    } writes[] = {
+        {1, 0, at, 1},
+        {1, 0, (uint8_t)(at + 0x11), 16},
+        {1, 0, (uint8_t)(at + 0x19), 1},
+        {1, 1, 0x0E, 16},
+        {1, 1, 0x14, 1},
+        {2, 0, 0x0A, 2},
+    };
+    int count = (int)(sizeof writes / sizeof *writes);
+    program_standard();
+    write_register(3, 0x0E); /* the page's R3h of 0, a pulse of sixteen lines */
+    TEST_CHECK(run_to_row(1));
+    int written = 0;
+    int followed = -1; /* the last write made before the pulse rose */
+    for (long tick = 0; tick < 3L * 8 * SCANLINE && followed < 0; tick++) {
+      if (written < count && crtc.c4 == writes[written].c4 && crtc.c9 == writes[written].c9 &&
+          crtc.c0 == writes[written].c0) {
+        write_register(7, writes[written].r7);
+        written++;
+      }
+      crtc_tick(&crtc);
+      if (crtc.vsync) {
+        followed = written - 1;
+      }
+    }
+    TEST_EQUAL(followed, at < 2 ? count - 1 : 0);
+  }
 }
 
 /* A type 2 has no C0vs<2 exception: "if R7 is modified with the value of C4,
@@ -6456,13 +6530,13 @@ static void two_hsyncs_cannot_be_contiguous(void) {
 /* And the exception, which is where a R2.JIT HSYNC begins: "on this
    position, if C0 is again equal to R2 but R3l is modified, then a new
    HSYNC-CRTC begins without C3l being zeroed" (ch. 15.3.3). The write is
-   what is read here, not the value it carries — the same reading ch. 16.3
-   states outright for R7, "whatever the value written" — so a rewrite of
-   the value R3l already holds reaches it, and the sync it lets through runs
-   until C3l comes round the four bits to R3l again. Nothing outside this
-   repository grades that reading: a write that changes R3l cannot be told
-   apart here, the comparison that ends the sync reading the new value on
-   the same character. */
+   what is read here, not the value it carries, a reading of ours where the
+   chapter does not say whether one carrying the value R3l holds counts — so
+   a rewrite of the value R3l already holds reaches it, and the sync it lets
+   through runs until C3l comes round the four bits to R3l again. Nothing
+   outside this repository grades that reading: a write that changes R3l
+   cannot be told apart here, the comparison that ends the sync reading the
+   new value on the same character. */
 static void an_r3_written_in_time_carries_the_hsync_on(void) {
   crtc_init(&crtc, 0);
   write_register(0, 0);
@@ -7927,8 +8001,8 @@ static void one_vsync_per_equality_of_c4_and_r7(void) {
   /* R7 given the value C4 already holds starts a VSYNC where the beam
      stands, so long as the line is past its second character — the head of
      a line has a rule of its own (ch. 16.4.1.1). The same equality cannot
-     start a second: C4 must move, or R7 must be written again (ch. 16.3,
-     16.4.1). */
+     start a second: C4 must move, or a line C9 begins at 0 must find R7 away
+     from C4 (ch. 16.3, 16.4.1). */
   program_standard();
   write_register(9, 31); /* rows long enough to hold a whole VSYNC */
   TEST_CHECK(run_to_row(1));
@@ -7951,10 +8025,12 @@ static void one_vsync_per_equality_of_c4_and_r7(void) {
   run_scanlines(10); /* still row 1, and still no second VSYNC */
   TEST_CHECK(!crtc.vsync);
 
+  /* Nor does R7 written again with the value it holds, which changes no
+     comparison. */
   run_characters(2);
   write_register(7, 1);
   crtc_tick(&crtc);
-  TEST_CHECK(crtc.vsync);
+  TEST_CHECK(!crtc.vsync);
 }
 
 static void the_r1_border_holds_until_the_line_begins_again(void) {
@@ -8256,8 +8332,10 @@ int main(void) {
   TEST_RUN(a_frozen_adjustment_moves_c4_no_further);
   TEST_RUN(a_chip_frozen_on_a_frame_head_keeps_its_parity);
   TEST_RUN(an_r7_and_r4_of_zero_give_one_vsync_and_no_more);
+  TEST_RUN(an_r7_moved_off_c4_lifts_the_block_where_c9_goes_back_to_0);
   TEST_RUN(an_r7_written_at_a_lines_head_blocks_instead_of_triggering);
   TEST_RUN(an_r7_written_on_an_unarmed_line_still_triggers);
+  TEST_RUN(an_r7_moved_off_c4_and_back_leaves_the_block_standing);
   TEST_RUN(an_r7_written_by_hand_triggers_a_type_2_but_inside_its_hsync);
   TEST_RUN(a_ghost_vsync_holds_another_off_until_its_lines_are_counted);
   TEST_RUN(a_type_2_walks_into_a_ghost_vsync_where_its_hsync_runs);

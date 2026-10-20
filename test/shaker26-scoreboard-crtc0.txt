@@ -2,8 +2,8 @@ What Longshot's Shaker 2.6 said about this machine, built as a type 0
 CRTC, module by module and in the order each module's own menu prints.
 
 63 groups run, 19 left to another CRTC type.
-10 of them printed self-graded lines, 103 in all: 101 agree with Longshot's
-silicon and 2 do not. That is 98% of what this reader can score, and no
+10 of them printed self-graded lines, 103 in all: 103 agree with Longshot's
+silicon and 0 do not. That is 100% of what this reader can score, and no
 measure at all of the other 53 groups.
 
 A group stands as "recorded, ungraded" when it drew a screen of its own but
@@ -85,10 +85,10 @@ A (T)       R2 UPD DURING & AFTER HSYNC (6 TST)                                 
 A (Y)       R3 UPD DURING HSYNC (8 TST)                                                      recorded, ungraded, 8 pages
 A (U)       R4 & R9 CHECKING (54 TST)                                                        1 graded, 0 wrong
       PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):xKOx
-A (I)       VSYNC CONDITIONS (413 TST)                                                       8 graded, 2 wrong, 7 pages
+A (I)       VSYNC CONDITIONS (413 TST)                                                       8 graded, 0 wrong, 7 pages
       WAIT VSYNC ON R7=C4=1, THEN R7=2 > VSYNC LENGTH=#66 (Exp #66)
-    ! R7=C4=1 on C0=0, THEN R7=2 on C0>1, VSYNC LENGHT=#38 (Exp #6B=VS FROM C4=2)
-    ! R7=C4=1 on C0=0, THEN R7=2 on C0>1, VSYNC LENGHT=#38 (Exp #6B=VS FROM C4=2)
+      R7=C4=1 on C0=0, THEN R7=2 on C0>1, VSYNC LENGHT=#6B (Exp #6B=VS FROM C4=2)
+      R7=C4=1 on C0=0, THEN R7=2 on C0>1, VSYNC LENGHT=#6B (Exp #6B=VS FROM C4=2)
       R7=C4=1 on C0=0, THEN R7=2 on C0>1, VSYNC LENGHT=#38 (Exp #38=VS FROM C4=2)
       WAIT VSYNC FROM C4=0/C9=1/C0vs=21 > DELAY TO VS=#00 (00=VSYNC DEAD Exp #00)
       WAIT VSYNC FROM C4=0/C9=1/C0vs=21 > DELAY TO VS=#00 (00=VSYNC DEAD Exp #00)
