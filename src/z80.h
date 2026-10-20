@@ -162,11 +162,12 @@ z80_cycle z80_next_cycle(const z80_t *cpu);
  * bytes after its opcode fetch: an immediate, an address, a displacement, or
  * the opcode of a DD CB or FD CB instruction, which follows its displacement
  * and is read without M1, as an operand is ("Decoding Z80 Opcodes",
- * http://www.z80.info/decoding.htm, calls it the opcode). An opcode fetch answers false, M1 marking
- * it already. The pins cannot tell the rest from a read of data, which drives MREQ and RD without
- * M1 too. The answer holds from before the read's first tick, when
- * z80_next_cycle says a memory cycle begins, to before the tick that takes
- * its data, and is false at every other time. */
+ * http://www.z80.info/decoding.htm, calls it the opcode). An opcode fetch
+ * answers false, M1 marking it already. The pins cannot tell the rest from a
+ * read of data, which drives MREQ and RD without M1 too. The answer holds from
+ * before the read's first tick, when z80_next_cycle says a memory cycle
+ * begins, to before the tick that takes its data, and is false at every
+ * other time. */
 bool z80_reading_operand(const z80_t *cpu);
 
 #endif
