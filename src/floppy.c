@@ -84,6 +84,10 @@ bool floppy_add_sector(floppy_t *floppy, uint8_t cylinder, uint8_t side,
       return false;
     }
   }
+  /* And the field its check is reckoned over has to lie inside a reading. */
+  if (sector->extent > sector->recorded) {
+    return false;
+  }
   floppy_sector_t *added = &track->sectors[track->sector_count++];
   *added = *sector;
   /* A reading shorter than the identity announces is one the dumper
@@ -182,8 +186,8 @@ int floppy_sector_beginning_at(const floppy_t *floppy, uint8_t cylinder, uint8_t
   return -1;
 }
 
-/* The sector that `position` falls in: the nearest one to begin at or
-   before it. Before the first there is only the preamble. */
+/* The sector nearest to begin at or before `position`, or -1 before the
+   first. */
 static int sector_holding(const floppy_track_t *track, uint32_t position) {
   int found = -1;
   for (uint8_t index = 0; index < track->sector_count; index++) {
@@ -193,6 +197,39 @@ static int sector_holding(const floppy_track_t *track, uint32_t position) {
     }
   }
   return found;
+}
+
+/* How far past its start a sector's own bytes reach: through its
+   identity's check, or through its data's check and whatever more a
+   reading recorded. */
+static uint32_t sector_reach(const floppy_sector_t *sector) {
+  uint32_t extent = data_extent(sector);
+  if (extent == 0) {
+    return FLOPPY_ID_KNOWN;
+  }
+  uint32_t field = extent + FLOPPY_CHECK_BYTES;
+  return FLOPPY_DATA_FIELD + (sector->recorded > field ? sector->recorded : field);
+}
+
+/* The sector under `position` and how far into it, or -1 for the preamble.
+   Before the first sector the last may still be passing: written across the
+   index, or read on into more gap than the revolution leaves it, it runs on
+   from the end of the track, on the revolution after the one it began on.
+   SAMdisk reads a track's last sector so, its gap running on past the index
+   to the first identity (src/BitstreamDecoder.cpp, scan_bitstream_mfm_fm),
+   and gives it room there (src/Track.cpp, Track::data_extent_bits). */
+static int sector_under(const floppy_track_t *track, uint32_t position, uint32_t *offset) {
+  int index = sector_holding(track, position);
+  if (index < 0) {
+    position += track->length;
+    index = sector_holding(track, position);
+    if (index < 0 ||
+        position - track->sectors[index].position >= sector_reach(&track->sectors[index])) {
+      return -1;
+    }
+  }
+  *offset = position - track->sectors[index].position;
+  return index;
 }
 
 uint16_t floppy_crc(uint16_t crc, uint8_t byte) {
@@ -308,12 +345,17 @@ uint8_t floppy_byte(const floppy_t *floppy, uint8_t cylinder, uint8_t side, uint
     return FLOPPY_GAP_BYTE;
   }
   position %= track->length;
-  int index = sector_holding(track, position);
+  uint32_t offset = 0;
+  int index = sector_under(track, position, &offset);
   if (index < 0) {
     return preamble_byte(position);
   }
   const floppy_sector_t *sector = &track->sectors[index];
-  return sector_byte(floppy, sector, position - sector->position, revolution);
+  /* A sector that begins after `position` began on the revolution before,
+     counted forward a whole round of its readings so that the one before
+     the first is the last. */
+  return sector_byte(floppy, sector, offset,
+                     sector->position > position ? revolution + sector->copies - 1 : revolution);
 }
 
 uint32_t floppy_read(const floppy_t *floppy, uint8_t cylinder, uint8_t side, uint8_t index,
@@ -343,12 +385,12 @@ bool floppy_write_byte(floppy_t *floppy, uint8_t cylinder, uint8_t side, uint32_
     return false;
   }
   position %= track->length;
-  int index = sector_holding(track, position);
+  uint32_t offset = 0;
+  int index = sector_under(track, position, &offset);
   if (index < 0) {
     return false;
   }
   floppy_sector_t *sector = &track->sectors[index];
-  uint32_t offset = position - sector->position;
   if (offset < FLOPPY_DATA_FIELD || sector->copies == 0) {
     return false;
   }

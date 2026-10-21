@@ -19,7 +19,12 @@
  * further parsing unsafe refuses the whole image rather than returning half
  * a disc that looks whole. A track declared at a rate or in a mode these
  * controllers cannot decode holds nothing their heads can find, and is
- * kept as it was for the writer.
+ * kept as it was for the writer, which pads it out to whole 256-byte units
+ * when the original layout's length left it short of one. Where an image
+ * says its sectors lay it is believed, unless they could not lie there, out
+ * of order or past the end of the track, or unless the first has its sync
+ * begun before the index, which the medium does not model. Such a track is
+ * laid out as a formatter would have laid it.
  *
  * The writer knows one format, the extended one, since it is the only one
  * that can say everything the medium holds; and it always records where
@@ -46,6 +51,11 @@
  *   https://simonowen.com/misc/extextdsk.txt — the Offset-Info block that
  *   records each sector's distance from the index, and the correction of
  *   the size code to what the chip counts.
+ * - SAMdisk (Simon Owen), https://github.com/simonowen/samdisk,
+ *   src/types/dsk.cpp and src/BitstreamDecoder.cpp — the program that
+ *   writes the Offset-Info block, and so what the block holds where its
+ *   definition is silent or says otherwise: an entry for every cylinder
+ *   and side, and each offset measured to a sector's identity mark.
  */
 #ifndef COLOPHON_DSK_H
 #define COLOPHON_DSK_H

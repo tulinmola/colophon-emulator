@@ -46,6 +46,10 @@
  *   dsk_dsk.cpp — the System 34 layout a formatter writes, byte counts and
  *   fill values, which is how a track is reconstructed here from the
  *   sectors alone; and the revolution of 100000 cells at 300 rpm.
+ * - SAMdisk (Simon Owen), https://github.com/simonowen/samdisk,
+ *   src/BitstreamDecoder.cpp and src/Track.cpp — a track's last sector
+ *   running on past the index to where the first comes round, where an
+ *   image's offsets may place it and its stored gap may take it.
  */
 #ifndef COLOPHON_FLOPPY_H
 #define COLOPHON_FLOPPY_H
@@ -167,8 +171,8 @@ void floppy_give_room(floppy_t *floppy, size_t capacity);
  * unformatted. `image_offset` and `room` say where in the image the track's
  * data lives and how much of it a later format may use. All refuse rather
  * than exceed a fixed capacity or accept a sector whose readings fall
- * outside the image. A sector added with no extent is given the one its
- * reading implies. */
+ * outside the image, or whose field is longer than a reading holds. A
+ * sector added with no extent is given the one its reading implies. */
 bool floppy_add_track(floppy_t *floppy, uint8_t cylinder, uint8_t side, uint32_t image_offset,
                       uint32_t room, uint8_t gap, uint8_t filler);
 bool floppy_add_sector(floppy_t *floppy, uint8_t cylinder, uint8_t side,
@@ -205,7 +209,10 @@ int floppy_sector_beginning_at(const floppy_t *floppy, uint8_t cylinder, uint8_t
  * data where the disc has some, and otherwise what the layout puts there —
  * sync, marks, identities, checks and gap. An unstable sector answers with
  * a different reading each revolution, and a check that failed answers with
- * a check that fails. Positions wrap, because the track does. */
+ * a check that fails. Positions wrap, because the track does, and a sector
+ * whose bytes reach past the end of the track runs on past the index: what
+ * passes there on one revolution is the reading that began on the one
+ * before. */
 uint8_t floppy_byte(const floppy_t *floppy, uint8_t cylinder, uint8_t side, uint32_t position,
                     uint32_t revolution);
 
@@ -221,9 +228,9 @@ uint32_t floppy_read(const floppy_t *floppy, uint8_t cylinder, uint8_t side, uin
                      uint32_t copy, uint32_t offset, uint8_t *out, uint32_t count);
 
 /* Put a byte on the disc at `position`. It lands only inside a sector's
- * recorded data, which is the only place the image has room for it;
- * anywhere else it is lost, and the call says so. A write-protected disc
- * takes nothing. */
+ * recorded data, which is the only place the image has room for it, and
+ * that includes a field running on past the index; anywhere else it is
+ * lost, and the call says so. A write-protected disc takes nothing. */
 bool floppy_write_byte(floppy_t *floppy, uint8_t cylinder, uint8_t side, uint32_t position,
                        uint8_t byte);
 
