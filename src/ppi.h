@@ -19,11 +19,12 @@
  * Sources:
  * - "8255 PPI" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/8255cpc.html — the port functions, the
- *   high-impedance rule above, and the observation that modes 1 and 2 go
- *   unused by any program.
- * - Intel 8255A datasheet, as reproduced at
+ *   high-impedance rule above, the control port written and never read, and
+ *   the observation that modes 1 and 2 go unused by any program.
+ * - OKI's MSM82C55A-2 datasheet, mirrored by cpctech,
  *   https://cpctech.cpcwiki.de/docs/datasheet/msm82c55a.pdf — the control
- *   word's layout and the bit set/reset command.
+ *   word's layout, the bit set/reset command, the ports as RESET and a mode
+ *   word leave them, and a read of the control register as illegal.
  */
 #ifndef COLOPHON_PPI_H
 #define COLOPHON_PPI_H
@@ -55,13 +56,14 @@ typedef struct {
   bool port_c_upper_input;
 } ppi_t;
 
-/* Power-on. The control word is zero, which by the datasheet's own encoding
- * would be mode 0 with every port an output; real silicon resets all ports
- * to input, and does so with the output latches cleared. */
+/* Power-on, as RESET leaves the chip: "ports are all made into the input
+ * mode" and "all port latches are cleared to 0" (the MSM82C55A-2
+ * datasheet). */
 void ppi_init(ppi_t *ppi);
 
-/* The CPU reads a port. Control is write-only and reads as the last control
- * word, which is what the chip's bus leaves behind. */
+/* The CPU reads a port. The control register is "Write Only" ("8255 PPI"),
+ * and the datasheet calls reading it an "Illegal Condition"; here it reads as
+ * the last mode word, &9B since reset, which no source gives. */
 uint8_t ppi_read(const ppi_t *ppi, ppi_selection selection);
 
 /* The CPU writes a port or the control register. A control word with bit 7

@@ -14,7 +14,11 @@ static void configure(ppi_t *ppi, uint8_t word) {
   ppi->port_c_upper_input = (word & 0x08) != 0;
   ppi->port_b_input = (word & 0x02) != 0;
   ppi->port_c_lower_input = (word & 0x01) != 0;
-  /* A mode-set clears the output latches. */
+  /* A mode-set clears the output latches. The MSM82C55A-2 datasheet clears
+     "All ports" in its comparison with the -5, which clears "Only ports A and
+     C", while its precaution for mode selection calls port B's state
+     "undefined"; all three are cleared here, since the comparison speaks of
+     the -2 alone and a cleared latch is one of the states undefined allows. */
   ppi->output[PPI_PORT_A] = 0;
   ppi->output[PPI_PORT_B] = 0;
   ppi->output[PPI_PORT_C] = 0;
