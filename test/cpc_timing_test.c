@@ -560,17 +560,13 @@ static void a_mode_written_by_an_out_is_taken_where_ch9_draws_it(void) {
 
    Types 3 and 4 are walked against ch. 13.6.3, whose chronogram takes both
    instructions' writes on the line's last character: an OUT started at #3C,
-   its write on its 4th microsecond, and an OUTI at #3B, on its 5th. So the
-   two stand one microsecond apart there as they do here, and an OUTI keeps
-   the placement it has on a type 0. What does not come out is the OUT a
-   microsecond earlier than a type 0's, which that chapter beside ch. 13.6.1
-   draws; it is the type 0 OUT's own microsecond above, the one ch. 13.6.1
-   sets at two where this chip stands at one, and it is not asserted here.
-   Nor can the walk see the ASIC's microsecond itself: an OUT taken inside the
-   last character's microsecond and one taken on the next clock, where the
-   line has just wrapped, are both rescued, the second by the take-back
-   window, so the edge comes out the same either way. The test before this
-   comment and the one after it are what pin that microsecond.
+   its write on its 4th microsecond, and an OUTI at #3B, on its 5th. The OUT
+   comes out as drawn, a microsecond earlier than ch. 13.6.1 draws a type 0's:
+   its write, held to the next character clock, lands inside the microsecond
+   after it and past the take-back window (cpc.c). The OUTI keeps the
+   placement it has on a type 0, the window's microsecond more than either
+   chapter draws, so the two stand level there where the chapter has them a
+   microsecond apart.
 
    The leads are counted in microseconds from the start of the code under
    test and straddle the end of a 64-character line, which falls within
@@ -583,12 +579,13 @@ static void a_mode_written_by_an_out_is_taken_where_ch9_draws_it(void) {
    That is a Z80 and Gate Array fact — where each instruction's I/O cycle
    begins against the released WAIT — and it is what decides which of the two
    can reach the window a chip holds a line's ending open in. Behind an ASIC
-   both enter on it, and that is the board's own choice rather than the
+   both are taken on it, and that is the board's own choice rather than the
    documentation's: ch. 13.6.3 fixes only the microsecond each lands in, the
-   last OUT in time starting at #3C and the last OUTI at #3B, and taking both
-   on the clock is what gives its one microsecond between them through the
-   window. Ch. 4.4.4's diagram C draws the ASIC's sampling window straddling
-   each edge and names no instant inside it. */
+   last OUT in time starting at #3C and the last OUTI at #3B. An OUT held to
+   that clock lands after its tick, past the window, and an OUTI begun on it
+   reaches the window as it does behind a Gate Array (cpc.c). Ch. 4.4.4's
+   diagram C draws the ASIC's sampling window straddling each edge and names
+   no instant inside it. */
 static void an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic(void) {
   static const struct {
     uint8_t type;
@@ -700,9 +697,12 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
        on the character clock the board reports and the OUT's a quarter
        later, so behind a Gate Array the OUT is never rescued where the OUTI
        is. The distance between the instructions' own entries is untouched
-       and the test above this one pins it. Behind an ASIC one microsecond is the chapter's own
-       (ch. 13.6.3), both entries reaching the clock there. */
-    TEST_EQUAL(edges[0] - edges[1], type == 1 ? 0 : 1);
+       and the test above this one pins it. Behind an ASIC the two stand
+       level: the OUT's write lands inside the microsecond after the clock
+       that takes it, past the window (cpc.c), and the OUTI's keeps the
+       window, which gives it a microsecond more than ch. 13.6.3 draws as it
+       does on every type. */
+    TEST_EQUAL(edges[0] - edges[1], type == 0 || type == 2 ? 1 : 0);
     out_edge[index] = edges[0];
     outi_edge[index] = edges[1];
   }
@@ -716,23 +716,60 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
   TEST_EQUAL(outi_edge[2], outi_edge[0]);
   TEST_EQUAL(out_edge[2], out_edge[0]);
   /* And ch. 13.6.3 beside ch. 13.6.1: behind an ASIC the OUTI's placements
-     are a type 0's. */
+     are a type 0's, and the OUT's last in time starts a microsecond sooner,
+     at #3C where a type 0's starts at #3D. */
   TEST_EQUAL(outi_edge[3], outi_edge[0]);
   TEST_EQUAL(outi_edge[4], outi_edge[0]);
+  TEST_EQUAL(out_edge[3], out_edge[0] - 1);
   TEST_EQUAL(out_edge[4], out_edge[3]);
+}
+
+/* Ch. 13.6.3's "Previous R0=0" row beside ch. 13.6.1's: an OUT writing R0 on
+   a line of one character lets C0 leave 0 a microsecond later behind an ASIC
+   than behind a Gate Array, on its fifth microsecond rather than its fourth.
+   The same instruction at the same place, so the microsecond is the board's
+   alone; Shaker's B (P) starts its OUTs a microsecond early on the ASICs to
+   make up for it, and Shakerland photographs the R4 its search finds there. */
+static void an_asic_takes_an_out_widening_r0_from_nothing_a_microsecond_late(void) {
+  long leaves_nothing_on[5] = {-1, -1, -1, -1, -1};
+  for (uint8_t type = 0; type <= 4; type++) {
+    memset(ram, 0, sizeof ram);
+    memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of it */
+    cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0 selected, and 0 */
+    lower_rom[UNDER_TEST + 20] = 0xED;
+    lower_rom[UNDER_TEST + 21] = 0x49; /* OUT (C),C */
+    cpc.cpu.pc = UNDER_TEST;
+    cpc.cpu.b = 0xBD;
+    cpc.cpu.c = 0x10;
+    cpc.cpu.sp = 0x8000;
+    for (long tick = 0; tick < 4L * 60 && leaves_nothing_on[type] < 0; tick++) {
+      cpc_tick(&cpc);
+      if (cpc.crtc.c0 != 0) {
+        leaves_nothing_on[type] = tick;
+      }
+    }
+    TEST_CHECK(leaves_nothing_on[type] >= 0);
+  }
+  for (uint8_t type = 1; type <= 4; type++) {
+    TEST_EQUAL(leaves_nothing_on[type] - leaves_nothing_on[0], type >= 3 ? 4 : 0);
+  }
 }
 
 /* An OUT lowering R0 onto the character it writes on ends the line there
    behind an ASIC as behind a Gate Array, and one writing on the character
-   after runs the counter the long way round on every type. Shaker's B (R)
-   writes R0=1 with an OUT on C0=1 on every type, its build for the ASICs a
-   microsecond shorter to make up for their later interrupt, and Shakerland
-   photographs that line ending there on both ASICs: "R0=1/R3=1/R52
-   CALC=#34 (Exp:#34)(REF #0169)", the other types' #0168 and the
-   microsecond ch. 27.6.1 gives their interrupt. The board holds the OUT to
-   the next character clock and hands it to the chip ahead of the
-   comparison made there (cpc.c). The width is lowered mid-line here, clear
-   of what a type 0 makes of a line of one or two characters. */
+   after runs the counter the long way round behind a Gate Array and ends the
+   line where it lands behind an ASIC, whose counter "never exceeds the value
+   of R0" (ch. 13.6.3) — ours where the width is written under it, the
+   chapter's diagrams widening R0 only. Shaker's B (R) writes R0=1 with an
+   OUT on C0=1 on every type, its build for the ASICs a microsecond shorter to
+   make up for their later interrupt, and Shakerland photographs that line
+   ending there on both ASICs: "R0=1/R3=1/R52 CALC=#34 (Exp:#34)(REF #0169)",
+   the other types' #0168 and the microsecond ch. 27.6.1 gives their
+   interrupt. The board holds the OUT to the next character clock and hands a
+   width lowered so to the chip ahead of the comparison made there (cpc.c).
+   The width is lowered mid-line here, clear of what a type 0 makes of a line
+   of one or two characters. */
 static void an_out_lowering_r0_onto_its_own_character_ends_the_line_there(void) {
   static const uint8_t width = 0x30;
   for (uint8_t type = 0; type <= 4; type++) {
@@ -753,15 +790,20 @@ static void an_out_lowering_r0_onto_its_own_character_ends_the_line_there(void) 
       cpc.cpu.sp = 0x8000;
       int written_on = -1;
       bool ended_there = false;
+      bool ended_a_character_late = false;
       bool ran_past = false;
       uint8_t previous = cpc.crtc.c0;
-      for (int tick = 0; tick < 4 * 140 && !ended_there && !ran_past; tick++) {
+      for (int tick = 0; tick < 4 * 140 && !ended_there && !ended_a_character_late && !ran_past;
+           tick++) {
         uint64_t pins = cpc_tick(&cpc);
         if (written_on < 0 && (pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
           written_on = cpc.crtc.c0; /* the character the processor wrote on */
         }
         if (written_on >= 0 && previous == width && cpc.crtc.c0 == 0) {
           ended_there = true;
+        }
+        if (written_on >= 0 && previous == width + 1 && cpc.crtc.c0 == 0) {
+          ended_a_character_late = true;
         }
         if (written_on >= 0 && cpc.crtc.c0 > width + 1) {
           ran_past = true;
@@ -774,7 +816,7 @@ static void an_out_lowering_r0_onto_its_own_character_ends_the_line_there(void) 
       }
       if (written_on == width + 1) {
         seen_on_the_one_after = true;
-        TEST_CHECK(ran_past);
+        TEST_CHECK(type >= 3 ? ended_a_character_late : ran_past);
       }
     }
     TEST_CHECK(seen_on_its_character);
@@ -981,6 +1023,7 @@ int main(void) {
   TEST_RUN(a_mode_written_by_an_out_is_taken_where_ch9_draws_it);
   TEST_RUN(an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic);
   TEST_RUN(an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest);
+  TEST_RUN(an_asic_takes_an_out_widening_r0_from_nothing_a_microsecond_late);
   TEST_RUN(an_out_lowering_r0_onto_its_own_character_ends_the_line_there);
   TEST_RUN(an_asic_takes_an_r9_written_on_a_lines_last_character_on_the_next);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);

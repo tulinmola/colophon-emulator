@@ -7,7 +7,7 @@ rest is a type 0's, and most of what is wrong below is that, and is the
 work rather than a fault.
 
 70 groups run, 12 left to another CRTC type.
-10 of them printed self-graded lines, 87 in all: 87 agree with Longshot's
+10 of them printed self-graded lines, 89 in all: 89 agree with Longshot's
 silicon and 0 do not. That is 100% of what this reader can score, and no
 measure at all of the other 60 groups.
 
@@ -111,7 +111,7 @@ B (7)       CRTC 0 BUG OVF C4                                                   
 B (9)       INTERLACE VM (27 TST) (Y PARITY CRT 0/2/3/4)                                     recorded, ungraded, 2 pages
 B (O)       CRTC 1-A OR 1-B?                                                                 recorded, ungraded
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded, 3 pages
-B (F0)      BOUNGA!                                                                          recorded, ungraded, 2 pages, cut off at the cap
+B (F0)      BOUNGA!                                                                          recorded, ungraded, cut off at the cap
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded, 3 pages
 B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 4 pages
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                20 graded, 0 wrong, 6 pages
@@ -198,7 +198,7 @@ D (CAPS)    CRTC 1-OUTI R0 AUTOPSY                                              
 D (P)       CRTC 2 : VMA' BUG                                                                another CRTC type's
 D (S)       SPLITBORDER POS                                                                  recorded, ungraded
 D (COPY)    RESET CPC                                                                        recorded, ungraded
-E (1)       R5 STORIES 2ND ROUND                                                             37 graded, 0 wrong, 4 pages
+E (1)       R5 STORIES 2ND ROUND                                                             39 graded, 0 wrong, 4 pages
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#00, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#01, R5=0, CPU TO C4=0:#0004 (exp:#0004)
       R5 PREV=20. ON C4=R4=#26/C9=R9=7/C0io=#02, R5=0, CPU TO C4=0:#0004 (exp:#0004)
@@ -214,6 +214,8 @@ E (1)       R5 STORIES 2ND ROUND                                                
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#00:#02D5 (exp:#02D5)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#00:#01D1 (exp:#01D1)
+      R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#00:#01D1 (exp:#01D1)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3F, R4=50, CPU TO C4=#27:#0001 (exp:#0001)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3D, R4=50, CPU TO C4=#27:#0015 (exp:#0015)
       R5 PRV=20. ON C4=R4=#26/C9=R9=7/C0io=#3E, R4=50, CPU TO C4=#27:#0015 (exp:#0015)

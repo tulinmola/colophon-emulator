@@ -107,7 +107,7 @@ B (O)       CRTC 1-A OR 1-B?                                                    
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded, 3 pages
 B (F0)      BOUNGA!                                                                          recorded, ungraded, 2 pages, cut off at the cap
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded
-B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 7 pages, cut off at the cap
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 4 pages
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                20 graded, 0 wrong, 6 pages
       FROM LAST INTER:#14F6 usec >> NEXT INTER:#0504 usec (Exp:#0504)
       FROM LAST INTER:#14F7 usec >> NEXT INTER:#0503 usec (Exp:#0503)
@@ -173,7 +173,7 @@ D (R)       VSYNC TORTURE (LOCK MECHANISM)                                      
       R7=0/R4=1/C0=00 VSYNC=#5F
       R7=0/R4=1/C0=01 VSYNC=#5F
       R3h=0/R4=R7=0/ON LINE 9, R4=R7=7F: VSYNC OFF DELAY=#0032 (EXP:#32)
-D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded, 48 pages and more, cut off at the cap
+D (T)       VSYNC GATE ARRAY                                                                 recorded, ungraded, 48 pages and more
 D (H)       HSYNC GATE ARRAY                                                                 recorded, ungraded, 9 pages
 D (1)       CSYNC4 VS 2xCSYNC2                                                               recorded, ungraded
 D (2)       R2.JIT >> NO CSYNC UPD                                                           showed only the menu

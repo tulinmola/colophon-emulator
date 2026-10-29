@@ -96,20 +96,25 @@ static void run_psg(cpc_t *cpc) {
    I/O ports. The direction comes from the address and not from the CPU, so
    the chip is strobed by any I/O request when A14 is low, and a CPU read of
    one of the two write ports latches whatever the address bus carried. */
-static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
+static uint64_t crtc_bus_pins(uint16_t address, uint8_t data) {
   uint64_t pins = CRTC_CS | crtc_set_data(0, data);
+  if (address & 0x0100) {
+    pins |= CRTC_RS;
+  }
+  if (address & 0x0200) {
+    pins |= CRTC_RW;
+  }
+  return pins;
+}
+
+static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
+  uint64_t pins = crtc_bus_pins(address, data);
   /* Which edge of the character the access finished on, which every type's
      line-ending comparison turns on, and the C4/R7 comparison of types 1 and 2
      besides (ch. 13.3, note 3; ch. 13.7.1 for a type 1, the disc for a type 2,
      crtc.c). */
   if (gate_array_character_clock(&cpc->gate_array)) {
     pins |= CRTC_ON_THE_CHARACTER_CLOCK;
-  }
-  if (address & 0x0100) {
-    pins |= CRTC_RS;
-  }
-  if (address & 0x0200) {
-    pins |= CRTC_RW;
   }
   return crtc_access(&cpc->crtc, pins);
 }
@@ -125,44 +130,61 @@ static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
    next character clock and is taken there, a microsecond later; an OUTI's
    cycle begins on a character clock and is taken where it begins, as it is on
    a Gate Array. The chronograms fix the microsecond each lands in: ch. 13.6.3
-   has the last OUT in time start at #3C and the last OUTI at #3B, one
-   microsecond apart, both writing on the line's last character, and ch.
-   13.6.1 puts a type 0's OUTI at #3B as well. They draw at the grain of a
-   microsecond and say nothing finer. Taking both writes on the clock is the
-   board's own choice, and it agrees with those two placements through the
-   window this chip keeps a line's end in, an OUT's R0 handed over ahead of
-   the tick (hand_over_a_held_r0_write). Ch. 4.4.4's diagram C draws the
-   ASIC's sampling window straddling each edge and names no instant inside
-   it. A read of one of the CRTC's write ports, which writes it (io_read), is
-   taken where it falls, as behind a Gate Array: the chapter speaks of OUTs,
-   and nothing grades it. */
+   has an OUT writing R0 a microsecond after ch. 13.6.1 has a type 0's or 2's
+   — its last placement in time on a line of width #3F starting at #3C
+   rather than #3D, and C0 leaving a width of nothing on its fifth microsecond
+   rather than its fourth — and ch. 13.5 says as much, "the I/O takes place
+   with 1 μs delay, which implies placing the OUT 1 μsec before those that
+   would be done on a CRTC 1"; Shaker's B (P) starts its OUTs a microsecond
+   early on these two to make up for it. So an OUT's held write lands after
+   the tick of the clock that takes it, inside the microsecond that follows,
+   and takes back no line end that tick made (land_a_held_crtc_write); an R0
+   lowered onto or below the character C0 stands on is the one exception
+   (hand_over_a_held_r0_write). An OUTI's write is taken on the clock its
+   cycle begins on, through the window the chip keeps a line's end in, as
+   behind a Gate Array: ch. 13.6.3 puts its last placement in time at #3B, as
+   ch. 13.6.1 does a type 0's, and the window gives it a microsecond more on
+   every type, which Shaker's B (6) grades (crtc.h). Ch. 4.4.4's diagram C
+   draws the ASIC's sampling window straddling each edge and names no instant
+   inside it. A read of one of the CRTC's write ports, which writes it
+   (io_read), is taken where it falls, as behind a Gate Array: the chapter
+   speaks of OUTs, and nothing grades it. */
 static bool crtc_takes_writes_on_its_clock(const cpc_t *cpc) {
   return cpc->crtc.type == 3 || cpc->crtc.type == 4;
 }
 
-/* An R0 written by an OUT the board holds to this clock is handed to the chip
-   ahead of the clock's tick, so that the comparison of C0 with R0 made there
-   reads it whichever way it moves the line's end. Shaker's B (R) writes R0=1
-   with an OUT on C0=1 on every type, its build for these two a microsecond
-   shorter to make up for their later interrupt, and silicon's two ASICs end
-   that line there: Shakerland photographs "R0=1/R3=1/R52 CALC=#34 (Exp:#34)(REF
-   #0169)" on both, the other types' #0168 and the microsecond of ch. 27.6.1.
-   Handed over after the tick, the write would find C0 already moved to 2 and
-   run the counter 254 characters round. It reaches the chip off the clock, the
-   ending the clock before took being no longer the chip's to take back. A width
-   of nothing written so puts C0 at nothing ahead of the comparison, which then
-   ends the line on that clock, a microsecond sooner than a write landing after
-   it would; no line the suite grades tells the two apart, and Shaker's B (P),
-   which moves with it, is photographed agreeing with neither. Every other
-   register keeps the microsecond ch. 4.4.4 gives these two: handing every held
-   write over ahead of the tick puts six of Shaker's E (4) lines wrong on both
-   ASIC records. Only a write whose instruction is still under way is handed
-   over, a processor restarted under one having left nothing to hand. */
+/* A write held from a cycle begun before this clock lands in the microsecond
+   after the clock's tick rather than on its edge, so the chip has no line end
+   of that tick to take back for it. */
+static void land_a_held_crtc_write(cpc_t *cpc, uint16_t address, uint8_t data) {
+  crtc_access(&cpc->crtc, crtc_bus_pins(address, data));
+}
+
+/* An R0 written by an OUT the board holds to this clock, lowering the width
+   onto or below the character C0 stands on, is handed to the chip ahead of
+   the clock's tick, so that the comparison of C0 with R0 made there ends the
+   line. Shaker's B (R) writes R0=1 with an OUT on C0=1 on every type, its
+   build for these two a microsecond shorter to make up for their later
+   interrupt, and silicon's two ASICs end that line there: Shakerland
+   photographs "R0=1/R3=1/R52 CALC=#34 (Exp:#34)(REF #0169)" on both, the other
+   types' #0168 and the microsecond of ch. 27.6.1. Landing after the tick, the
+   write would find C0 already moved to 2 and end the line a character later
+   (never_runs_past_r0, crtc.c). A width written above C0 lands after the tick
+   as every other held write does, as ch. 13.6.3 draws it and as Shaker's B
+   (P) needs it, whose 74 microseconds of R0=0 end where Shakerland
+   photographs #48 and #7A on both. That a lowering write is taken a
+   microsecond sooner than a raising one is ours, from those two groups. It
+   reaches the chip off the clock, the ending the clock before took being no
+   longer the chip's to take back. Every other register keeps the microsecond
+   ch. 4.4.4 gives these two: handing every held write over ahead of the tick
+   puts six of Shaker's E (4) lines wrong on both ASIC records. Only a write
+   whose instruction is still under way is handed over, a processor restarted
+   under one having left nothing to hand. */
 static void hand_over_a_held_r0_write(cpc_t *cpc) {
   uint16_t address = z80_address(cpc->pins);
   bool to_the_data_port = (address & 0x4000) == 0 && (address & 0x0300) == 0x0100;
   if (cpc->crtc_write_awaits_the_clock && !z80_instruction_complete(&cpc->cpu) &&
-      to_the_data_port && cpc->crtc.address_register == 0) {
+      to_the_data_port && cpc->crtc.address_register == 0 && z80_data(cpc->pins) <= cpc->crtc.c0) {
     cpc->crtc_write_awaits_the_clock = false;
     crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, z80_data(cpc->pins)));
   }
@@ -451,7 +473,11 @@ uint64_t cpc_tick(cpc_t *cpc) {
     }
     if (cpc->crtc_write_awaits_the_clock && gate_array_character_clock(&cpc->gate_array)) {
       cpc->crtc_write_awaits_the_clock = false;
-      crtc_bus(cpc, z80_address(pins), z80_data(pins));
+      if ((before & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
+        crtc_bus(cpc, z80_address(pins), z80_data(pins));
+      } else {
+        land_a_held_crtc_write(cpc, z80_address(pins), z80_data(pins));
+      }
     }
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
     bool first_tick = (before & (Z80_IORQ | Z80_RD)) != (Z80_IORQ | Z80_RD);

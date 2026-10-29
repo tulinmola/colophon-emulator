@@ -66,10 +66,6 @@ static void enter_character_row(crtc_t *crtc, uint8_t row) {
   uint8_t next = row & C4_BITS;
   if (next != crtc->c4) {
     crtc->vsync_blocked = false;
-    /* And a line that was to begin a type 2's frame again is no longer the
-       frame's first, which ch. 19.8.3 names "When C4=C9=0". Only a line of one
-       character landing an armed C4 increment can move C4 under it. */
-    crtc->frame_begins_again = false;
     /* "ParityC9 is reversed with each C4 increasing when R9 is peer", which
        on a type 1 is an even R9 (ch. 19.5.3); types 3 and 4 reverse it on an
        odd one — "if R9 is odd, C9's parity switches each time C4 changes"
@@ -591,10 +587,33 @@ static bool has_no_vsync_reentrancy_protection(const crtc_t *crtc) {
   return crtc->type == 3 || crtc->type == 4;
 }
 
-/* A line that never reaches C0=1 leaves C9's management disabled, and then
-   "all of the CRTC counters are frozen as long as R0=0" (ch. 13.2.1) — the
-   VSYNC's line counter with them, which is why a VSYNC begun there "is not
-   deactivated if R3h was worth 1" (ch. 16.4.1.2). One thing still lands:
+/* Whether a line that never reaches C0=1 stands the counters still, which is
+   a type 0's alone: "On CRTC's 1, 2, 3 and 4, this value (R0=0) is not a
+   problem. Neither blocking C9 nor additional line C4=1, but it is more
+   subtle for CRTC 2" (ch. 13.2.7), "if R0 is 0, then C9 and R4 continue to be
+   managed normally" (ch. 13.3, 13.5), and a type 2 "doesn't have any problem
+   for the counting of C9 and C4 when R0=0" (ch. 13.4.1). Shaker's B (P)
+   measures it: the R4 its search finds counts the rows a 74-microsecond
+   stretch of R0=0 leaves behind, and Shakerland photographs a type 1's #2B
+   and the ASICs' #48, a line every microsecond, where a type 0's #20 is the
+   standstill. */
+static bool stands_still_on_a_line_of_one_character(const crtc_t *crtc) { return crtc->type == 0; }
+
+/* Whether the VSYNC's line count holds on a line that never reaches C0=1
+   while C9 and C4 go on, which a type 1's does by a reading of ours: the
+   chapters do not say what clocks C3h there. Shaker's A (I) writes R0=0 on
+   the last line before C4 meets R7 and reads the pulse after the stretch,
+   and Shakerland photographs a type 1 still in it at every read and a type 2
+   out of it, its lines spent a microsecond each. */
+static bool holds_the_vsync_count_on_a_line_of_one_character(const crtc_t *crtc) {
+  return crtc->type == 1;
+}
+
+/* On a type 0 a line that never reaches C0=1 leaves C9's management
+   disabled, and then "all of the CRTC counters are frozen as long as R0=0"
+   (ch. 13.2.1) — the VSYNC's line counter with them, which is why a VSYNC
+   begun there "is not deactivated if R3h was worth 1" (ch. 16.4.1.2); on a
+   type 1 that line counter alone stands. On a type 0 one thing still lands:
    the C4 increment the last managed boundary armed, and once only, because
    "this increment is deactivated because it has taken place" (ch. 13.2.4) —
    and where it falls on a last line an adjustment begins with it (ch.
@@ -611,7 +630,7 @@ static void enter_scanline(crtc_t *crtc) {
       !crtc->vertical_adjustment_in_progress) {
     crtc->vertical_adjustment_armed = false;
   }
-  if (!crtc->c9_processing_managed) {
+  if (!crtc->c9_processing_managed && stands_still_on_a_line_of_one_character(crtc)) {
     if (crtc->c4_increment_armed) {
       crtc->c4_increment_armed = false;
       /* On a last line that increment is the additional management
@@ -662,7 +681,8 @@ static void enter_scanline(crtc_t *crtc) {
         (crtc->type == 1 || crtc->type == 2) && !crtc->vsync_began_on_its_half_line;
     crtc->c3h = counts_from_one ? 1 : 0;
     crtc->vsync_began_mid_line = false;
-  } else if (crtc->vsync) {
+  } else if (crtc->vsync && (crtc->c9_processing_managed ||
+                             !holds_the_vsync_count_on_a_line_of_one_character(crtc))) {
     crtc->c3h = (crtc->c3h + 1) & 0x0F;
     if (crtc->c3h == vsync_lines(crtc)) {
       crtc->vsync = false;
@@ -881,6 +901,19 @@ static void pass_a_character(crtc_t *crtc) {
   }
 }
 
+/* Whether a line ends where C0 has gone past R0 as well as where it meets
+   it, which is the two ASICs' way: "The C0 counter never exceeds the value
+   of R0 when R0 is updated according to the timing described in the
+   previous diagrams. If R0=0 and C0 is 0, it will not overflow" (ch.
+   13.6.3). Those diagrams only widen R0, so that a width written under C0
+   ends the line on the next character, where the other three run the
+   counter the long way round, is ours. Shaker's D (U) reads it on both,
+   status 1 under widths of 1 and 2 written so, photographed as #FC and #F8,
+   and Shaker's A (5) and A (6) draw their 4 and 2 microsecond screens as
+   photographed only with it; one of D (U)'s status plots is photographed a
+   line from where this puts it (crtc.h). */
+static bool never_runs_past_r0(const crtc_t *crtc) { return crtc->type == 3 || crtc->type == 4; }
+
 /* C0 names the character being drawn and holds it for the whole of that
    microsecond, which is the position the Compendium gives a register write
    (ch. 13.2.1). Nothing reads it there yet.
@@ -909,7 +942,7 @@ static void enter_character(crtc_t *crtc) {
   }
   const uint8_t *r = crtc->registers;
   pass_a_character(crtc);
-  if (crtc->c0 != r[0]) {
+  if (crtc->c0 != r[0] && !(crtc->c0 > r[0] && never_runs_past_r0(crtc))) {
     crtc->c0++;
     if (crtc->c0 == 1) {
       /* "C9 processing management ... would in principle be activated on
@@ -1384,8 +1417,19 @@ static bool c4_stands_on_r7(const crtc_t *crtc) { return crtc->c4 == crtc->regis
    set only where the equality stands at the unarmed line's head, "to block
    for the value C4=R7" (ch. 13.2.2): an R7 written onto C4 later in a line
    whose head found R7 away from C4 triggers as ch. 16.4.1.1 has it past
-   C0vs=1. */
+   C0vs=1. The state is a type 0's, ch. 16.4.1.2 standing under "16.4.1 CRTC
+   0", and the chapters for the others, which start a type 1's VSYNC "when
+   C4=R7" (ch. 16.4.2), consider a type 2's "on all values of C0 and C9 when
+   C4=R7" (ch. 16.4.3) and start an ASIC's "when C4=R7 and C9=C0=0" (ch.
+   16.4.4), ask nothing of the line before. Shaker's A (I) writes R0=0 or 1
+   on the line before C4 meets R7, and Shakerland photographs a type 1 and a
+   type 2 raising the VSYNC there. */
+static bool authorizes_its_vsync_at_c0_2(const crtc_t *crtc) { return crtc->type == 0; }
+
 static void authorize_vsync(crtc_t *crtc) {
+  if (!authorizes_its_vsync_at_c0_2(crtc)) {
+    return;
+  }
   if (crtc->c0 == 2) {
     crtc->vsync_armed = true;
     return;
@@ -1715,19 +1759,30 @@ static void latch_status_border(crtc_t *crtc) {
   }
 }
 
+/* Whether this type sends the border of a line R1 never reached half a
+   character early, the first of the two rules below. Ch. 17.6.2 gives it to
+   "CRTC 0, 2" and denies it the rest: "CRTC 1, 3, 4 ... On these CRTC's, no
+   BORDER bytes are generated between the 'frames'". Shakerland photographs
+   Shaker's A (2), A (5) and A (6) on a type 1 and its A (O) on the two ASICs
+   with no such byte, and its B (CAPS) on a type 2 alternating as the chapter
+   has it under R0=0. */
+static bool sends_its_border_half_a_character_early(const crtc_t *crtc) {
+  return crtc->type == 0 || crtc->type == 2;
+}
+
 /* Two rules move DISPLAY ENABLE half a character, and both move it the same
    way: the byte a character begins with is displayed and the byte it ends
    with is border.
 
-   The first is the line's last character where R1 was never reached. This
-   chip runs ahead of the characters the Gate Array is drawing and sends its
-   BORDER ON "0.5 µsec too early", so one byte of border stands before C0
-   goes to 0 and the BORDER OFF follows on the next character. Where R1 was
-   reached the display is off already and there is nothing to move (ch.
-   17.6.2). Never reached is wider than R1 standing above R0: an R1 moved
-   out of C0's way mid-line has not shut the display either. The
-   Compendium does not settle that case outright, and nothing we can run
-   grades it.
+   The first is the line's last character where R1 was never reached, on a
+   type 0 or 2. Such a chip runs ahead of the characters the Gate Array is
+   drawing and sends its BORDER ON "0.5 µsec too early", so one byte of
+   border stands before C0 goes to 0 and the BORDER OFF follows on the next
+   character. Where R1 was reached the display is off already and there is
+   nothing to move (ch. 17.6.2). Never reached is wider than R1 standing
+   above R0: an R1 moved out of C0's way mid-line has not shut the display
+   either. The Compendium does not settle that case outright, and nothing we
+   can run grades it.
 
    The second is a frame's first line where R6 is 0. C4 reaching R6 asks for
    the border and the new frame takes it away again; the two land a byte
@@ -1749,7 +1804,8 @@ static uint64_t pins_of(const crtc_t *crtc) {
   /* Where a delay is programmed the border of a line R1 never reached is a
      character of its own at the deferred place, not the half character the
      chip would otherwise send early (ch. 17.6.2, 19.2.4). */
-  bool border_takes_the_second_byte = skew == SKEW_NONE && crtc->c0 == r[0];
+  bool border_takes_the_second_byte =
+      skew == SKEW_NONE && crtc->c0 == r[0] && sends_its_border_half_a_character_early(crtc);
   bool second_byte = display && !border_takes_the_second_byte && !r6_conflict;
   return (uint64_t)(crtc->vma & 0x3FFF) | ((uint64_t)c9_vma(crtc) << 24) |
          (display ? CRTC_DISPTMG : 0) | (second_byte ? CRTC_DISPTMG_SECOND_BYTE : 0) |
@@ -1764,7 +1820,8 @@ static uint64_t pins_of(const crtc_t *crtc) {
    the equality and the switch fall on the same character (ch. 19.7.2). */
 static void settle_parity(crtc_t *crtc) {
   bool on_the_frame_head = crtc->c0 == 0 && on_a_frames_first_line(crtc);
-  if (on_the_frame_head && !crtc->stood_on_the_frame_head) {
+  if (on_the_frame_head &&
+      (!crtc->stood_on_the_frame_head || !stands_still_on_a_line_of_one_character(crtc))) {
     /* The other three keep no such anticipation and simply turn over:
        "ParityFrame switch between each frame when C4 = C9 = C0 = 0" and do
        so "whatever the value of R8" (ch. 19.5.3, 19.5.5). Where a type 0 or
@@ -2153,10 +2210,11 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            records and agrees on all four, the type 1's once that type's
            write could reach the end before the one standing. The type 3's
            record never grades it, that group not naming the machine there.
-           Where a line's end is standing, the take-back below outranks this:
-           it restores the character the ending was taken on and the counter
-           goes on from there, the premature comparison of ch. 13.3's third
-           note being made against a width of nothing like any other. */
+           Where a line's end is standing, the take-back below outranks this,
+           save on the two ASICs: it restores the character the ending was
+           taken on and the counter goes on from there, the premature
+           comparison of ch. 13.3's third note being made against a width of
+           nothing like any other. */
         crtc->c0 = 0;
       }
       if (crtc->address_register == 0 && crtc->a_line_end_is_kept &&
@@ -2185,7 +2243,12 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            stale answer to this question. */
         bool a_character_was_drawn_since =
             from_the_line_end_before || crtc->a_character_was_drawn_since;
-        if (crtc->registers[0] != the_character_it_ended_on) {
+        /* On the ASICs a width written under the character the ending
+           was taken on takes nothing back: their counter "never exceeds the
+           value of R0" (ch. 13.6.3), and the line it ended stays ended. That
+           a write landing on the clock is held to it is ours. */
+        if (crtc->registers[0] != the_character_it_ended_on &&
+            !(never_runs_past_r0(crtc) && crtc->registers[0] < the_character_it_ended_on)) {
           /* What is taken back is the line's ending, not the write that
              cancelled it: the copy was taken before the host touched the
              chip, so the register file and the register a write is aimed at
