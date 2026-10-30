@@ -75,9 +75,9 @@ static uint8_t selected_line(const cpc_t *cpc, uint8_t line) {
 
 static void run_psg(cpc_t *cpc) {
   uint8_t port_c = ppi_output_of(&cpc->ppi, PPI_PORT_C);
-  psg_present_port_a(&cpc->psg, selected_line(cpc, port_c & 0x0F));
-  psg_function function = (psg_function)(port_c >> 6);
-  uint8_t bus = psg_access(&cpc->psg, function, ppi_output_of(&cpc->ppi, PPI_PORT_A));
+  ay38910_present_port_a(&cpc->psg, selected_line(cpc, port_c & 0x0F));
+  ay38910_function function = (ay38910_function)(port_c >> 6);
+  uint8_t bus = ay38910_access(&cpc->psg, function, ppi_output_of(&cpc->ppi, PPI_PORT_A));
   ppi_present(&cpc->ppi, PPI_PORT_A, bus);
 }
 
@@ -178,7 +178,7 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
   crtc_init(&cpc->crtc);
   gate_array_init(&cpc->gate_array);
   ppi_init(&cpc->ppi);
-  psg_init(&cpc->psg);
+  ay38910_init(&cpc->psg);
   keyboard_init(&cpc->keyboard);
   drive_init(&cpc->drives[0], 1);
   drive_init(&cpc->drives[1], 2);

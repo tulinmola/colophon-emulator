@@ -69,6 +69,8 @@ The 8255 implements mode 0 — plain input and output — which is the only mode
 
 The AY-3-8912 keeps its registers and its one port, and **makes no sound**. The tone channels, the noise generator, the mixer and the envelope are stored and not sounded. The keyboard is read through the chip regardless, which is why typing at the prompt works with no audio anywhere in the machine.
 
+An address above 15 selects nothing. The chip takes the top four bits of an address as its own select, and an address that fails it leaves the chip deaf to writes and silent on reads until one passes, as the silicon does; a reset leaves it so too. A program reading it then gets &FF, what an 8255 port turned to input presents when nothing drives it, and Kevin Thacker's hardware tests note &FF there from CPCs, at the addresses they tried, and from a Plus at every one; a KC Compact gives something else.
+
 ### The cassette
 
 The deck is the same one a Spectrum has, wired to the pins a CPC brings it to: bit 7 of the 8255's port B is what is at the play head, and bit 4 of port C is the motor. That motor is the difference between the two machines. A CPC starts and stops the tape itself, so a program may take as long as it likes between blocks; a Spectrum has no such line and must keep up with a reel that never waits.
@@ -82,6 +84,8 @@ The format is the `.cdt`, which is a `.tzx` under another name, so one reader se
 A machine writes itself out as an SNA snapshot and another reads it back and carries on. Versions 1, 2 and 3 are read, taking the fields they share; version 1 is written, because every emulator can read it.
 
 A snapshot loads only into a machine that can hold it. A 128K dump will not go into a 64K machine, and neither will a snapshot that records the PAL holding anything but zero: a 64K machine has no PAL, so that snapshot was taken on a machine of another shape.
+
+One field is written against the format's own notes. The sound chip's selected register is asked to be 0 to 15, and a chip a program has left unselected has none; it is written as the register it last selected plus 16, so that a reader keeping four bits finds that register. CPCEC writes the whole latched byte there instead. Any byte above 15 is read back as a chip unselected.
 
 What version 1 cannot carry is the CRTC's internal counters, so a machine resumed from one restarts its frame instead of continuing mid-raster. Version 3 has room for them, along with the CRTC type and the drive's motor and head — worth reading the day there is something here that can act on them.
 

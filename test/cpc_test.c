@@ -523,6 +523,68 @@ static void the_documented_scan_reads_a_line(void) {
   TEST_EQUAL(cpc.cpu.a, 0xF7); /* bit 3 down, the rest released */
 }
 
+/* One PSG write as cpctech's write_to_psg makes it: the address to port
+   A, select, inactive, the byte to port A, write, inactive. Port A must be
+   an output. */
+static size_t append_psg_write(uint8_t *program, size_t length, uint8_t address, uint8_t value) {
+  length = append_ppi_write(program, length, 0xF4, address);
+  length = append_ppi_write(program, length, 0xF6, 0xC0);
+  length = append_ppi_write(program, length, 0xF6, 0x00);
+  length = append_ppi_write(program, length, 0xF4, value);
+  length = append_ppi_write(program, length, 0xF6, 0x80);
+  length = append_ppi_write(program, length, 0xF6, 0x00);
+  return length;
+}
+
+/* "A valid high order address latches the register address" (GI's data
+   manual, §2.1.1): 16 is not one, and on the die it takes PSG_SEL low
+   (ay38910.h), so the write after it reaches no register, and register 0 keeps
+   the &11 written before. */
+static void a_psg_address_above_fifteen_writes_no_register(void) {
+  power_on(sizeof ram);
+  uint8_t body[80];
+  size_t length = 0;
+  length = append_ppi_write(body, length, 0xF7, 0x82);
+  length = append_psg_write(body, length, 0, 0x11);
+  length = append_psg_write(body, length, 16, 0x55);
+  body[length++] = 0x76;
+  rom_program(body, length);
+  TEST_CHECK(run_to_halt());
+  for (int index = 0; index < 16; index++) {
+    TEST_EQUAL(cpc.psg.registers[index], index == 0 ? 0x11 : 0);
+  }
+}
+
+/* The scan of the_documented_scan_reads_a_line with register 14 named as
+   30: the chip is left unselected and drives nothing, and port A, an input,
+   reads the &FF its pins go to (ppi.h). Real machines agree, by the notes
+   beside two tests Kevin Thacker's ACID psg.asm leaves disabled
+   (https://github.com/floooh/emu-info/tree/master/tests/cpc/acid/psg):
+   CPCs with CRTC types 1 and 2 "got ff" from addresses &F0 to &FF, the only
+   ones that test tries, and a Plus reads "rest ff" from every address past
+   15; a KC Compact reads something else. */
+static void an_unselected_psg_reads_high_through_the_8255(void) {
+  power_on(sizeof ram);
+  keyboard_press(&cpc.keyboard, CPC_KEY(6, 3));
+  uint8_t body[80];
+  size_t length = 0;
+  length = append_ppi_write(body, length, 0xF7, 0x82);
+  length = append_ppi_write(body, length, 0xF4, 30);
+  length = append_ppi_write(body, length, 0xF6, 0xC0);
+  length = append_ppi_write(body, length, 0xF6, 0x00);
+  length = append_ppi_write(body, length, 0xF7, 0x92);
+  length = append_ppi_write(body, length, 0xF6, 0x46);
+  body[length++] = 0x01;
+  body[length++] = 0x00;
+  body[length++] = 0xF4;
+  body[length++] = 0xED;
+  body[length++] = 0x78;
+  body[length++] = 0x76;
+  rom_program(body, length);
+  TEST_CHECK(run_to_halt());
+  TEST_EQUAL(cpc.cpu.a, 0xFF);
+}
+
 static void an_unpressed_keyboard_reads_high_through_the_chips(void) {
   power_on(sizeof ram);
   uint8_t body[80];
@@ -913,6 +975,8 @@ int main(void) {
   TEST_RUN(a_character_the_keyboard_lacks_is_refused);
   TEST_RUN(the_layout_is_complete_and_unambiguous);
   TEST_RUN(an_unpressed_keyboard_reads_high_through_the_chips);
+  TEST_RUN(a_psg_address_above_fifteen_writes_no_register);
+  TEST_RUN(an_unselected_psg_reads_high_through_the_8255);
   TEST_RUN(port_b_carries_the_links_and_the_vsync);
   TEST_RUN(port_b_follows_the_crtc_into_vsync);
   TEST_RUN(the_cassette_motor_turns_the_tape_and_port_b_reads_it);

@@ -65,8 +65,9 @@ void ppi_write(ppi_t *ppi, ppi_selection selection, uint8_t data) {
     }
     return;
   }
-  /* Writing an input port loads the latch without reaching the pins, which
-     is why a port turned back to output resumes what was written to it. */
+  /* Writing an input port loads the latch without reaching the pins, and
+     neither the pins nor a read see it there: only a mode word turns a port
+     back to output, and a mode word clears the latches. */
   ppi->output[selection] = data;
 }
 

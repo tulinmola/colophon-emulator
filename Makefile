@@ -12,13 +12,13 @@ SHARED_C = $(Z80_C) $(MONITOR_C) $(KEYBOARD_C) $(TAPE_C) $(TZX_C)
 CRTC_C = src/crtc.c
 GATE_ARRAY_C = src/gate_array.c
 PPI_C = src/ppi.c
-PSG_C = src/psg.c
+AY38910_C = src/ay38910.c
 UPD765_C = src/upd765.c
 DRIVE_C = src/drive.c
 FLOPPY_C = src/floppy.c src/dsk.c
 CPC_C = src/cpc.c
 CPC_SNAPSHOT_C = src/cpc_snapshot.c
-CPC_OWN_C = $(CRTC_C) $(GATE_ARRAY_C) $(PPI_C) $(PSG_C) $(UPD765_C) $(DRIVE_C) \
+CPC_OWN_C = $(CRTC_C) $(GATE_ARRAY_C) $(PPI_C) $(AY38910_C) $(UPD765_C) $(DRIVE_C) \
             $(FLOPPY_C) $(CPC_C) $(CPC_SNAPSHOT_C)
 CPC_CORE_C = $(SHARED_C) $(CPC_OWN_C)
 
@@ -39,7 +39,7 @@ CRTC_TEST_C = test/crtc_test.c
 GATE_ARRAY_TEST_C = test/gate_array_test.c
 MONITOR_TEST_C = test/monitor_test.c
 PPI_TEST_C = test/ppi_test.c
-PSG_TEST_C = test/psg_test.c
+AY38910_TEST_C = test/ay38910_test.c
 KEYBOARD_TEST_C = test/keyboard_test.c
 TAPE_TEST_C = test/tape_test.c
 TZX_TEST_C = test/tzx_test.c
@@ -76,7 +76,7 @@ EXERCISER_GROUPS ?= 12
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
@@ -104,9 +104,9 @@ $(BUILD)/ppi_test: $(PPI_C) $(PPI_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -Itest $(PPI_C) $(PPI_TEST_C) -o $@
 
-$(BUILD)/psg_test: $(PSG_C) $(PSG_TEST_C) $(HEADERS)
+$(BUILD)/ay38910_test: $(AY38910_C) $(AY38910_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(PSG_C) $(PSG_TEST_C) -o $@
+	$(CC) $(CFLAGS) -Isrc -Itest $(AY38910_C) $(AY38910_TEST_C) -o $@
 
 $(BUILD)/keyboard_test: $(KEYBOARD_C) $(KEYBOARD_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
@@ -185,13 +185,13 @@ $(BUILD)/z80_exerciser_test: $(Z80_C) $(Z80_EXERCISER_C) $(HEADERS)
 	$(CC) $(CFLAGS) -Isrc -Itest $(Z80_C) $(Z80_EXERCISER_C) -o $@
 
 # The fast tier: hermetic, no network, runs on every change.
-test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/psg_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test
+test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test
 	@$(BUILD)/z80_test
 	@$(BUILD)/crtc_test
 	@$(BUILD)/gate_array_test
 	@$(BUILD)/monitor_test
 	@$(BUILD)/ppi_test
-	@$(BUILD)/psg_test
+	@$(BUILD)/ay38910_test
 	@$(BUILD)/keyboard_test
 	@$(BUILD)/tape_test
 	@$(BUILD)/tzx_test
@@ -213,7 +213,7 @@ test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_tes
 # new file is formatted and linted and built into nothing, silently.
 BUILT_C = $(ALL_CORES_C) $(PNG_C) $(CLI_C) \
           $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) \
-          $(PSG_TEST_C) $(KEYBOARD_TEST_C) $(TAPE_TEST_C) $(TZX_TEST_C) $(ULA_TEST_C) \
+          $(AY38910_TEST_C) $(KEYBOARD_TEST_C) $(TAPE_TEST_C) $(TZX_TEST_C) $(ULA_TEST_C) \
           $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(CPC_TEST_C) \
           $(CPC_SNAPSHOT_TEST_C) $(CPC_TIMING_TEST_C) $(CPC_FIRMWARE_TEST_C) \
           $(SPECTRUM_TEST_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(SPECTRUM_TIMING_TEST_C) \

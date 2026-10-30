@@ -52,13 +52,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "ay38910.h"
 #include "crtc.h"
 #include "drive.h"
 #include "gate_array.h"
 #include "keyboard.h"
 #include "monitor.h"
 #include "ppi.h"
-#include "psg.h"
 #include "tape.h"
 #include "upd765.h"
 #include "z80.h"
@@ -126,7 +126,7 @@ typedef struct {
   gate_array_t gate_array;
   monitor_t monitor;
   ppi_t ppi;
-  psg_t psg;
+  ay38910_t psg;
   keyboard_t keyboard;
 
   /* The deck, host-owned as a disc is, and NULL when there is none. */

@@ -161,11 +161,30 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
   cpc->ppi.input[PPI_PORT_A] = bytes[AT_PPI_A];
   cpc->ppi.input[PPI_PORT_B] = bytes[AT_PPI_B];
   cpc->ppi.output[PPI_PORT_C] = bytes[AT_PPI_C];
-
-  cpc->psg.selected = bytes[AT_SELECTED_PSG_REGISTER] & 0x0F;
-  for (int index = 0; index < 16; index++) {
-    cpc->psg.registers[index] = bytes[AT_PSG_REGISTERS + index];
+  /* Port A's byte is "the inputs to PPI port A regardless of the
+     input/output setting of this port" (note 6). While the port is an
+     output, what is wired to it sees its latch (ppi.h), so the byte is the
+     latch, and the PSG goes on being given it at every access to the PPI.
+     The one exception is a selected PSG read through port A while it is an
+     output, two drivers on one bus: the byte is then the PSG's, and the
+     format has no room for the latch. Port B's byte is its inputs too, but
+     the board drives those whatever the port's direction (cpc.c,
+     present_port_b), so a latch written to port B as an output is lost. */
+  if (!cpc->ppi.port_a_input) {
+    cpc->ppi.output[PPI_PORT_A] = bytes[AT_PPI_A];
   }
+
+  /* Through the chip's own bus too, so its writable-bit masks apply and the
+     address goes back last, through the chip select. The low four bits go
+     first, so that a chip saved unselected keeps the number it was saved
+     with. */
+  for (int index = 0; index < 16; index++) {
+    ay38910_access(&cpc->psg, AY38910_SELECT, (uint8_t)index);
+    ay38910_access(&cpc->psg, AY38910_WRITE, bytes[AT_PSG_REGISTERS + index]);
+  }
+  uint8_t psg_address = bytes[AT_SELECTED_PSG_REGISTER];
+  ay38910_access(&cpc->psg, AY38910_SELECT, psg_address & 0x0F);
+  ay38910_access(&cpc->psg, AY38910_SELECT, psg_address);
 
   memcpy(cpc->ram, bytes + CPC_SNAPSHOT_HEADER_SIZE, dump);
   cpc_remap(cpc);
@@ -239,7 +258,8 @@ bool cpc_snapshot_save(const cpc_t *cpc, uint8_t *bytes, size_t capacity, const 
   bytes[AT_PPI_C] = cpc->ppi.output[PPI_PORT_C];
   bytes[AT_PPI_CONTROL] = cpc->ppi.control | 0x80;
 
-  bytes[AT_SELECTED_PSG_REGISTER] = cpc->psg.selected;
+  bytes[AT_SELECTED_PSG_REGISTER] =
+      (uint8_t)(cpc->psg.selected | (cpc->psg.chip_selected ? 0x00 : 0x10));
   for (int index = 0; index < 16; index++) {
     bytes[AT_PSG_REGISTERS + index] = cpc->psg.registers[index];
   }

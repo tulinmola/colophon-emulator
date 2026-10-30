@@ -103,6 +103,7 @@ static void a_machine_survives_the_round_trip(void) {
   gate_array_write(&cpc.gate_array, 0x05);      /* pen 5... */
   gate_array_write(&cpc.gate_array, 0x40 | 11); /* ...goes bright white */
   cpc.psg.selected = 7;
+  cpc.psg.chip_selected = true;
   cpc.psg.registers[7] = 0x3F;
   cpc.crtc.address_register = 12;
 
@@ -148,6 +149,7 @@ static void a_machine_survives_the_round_trip(void) {
     TEST_EQUAL(restored.crtc.registers[index], cpc.crtc.registers[index]);
   }
   TEST_EQUAL(restored.psg.selected, cpc.psg.selected);
+  TEST_CHECK(restored.psg.chip_selected == cpc.psg.chip_selected);
   TEST_EQUAL(restored.psg.registers[7], cpc.psg.registers[7]);
   TEST_EQUAL(restored.ppi.control, cpc.ppi.control);
 
@@ -214,6 +216,120 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
   TEST_EQUAL(restored.crtc.registers[8], 0xF3);
   TEST_EQUAL(restored.crtc.registers[16], 0x00);
   TEST_EQUAL(restored.crtc.address_register, 9);
+}
+
+/* The PSG's registers go in through its own bus as the 6845's do, so its
+   writable-bit masks apply here too. */
+static void the_psg_keeps_only_the_bits_it_has(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x5A] = 6;
+  bytes[0x5B + 1] = 0xFF;  /* the high half of a tone period: four bits */
+  bytes[0x5B + 6] = 0xFF;  /* the noise period: five */
+  bytes[0x5B + 13] = 0xFF; /* the envelope shape: four */
+  bytes[0x5B + 14] = 0xA5; /* port A's output latch: all eight */
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.psg.registers[1], 0x0F);
+  TEST_EQUAL(restored.psg.registers[6], 0x1F);
+  TEST_EQUAL(restored.psg.registers[13], 0x0F);
+  TEST_EQUAL(restored.psg.registers[14], 0xA5);
+  TEST_EQUAL(restored.psg.selected, 6);
+  TEST_CHECK(restored.psg.chip_selected);
+}
+
+/* A PSG left unselected by an address above 15 is written as the register
+   it last selected, plus 16 (cpc_snapshot.h), and comes back unselected
+   with that register latched. */
+static void an_unselected_psg_survives_the_round_trip(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  ay38910_access(&cpc.psg, AY38910_SELECT, 9);
+  ay38910_access(&cpc.psg, AY38910_SELECT, 0x13);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(bytes[0x5A], 0x19);
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.psg.chip_selected);
+  TEST_EQUAL(restored.psg.selected, 9);
+}
+
+/* CPCEC writes the whole latched byte at &5A (cpc_snapshot.h), so any byte
+   above 15 is read as a chip left unselected. */
+static void a_psg_address_above_fifteen_loads_unselected(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  for (int address = 0; address < 256; address++) {
+    bytes[0x5A] = (uint8_t)address;
+    power_on(&restored, other_ram, sizeof other_ram);
+    TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+    TEST_CHECK(restored.psg.chip_selected == (address < 16));
+    TEST_EQUAL(restored.psg.selected, address & 0x0F);
+  }
+}
+
+/* Runs a program from the lower ROM, saves the machine, restores it into
+   the other, and runs that as long again. */
+static void save_and_restore_running(const uint8_t *program, size_t length) {
+  memset(lower_rom, 0, sizeof lower_rom);
+  memcpy(lower_rom, program, length);
+  power_on(&cpc, ram, sizeof ram);
+  run(&cpc, 2000);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  run(&restored, 2000);
+}
+
+/* A machine saved while port C still gives the PSG a function goes on
+   giving it, at every access to the PPI, what port A holds. Here port C
+   gives SELECT with &13 on port A, after register 5 was selected, and a
+   loop reads port B. */
+static void a_psg_left_unselected_mid_select_stays_so(void) {
+  static const uint8_t program[] = {
+      0xF3,                         /* DI */
+      0x01, 0x82, 0xF7, 0xED, 0x49, /* port A an output */
+      0x01, 0x05, 0xF4, 0xED, 0x49, /* register 5 on port A... */
+      0x01, 0xC0, 0xF6, 0xED, 0x49, /* ...selected */
+      0x01, 0x00, 0xF6, 0xED, 0x49, /* inactive */
+      0x01, 0x13, 0xF4, 0xED, 0x49, /* &13 on port A... */
+      0x01, 0xC0, 0xF6, 0xED, 0x49, /* ...and SELECT left standing */
+      0x06, 0xF5,                   /* LD B,&F5 */
+      0xED, 0x78,                   /* IN A,(C) */
+      0x18, 0xFC,                   /* JR back to the IN */
+  };
+  save_and_restore_running(program, sizeof program);
+  TEST_CHECK(!cpc.psg.chip_selected);
+  TEST_CHECK(!restored.psg.chip_selected);
+  TEST_EQUAL(restored.psg.selected, 5);
+}
+
+/* The same with WRITE left standing and &55 on port A: register 0 is given
+   &55 again at each access, before the snapshot and after it. */
+static void a_psg_mid_write_is_written_the_same_byte(void) {
+  static const uint8_t program[] = {
+      0xF3,                         /* DI */
+      0x01, 0x82, 0xF7, 0xED, 0x49, /* port A an output */
+      0x01, 0x00, 0xF4, 0xED, 0x49, /* register 0 on port A... */
+      0x01, 0xC0, 0xF6, 0xED, 0x49, /* ...selected */
+      0x01, 0x00, 0xF6, 0xED, 0x49, /* inactive */
+      0x01, 0x55, 0xF4, 0xED, 0x49, /* &55 on port A... */
+      0x01, 0x80, 0xF6, 0xED, 0x49, /* ...and WRITE left standing */
+      0x06, 0xF5,                   /* LD B,&F5 */
+      0xED, 0x78,                   /* IN A,(C) */
+      0x18, 0xFC,                   /* JR back to the IN */
+  };
+  save_and_restore_running(program, sizeof program);
+  TEST_EQUAL(cpc.psg.registers[0], 0x55);
+  TEST_EQUAL(restored.psg.registers[0], 0x55);
 }
 
 /* A snapshot restores the memory map, not just the registers behind it. */
@@ -288,6 +404,11 @@ int main(void) {
   TEST_RUN(a_half_done_instruction_cannot_be_saved);
   TEST_RUN(machines_restored_from_one_snapshot_agree);
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
+  TEST_RUN(the_psg_keeps_only_the_bits_it_has);
+  TEST_RUN(an_unselected_psg_survives_the_round_trip);
+  TEST_RUN(a_psg_address_above_fifteen_loads_unselected);
+  TEST_RUN(a_psg_left_unselected_mid_select_stays_so);
+  TEST_RUN(a_psg_mid_write_is_written_the_same_byte);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
   TEST_RUN(a_64k_machine_refuses_a_banked_snapshot);
