@@ -1,0 +1,18 @@
+# ch_a ch_b ch_c of deathsoft and lvd's ay_model.v, sampled at +950ns in each
+# clock: one line where they change, "clock a b c", and the last clock run.
+0 0 0 0
+17 15 0 0
+291 0 0 0
+307 15 0 0
+515 0 0 0
+531 15 0 0
+563 0 0 0
+579 15 0 0
+739 0 0 0
+755 15 0 0
+851 0 0 0
+883 15 0 0
+1107 0 0 0
+1139 15 0 0
+1203 0 0 0
+end 1220

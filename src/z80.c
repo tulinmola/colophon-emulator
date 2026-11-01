@@ -115,7 +115,7 @@ enum {
   DATA_INDEX_LOW,    /* L, or IXL/IYL under the active prefix */
   DATA_INDEX_HIGH,   /* H, or IXH/IYH under the active prefix */
   DATA_DISPLACEMENT, /* (IX+d)/(IY+d): the byte folds into WZ as the effective address */
-  DATA_DDCB,         /* DD CB: the sub-opcode arrives as data and appends its own cycles */
+  DATA_DDCB,         /* DD CB: the opcode arrives without M1 and appends its own cycles */
   DATA_IN,           /* IN r,(C): flags from the value; register y, or none for y=6 */
   DATA_ROTATE_DIGIT, /* RRD/RLD: nibbles turn between A and the latch */
   DATA_BLOCK_LD,     /* LDI/LDD family: transfer bookkeeping on arrival */
@@ -165,7 +165,7 @@ enum {
 };
 
 /* CPIR/CPDR decide whether to repeat only once the compared byte arrives, and
-   DD CB learns its operation from a byte read as data, so operand handlers
+   DD CB learns its operation from a byte read without M1, so operand handlers
    extend the running program themselves. */
 static void z80_append_internal(z80_t *cpu, uint8_t ticks);
 static void z80_append_cycle(z80_t *cpu, uint8_t cycle, uint8_t address, uint8_t data);
@@ -1411,8 +1411,8 @@ static void z80_decode(z80_t *cpu) {
               break;
             case 1: /* the CB prefix */
               if (cpu->index_mode != INDEX_NONE) {
-                /* DD CB d xx: the displacement comes first and the sub-opcode arrives
-                   as plain data — no M1, no refresh, R only counts the two prefixes */
+                /* DD CB d xx: the displacement comes first and the opcode arrives as
+                   an operand does — no M1, no refresh, R only counts the two prefixes */
                 z80_append_cycle(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_DISPLACEMENT);
                 z80_append_cycle_stretched(cpu, CYCLE_MEM_READ, ADDRESS_PC_INCREMENT, DATA_DDCB, 2);
               } else { /* one more M1 fetches the opcode */
@@ -1526,6 +1526,21 @@ z80_cycle z80_next_cycle(const z80_t *cpu) {
       return Z80_CYCLE_INTERRUPT;
     default:
       return Z80_CYCLE_NONE;
+  }
+}
+
+bool z80_reading_operand(const z80_t *cpu) {
+  switch (cpu->step) {
+    case MEM_READ_T1:
+    case MEM_READ_T2:
+    case MEM_READ_T3:
+      /* z80_start_next_cycle took the cycle under way out of the program
+         and counted past it; a host that writes step can leave no program
+         behind it */
+      return cpu->program_index != 0 &&
+             cpu->program[cpu->program_index - 1].address == ADDRESS_PC_INCREMENT;
+    default:
+      return false;
   }
 }
 

@@ -1,0 +1,18 @@
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+# Every generator running at once, for the glitch census.
+write 7 0x30   # tone A, B, C on; noise on A, B, C
+write 8 15
+write 9 0x10   # B follows the envelope
+write 10 9
+write 0 1
+write 2 3
+write 4 0
+write 6 2
+write 11 1
+write 12 0
+write 13 0x0E
+wait 300
+write 8 7
+wait 300
+write 10 15
+wait 300

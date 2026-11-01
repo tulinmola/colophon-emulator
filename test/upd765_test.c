@@ -972,6 +972,44 @@ static void an_fm_read_finds_nothing_on_an_mfm_track(void) {
   TEST_EQUAL(result[1], UPD765_ST1_MA);
 }
 
+/* A sector written across the index, as the last on most of Chicago 30s's
+   tracks is (a track of 6273 bytes, the last mark at 5745), reads whole:
+   the chip reads on through the index, and what passes after it is the
+   reading that began before it, so each read is one reading of an
+   unstable field, which fails its check as it was recorded to. */
+static void a_sector_across_the_index_reads_whole(void) {
+  power_on();
+  begin_image(1);
+  begin_track(0);
+  add_sector(0, 0xC1, 2, 0, 0, 512, 0x11);
+  add_sector(0, 0xCA, 2, 0x20, 0x20, 1024, 0xA0); /* two readings, check failed */
+  memset(image + image_length - 512, 0xA1, 512);
+  end_track();
+  /* The track 6273 bytes long, the marks at 219 and 5745. */
+  static const uint8_t offsets[] = {'O',  'f',  'f', 's', 'e',  't',  '-',  'I',  'n',  'f', 'o',
+                                    '\r', '\n', 0,   0,   0x81, 0x18, 0xDB, 0x00, 0x71, 0x16};
+  memcpy(image + image_length, offsets, sizeof offsets);
+  image_length += sizeof offsets;
+  TEST_CHECK(dsk_read(&floppy, image, image_length, &problem));
+  drive_insert(&drive_a, &floppy);
+  send(amsdos_specify, sizeof amsdos_specify);
+  uint8_t command[9] = {0x66, 0x00, 0x00, 0x00, 0xCA, 0x02, 0xCA, 0x2A, 0xFF};
+  uint8_t first[2] = {0};
+  for (int read = 0; read < 2; read++) {
+    send(command, 9);
+    uint8_t data[512] = {0};
+    TEST_EQUAL(execute(data, sizeof data, NULL, 0, NULL, 0), 512);
+    first[read] = data[0];
+    TEST_CHECK(data[0] == 0xA0 || data[0] == 0xA1);
+    TEST_CHECK(memchr(data, data[0] ^ 0x01, sizeof data) == NULL);
+    uint8_t result[7];
+    TEST_EQUAL(collect(result, sizeof result), 7);
+    TEST_EQUAL(result[1], UPD765_ST1_DE);
+    TEST_EQUAL(result[2], UPD765_ST2_DD);
+  }
+  TEST_CHECK(first[0] != first[1]);
+}
+
 int main(void) {
   TEST_RUN(the_handshake_begins_idle);
   TEST_RUN(a_sector_reads_as_amsdos_expects);
@@ -1006,5 +1044,6 @@ int main(void) {
   TEST_RUN(read_id_reports_an_identity_that_fails_its_check);
   TEST_RUN(a_field_of_the_wrong_length_fails_its_check);
   TEST_RUN(an_fm_read_finds_nothing_on_an_mfm_track);
+  TEST_RUN(a_sector_across_the_index_reads_whole);
   return TEST_REPORT("upd765");
 }

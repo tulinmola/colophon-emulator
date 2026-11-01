@@ -85,9 +85,9 @@ static uint8_t selected_line(const cpc_t *cpc, uint8_t line) {
 
 static void run_psg(cpc_t *cpc) {
   uint8_t port_c = ppi_output_of(&cpc->ppi, PPI_PORT_C);
-  psg_present_port_a(&cpc->psg, selected_line(cpc, port_c & 0x0F));
-  psg_function function = (psg_function)(port_c >> 6);
-  uint8_t bus = psg_access(&cpc->psg, function, ppi_output_of(&cpc->ppi, PPI_PORT_A));
+  ay38910_present_port_a(&cpc->psg, selected_line(cpc, port_c & 0x0F));
+  ay38910_function function = (ay38910_function)(port_c >> 6);
+  uint8_t bus = ay38910_access(&cpc->psg, function, ppi_output_of(&cpc->ppi, PPI_PORT_A));
   ppi_present(&cpc->ppi, PPI_PORT_A, bus);
 }
 
@@ -377,7 +377,7 @@ void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_
   crtc_give_line_end_rooms(&cpc->crtc, cpc->crtc_line_end_rooms);
   gate_array_init(&cpc->gate_array);
   ppi_init(&cpc->ppi);
-  psg_init(&cpc->psg);
+  ay38910_init(&cpc->psg);
   keyboard_init(&cpc->keyboard);
   drive_init(&cpc->drives[0], 1);
   drive_init(&cpc->drives[1], 2);
@@ -493,6 +493,11 @@ uint64_t cpc_tick(cpc_t *cpc) {
     if (cpc->disc_interface) {
       upd765_tick(&cpc->fdc);
     }
+    /* The sound chip's clock pin is the net the circuit diagrams label
+       "SOUND CLOCK (1MHZ)" (CPC464 and CPC6128 service manuals), taken
+       here at the character clock. Its phase against the processor's clock
+       is not documented, and nothing a program reads depends on it. */
+    ay38910_tick(&cpc->psg);
   }
 
   /* The Gate Array's INT line runs to the CPU; the machine holds it until
@@ -665,6 +670,31 @@ keyboard_key cpc_key_for_character(char character, bool *shifted) {
     }
   }
   return KEYBOARD_NO_KEY;
+}
+
+/* One output's voltage at each level, in tenths of a millivolt: Couriersud's
+   2014 measurement of an AY-3-8910's channel B into a 983 Ω load, as MAME's
+   ay8910.cpp quotes it
+   (https://github.com/mamedev/mame/blob/dd06c01/src/devices/sound/ay8910.cpp).
+   The output is a source follower, so its curve depends on its load, and
+   983 Ω is the nearest he measured to a CPC's: each output has 1K to ground
+   (R121-R123) beside the 10K and 22K paths to the speaker's line and the
+   socket (CPC6128 service manual, CPU circuit diagram). */
+static const uint16_t output_tenths_of_millivolts[16] = {
+    0, 106, 150, 222, 320, 466, 665, 1039, 1237, 1986, 2803, 3548, 4702, 6030, 7530, 9250,
+};
+
+/* A side of the socket is A or C through 10K (R120, R117) joined to B
+   through 22K (R119, R118). Into no current the join stands at the two
+   voltages weighted by the other path's resistance, 22 and 10 parts in 32.
+   How each output's load pulls on the others, a few tens of millivolts, is
+   left out. */
+void cpc_sound_socket(const cpc_t *cpc, uint16_t *left, uint16_t *right) {
+  uint32_t a = output_tenths_of_millivolts[cpc->psg.output[0] & 0x0F];
+  uint32_t b = output_tenths_of_millivolts[cpc->psg.output[1] & 0x0F];
+  uint32_t c = output_tenths_of_millivolts[cpc->psg.output[2] & 0x0F];
+  *left = (uint16_t)((22 * a + 10 * b + 16) / 32);
+  *right = (uint16_t)((22 * c + 10 * b + 16) / 32);
 }
 
 uint8_t cpc_peek(const cpc_t *cpc, uint16_t address) {

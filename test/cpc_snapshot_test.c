@@ -106,6 +106,7 @@ static void a_machine_survives_the_round_trip(void) {
   gate_array_write(&cpc.gate_array, 0x05);      /* pen 5... */
   gate_array_write(&cpc.gate_array, 0x40 | 11); /* ...goes bright white */
   cpc.psg.selected = 7;
+  cpc.psg.chip_selected = true;
   cpc.psg.registers[7] = 0x3F;
   cpc.crtc.address_register = 12;
 
@@ -151,6 +152,7 @@ static void a_machine_survives_the_round_trip(void) {
     TEST_EQUAL(restored.crtc.registers[index], cpc.crtc.registers[index]);
   }
   TEST_EQUAL(restored.psg.selected, cpc.psg.selected);
+  TEST_CHECK(restored.psg.chip_selected == cpc.psg.chip_selected);
   TEST_EQUAL(restored.psg.registers[7], cpc.psg.registers[7]);
   TEST_EQUAL(restored.ppi.control, cpc.ppi.control);
 
@@ -363,6 +365,180 @@ static void a_restore_leaves_a_held_write_behind(void) {
   }
 }
 
+/* The format holds the sound chip's registers and not its generators. A
+   load starts them as reset does, whatever the machine held, so that two
+   machines restored from one snapshot sound alike; and a single decay that
+   had ended long before the snapshot is not heard again. */
+static void a_snapshot_starts_the_sound_afresh_and_lets_an_ended_envelope_rest(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  static const uint8_t writes[][2] = {{7, 0x3F}, {8, 0x10}, {11, 1}, {12, 0}, {13, 0x00}};
+  for (size_t index = 0; index < sizeof writes / sizeof writes[0]; index++) {
+    ay38910_access(&cpc.psg, AY38910_SELECT, writes[index][0]);
+    ay38910_access(&cpc.psg, AY38910_WRITE, writes[index][1]);
+  }
+  run(&cpc, 4L * 16 * 16 * 2);
+  TEST_EQUAL(cpc.psg.output[0], 0);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  run(&restored, 12345);
+  restored.psg.tone_counter[1] = 777;
+  restored.psg.noise_register = 0x1234;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.psg.output[0], 0);
+  TEST_EQUAL(restored.psg.divider, 0);
+  TEST_EQUAL(restored.psg.tone_counter[1], 0);
+  TEST_EQUAL(restored.psg.noise_register, 0);
+  for (int clock = 0; clock < 1000; clock++) {
+    ay38910_tick(&restored.psg);
+    TEST_EQUAL(restored.psg.output[0], 0);
+  }
+}
+
+/* Each shape that ends or holds comes back from a snapshot at the level it
+   rested at and stays there; one that repeats moves again. */
+static void a_resting_envelope_rests_after_a_snapshot(void) {
+  static const uint8_t shapes[] = {0x00, 0x04, 0x09, 0x0B, 0x0D, 0x0F, 0x0A};
+  for (size_t index = 0; index < sizeof shapes / sizeof shapes[0]; index++) {
+    load_a_running_program();
+    power_on(&cpc, ram, sizeof ram);
+    const uint8_t writes[][2] = {{7, 0x3F}, {8, 0x10}, {11, 1}, {12, 0}, {13, shapes[index]}};
+    for (size_t write = 0; write < sizeof writes / sizeof writes[0]; write++) {
+      ay38910_access(&cpc.psg, AY38910_SELECT, writes[write][0]);
+      ay38910_access(&cpc.psg, AY38910_WRITE, writes[write][1]);
+    }
+    run(&cpc, 4L * 16 * 16 * 3);
+    uint8_t rested = cpc.psg.output[0];
+    const char *problem = NULL;
+    TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+    power_on(&restored, other_ram, sizeof other_ram);
+    TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+    bool repeats = shapes[index] == 0x0A;
+    bool moved = false;
+    for (int clock = 0; clock < 1000; clock++) {
+      ay38910_tick(&restored.psg);
+      moved = moved || restored.psg.output[0] != rested;
+    }
+    TEST_CHECK(moved == repeats);
+  }
+}
+
+/* The PSG's registers go in through its own bus as the 6845's do, so its
+   writable-bit masks apply here too. */
+static void the_psg_keeps_only_the_bits_it_has(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x5A] = 6;
+  bytes[0x5B + 1] = 0xFF;  /* the high half of a tone period: four bits */
+  bytes[0x5B + 6] = 0xFF;  /* the noise period: five */
+  bytes[0x5B + 13] = 0xFF; /* the envelope shape: four */
+  bytes[0x5B + 14] = 0xA5; /* port A's output latch: all eight */
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.psg.registers[1], 0x0F);
+  TEST_EQUAL(restored.psg.registers[6], 0x1F);
+  TEST_EQUAL(restored.psg.registers[13], 0x0F);
+  TEST_EQUAL(restored.psg.registers[14], 0xA5);
+  TEST_EQUAL(restored.psg.selected, 6);
+  TEST_CHECK(restored.psg.chip_selected);
+}
+
+/* A PSG left unselected by an address above 15 is written as the register
+   it last selected, plus 16 (cpc_snapshot.h), and comes back unselected
+   with that register latched. */
+static void an_unselected_psg_survives_the_round_trip(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  ay38910_access(&cpc.psg, AY38910_SELECT, 9);
+  ay38910_access(&cpc.psg, AY38910_SELECT, 0x13);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(bytes[0x5A], 0x19);
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.psg.chip_selected);
+  TEST_EQUAL(restored.psg.selected, 9);
+}
+
+/* CPCEC writes the whole latched byte at &5A (cpc_snapshot.h), so any byte
+   above 15 is read as a chip left unselected. */
+static void a_psg_address_above_fifteen_loads_unselected(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  for (int address = 0; address < 256; address++) {
+    bytes[0x5A] = (uint8_t)address;
+    power_on(&restored, other_ram, sizeof other_ram);
+    TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+    TEST_CHECK(restored.psg.chip_selected == (address < 16));
+    TEST_EQUAL(restored.psg.selected, address & 0x0F);
+  }
+}
+
+/* Runs a program from the lower ROM, saves the machine, restores it into
+   the other, and runs that as long again. */
+static void save_and_restore_running(const uint8_t *program, size_t length) {
+  memset(lower_rom, 0, sizeof lower_rom);
+  memcpy(lower_rom, program, length);
+  power_on(&cpc, ram, sizeof ram);
+  run(&cpc, 2000);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  run(&restored, 2000);
+}
+
+/* A machine saved while port C still gives the PSG a function goes on
+   giving it, at every access to the PPI, what port A holds. Here port C
+   gives SELECT with &13 on port A, after register 5 was selected, and a
+   loop reads port B. */
+static void a_psg_left_unselected_mid_select_stays_so(void) {
+  static const uint8_t program[] = {
+      0xF3,                         /* DI */
+      0x01, 0x82, 0xF7, 0xED, 0x49, /* port A an output */
+      0x01, 0x05, 0xF4, 0xED, 0x49, /* register 5 on port A... */
+      0x01, 0xC0, 0xF6, 0xED, 0x49, /* ...selected */
+      0x01, 0x00, 0xF6, 0xED, 0x49, /* inactive */
+      0x01, 0x13, 0xF4, 0xED, 0x49, /* &13 on port A... */
+      0x01, 0xC0, 0xF6, 0xED, 0x49, /* ...and SELECT left standing */
+      0x06, 0xF5,                   /* LD B,&F5 */
+      0xED, 0x78,                   /* IN A,(C) */
+      0x18, 0xFC,                   /* JR back to the IN */
+  };
+  save_and_restore_running(program, sizeof program);
+  TEST_CHECK(!cpc.psg.chip_selected);
+  TEST_CHECK(!restored.psg.chip_selected);
+  TEST_EQUAL(restored.psg.selected, 5);
+}
+
+/* The same with WRITE left standing and &55 on port A: register 0 is given
+   &55 again at each access, before the snapshot and after it. */
+static void a_psg_mid_write_is_written_the_same_byte(void) {
+  static const uint8_t program[] = {
+      0xF3,                         /* DI */
+      0x01, 0x82, 0xF7, 0xED, 0x49, /* port A an output */
+      0x01, 0x00, 0xF4, 0xED, 0x49, /* register 0 on port A... */
+      0x01, 0xC0, 0xF6, 0xED, 0x49, /* ...selected */
+      0x01, 0x00, 0xF6, 0xED, 0x49, /* inactive */
+      0x01, 0x55, 0xF4, 0xED, 0x49, /* &55 on port A... */
+      0x01, 0x80, 0xF6, 0xED, 0x49, /* ...and WRITE left standing */
+      0x06, 0xF5,                   /* LD B,&F5 */
+      0xED, 0x78,                   /* IN A,(C) */
+      0x18, 0xFC,                   /* JR back to the IN */
+  };
+  save_and_restore_running(program, sizeof program);
+  TEST_EQUAL(cpc.psg.registers[0], 0x55);
+  TEST_EQUAL(restored.psg.registers[0], 0x55);
+}
+
 /* A snapshot restores the memory map, not just the registers behind it. */
 static void the_memory_map_comes_back_with_it(void) {
   load_a_running_program();
@@ -404,6 +580,31 @@ static void a_64k_snapshot_loads_into_a_64k_machine(void) {
   TEST_CHECK(!cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
 }
 
+/* Without a PAL, a banking command dies on the empty socket, so a snapshot
+   that records one was taken on a machine of another shape. It is refused,
+   and the machine it was offered to is left as it was. */
+static void a_64k_machine_refuses_a_banked_snapshot(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, 0x10000);
+  run(&cpc, 40000);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  power_on(&restored, other_ram, 0x10000);
+  TEST_CHECK(restored.cpu.pc != cpc.cpu.pc); /* a half-done load would show */
+
+  /* Configurations 1-7 each map a bank above 3; &08 maps nothing new, but
+     selects page 1, which no 64K machine can latch. */
+  static const uint8_t banked[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+  for (size_t index = 0; index < sizeof banked; index++) {
+    bytes[0x41] = banked[index];
+    problem = NULL;
+    TEST_CHECK(!cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+    TEST_CHECK(problem != NULL);
+  }
+  TEST_EQUAL(restored.cpu.pc, 0x0000);
+  TEST_EQUAL(restored.mmr, 0xC0);
+}
+
 int main(void) {
   TEST_RUN(a_snapshot_is_refused_unless_it_is_one);
   TEST_RUN(a_machine_survives_the_round_trip);
@@ -414,7 +615,15 @@ int main(void) {
   TEST_RUN(a_restore_writes_nothing_a_type_1_acts_on);
   TEST_RUN(a_restore_moves_no_row);
   TEST_RUN(a_restore_leaves_a_held_write_behind);
+  TEST_RUN(the_psg_keeps_only_the_bits_it_has);
+  TEST_RUN(a_snapshot_starts_the_sound_afresh_and_lets_an_ended_envelope_rest);
+  TEST_RUN(a_resting_envelope_rests_after_a_snapshot);
+  TEST_RUN(an_unselected_psg_survives_the_round_trip);
+  TEST_RUN(a_psg_address_above_fifteen_loads_unselected);
+  TEST_RUN(a_psg_left_unselected_mid_select_stays_so);
+  TEST_RUN(a_psg_mid_write_is_written_the_same_byte);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
+  TEST_RUN(a_64k_machine_refuses_a_banked_snapshot);
   return TEST_REPORT("cpc snapshot");
 }

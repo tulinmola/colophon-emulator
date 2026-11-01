@@ -57,13 +57,13 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "ay38910.h"
 #include "crtc.h"
 #include "drive.h"
 #include "gate_array.h"
 #include "keyboard.h"
 #include "monitor.h"
 #include "ppi.h"
-#include "psg.h"
 #include "tape.h"
 #include "upd765.h"
 #include "z80.h"
@@ -157,7 +157,7 @@ typedef struct {
   gate_array_t gate_array;
   monitor_t monitor;
   ppi_t ppi;
-  psg_t psg;
+  ay38910_t psg;
   keyboard_t keyboard;
 
   /* The deck, host-owned as a disc is, and NULL when there is none. */
@@ -264,5 +264,17 @@ uint16_t cpc_video_address(const cpc_t *cpc);
  * the ROM and a poke lands in the RAM beneath it. */
 uint8_t cpc_peek(const cpc_t *cpc, uint16_t address);
 void cpc_poke(cpc_t *cpc, uint16_t address, uint8_t value);
+
+/* The sound chip's steps a second: its 1MHz clock over eight. */
+#define CPC_SOUND_STEPS_PER_SECOND 125000
+
+/* The stereo socket's two sides, in tenths of a millivolt, as a listener
+ * that draws no current would find them. Each side is two of the sound
+ * chip's outputs, A with B on one and C with B on the other, B through the
+ * larger resistor; the socket has no capacitor and no filter, so a side
+ * carries the outputs' DC as they do. cpcwiki puts A on the left ("PSG",
+ * https://www.cpcwiki.eu/index.php/PSG), and no Amstrad document names the
+ * sides. The speaker's path, filtered and amplified, is not modelled. */
+void cpc_sound_socket(const cpc_t *cpc, uint16_t *left, uint16_t *right);
 
 #endif

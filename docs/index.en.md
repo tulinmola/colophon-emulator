@@ -13,12 +13,12 @@ That shape is not a matter of taste. A machine assembled from parts that each an
 
 - [The machine](machine.en.md) — what it does today, chip by chip, and what it does not.
 - [The evidence](evidence.en.md) — the tiers of tests, what each proves, and what each cannot see.
-- [The command line](command-line.en.md) — booting a machine, typing at it, and carrying away a picture or a snapshot.
+- [The command line](command-line.en.md) — booting a machine, typing at it, and carrying away a picture, its sound or a snapshot.
 - [The core](core.en.md) — the interface a host builds on: the tick, the pin masks, and the two things the core refuses to do.
 - [Observation](observation.en.md) — how a debugger attaches to a machine that had nothing added to it.
 
 ## Where it stands
 
-There is something to play, and more of the machine to see than there is of the game. A CPC boots its own firmware to the Ready prompt, takes what is typed at it, runs at the speed the hardware ran, reads a disc through a real µPD765, turns a tape under its play head, and can be stopped and picked up again. A Spectrum boots its own firmware too, answers what is typed at it, contends for its memory the way the ULA did, and loads a tape through the firmware's own loader, in both the formats a Spectrum's came in. [The machine](machine.en.md) is the full accounting, and it is honest about the sound that is silent, the four CRTC types that are not there, and what the Spectrum still owes.
+There is something to play, and more of the machine to see than there is of the game. A CPC boots its own firmware to the Ready prompt, takes what is typed at it, runs at the speed the hardware ran, reads a disc through a real µPD765, turns a tape under its play head, sounds its AY-3-8912 through the stereo socket, and can be stopped and picked up again. A Spectrum boots its own firmware too, answers what is typed at it, contends for its memory the way the ULA did, sounds its speaker, and loads a tape through the firmware's own loader, in both the formats a Spectrum's came in. [The machine](machine.en.md) is the full accounting, and it is honest about the tape a Spectrum loads in silence, the four CRTC types that are type 0 but for thirteen exceptions, and what the Spectrum still owes.
 
 The [player](https://github.com/tulinmola/colophon-player) carries these machines into a page and sets a debugger beside them: the processor, the memory, the screen, the drive and the track under its head, each on a panel of its own, and a few seconds of the recent past to step back through. That is where the games are played, and it is the reason the machine is built to be read while it runs rather than only after it stops.

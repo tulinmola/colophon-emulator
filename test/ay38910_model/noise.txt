@@ -1,0 +1,9 @@
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x37   # clock 16: noise A only
+write 8 15     # clock 17
+write 6 1      # clock 18: noise period 1
+wait 400
+write 6 0      # clock 419: noise period 0
+wait 400
+write 6 2      # clock 820: noise period 2
+wait 400

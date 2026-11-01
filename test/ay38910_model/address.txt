@@ -1,0 +1,13 @@
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+data 9         # clock 16: no address latched since reset, ignored (ch_a would show 9)
+write 7 0x3F
+address 0x18   # clock 18: da[7:4] != 0, the chip unselects itself
+data 9         # clock 19: ignored
+wait 4
+address 8      # clock 24
+data 9         # clock 25: R8 = 9
+data 12        # clock 26: R8 = 12, the address is still latched
+wait 4
+address 0x88   # clock 31: unselected again
+data 3         # clock 32: ignored
+wait 4

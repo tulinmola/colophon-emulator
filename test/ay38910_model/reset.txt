@@ -1,0 +1,6 @@
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+wait 43   # clocks 16-58, every register zero
+reset 5   # second reset at another divider phase: clocks 59-63, released in clock 64
+wait 41   # clocks 64-104
+reset 1   # clock 105 only, released in clock 106
+wait 30   # clocks 106-135

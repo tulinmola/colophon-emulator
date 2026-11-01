@@ -1,0 +1,31 @@
+reset 16
+write 7 0x3E
+write 8 15
+write 0 3
+wait 40
+address 0x20
+data 1
+wait 30
+data 0x3F
+wait 30
+address 0x18
+data 5
+wait 20
+address 0xF8
+data 0
+wait 20
+address 0x08
+data 9
+wait 30
+address 0x47
+data 0x3F
+wait 30
+address 0x07
+data 0x3F
+wait 40
+address 0x1D
+data 0x0F
+wait 40
+address 0x00
+data 1
+wait 100

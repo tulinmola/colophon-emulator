@@ -13,6 +13,13 @@
  * itself; every other sample has a disconnected ("null") data bus. The harness
  * mirrors that: it records the value it fed after servicing a read, the CPU's
  * data pins on a write pulse, and null otherwise.
+ *
+ * A test's initial RAM holds its instruction's bytes, from its PC on, among
+ * the bytes it reads and writes as data, so the fewest any test of a file
+ * holds there are the instruction the file tests. The harness holds
+ * z80_reading_operand to them: every byte of the instruction is read once and
+ * in order, by an opcode fetch or by a read the processor calls an operand,
+ * and no other read is called one.
  */
 #include <stdio.h>
 #include <string.h>
@@ -62,6 +69,34 @@ static void load_state(z80_t *cpu, const json_value *state) {
     const json_value *pair = &entries->items[k];
     ram[(uint16_t)pair->items[0].number] = (uint8_t)pair->items[1].number;
   }
+}
+
+static bool listed(const json_value *entries, uint16_t address) {
+  for (size_t k = 0; entries && k < entries->length; k++) {
+    if ((uint16_t)entries->items[k].items[0].number == address) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/* How many bytes from its PC on a test's RAM lists. A byte read or written as
+   data can happen to sit just past the instruction, so the length of the
+   instruction the file tests is the fewest any of its tests lists. No
+   instruction is longer than four bytes. */
+static int instruction_length(const json_value *tests) {
+  int fewest = 4;
+  for (size_t index = 0; index < tests->length; index++) {
+    const json_value *initial = json_get(&tests->items[index], "initial");
+    uint16_t pc = (uint16_t)get_int(initial, "pc");
+    const json_value *entries = json_get(initial, "ram");
+    int length = 0;
+    while (length < fewest && listed(entries, (uint16_t)(pc + length))) {
+      length++;
+    }
+    fewest = length;
+  }
+  return fewest;
 }
 
 #define CHECK(field, expr)                                                                         \
@@ -118,7 +153,7 @@ static int check_final(const z80_t *cpu, const json_value *final, int verbose) {
   return mismatch_count;
 }
 
-static int run_test(const json_value *test, int verbose) {
+static int run_test(const json_value *test, int length, int verbose) {
   const json_value *name = json_get(test, "name");
   const json_value *cycles = json_get(test, "cycles");
   const json_value *ports = json_get(test, "ports");
@@ -130,10 +165,24 @@ static int run_test(const json_value *test, int verbose) {
   uint64_t pins = 0;
   int data_was_fed = 0;
   uint8_t fed_data = 0;
+  uint16_t instruction_byte = cpu.pc;
+  int instruction_bytes_read = 0;
   for (size_t cycle = 0; cycle < cycles->length; cycle++) {
     pins = z80_tick(&cpu, pins);
 
     uint16_t address = z80_address(pins);
+    if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD) &&
+        ((pins & Z80_M1) || z80_reading_operand(&cpu))) {
+      if (address != instruction_byte) {
+        if (verbose) {
+          printf("    cycle %zu: the instruction read from %04X, its next byte is at %04X\n",
+                 cycle + 1, address, instruction_byte);
+        }
+        mismatch_count++;
+      }
+      instruction_byte++;
+      instruction_bytes_read++;
+    }
     int data = -1; /* null: nobody drives the data bus */
     if (data_was_fed) {
       data = fed_data;
@@ -213,6 +262,13 @@ static int run_test(const json_value *test, int verbose) {
       }
     }
   }
+  if (instruction_bytes_read != length) {
+    if (verbose) {
+      printf("    the instruction was read in %d bytes, the corpus lists %d\n",
+             instruction_bytes_read, length);
+    }
+    mismatch_count++;
+  }
   mismatch_count += check_final(&cpu, json_get(test, "final"), verbose);
 
   if (mismatch_count && verbose) {
@@ -237,8 +293,9 @@ int main(int argc, char **argv) {
       return 2;
     }
     int pass = 0, fail = 0;
+    int length = instruction_length(root);
     for (size_t test_index = 0; test_index < root->length; test_index++) {
-      if (run_test(&root->items[test_index], fail < 3)) {
+      if (run_test(&root->items[test_index], length, fail < 3)) {
         fail++;
       } else {
         pass++;

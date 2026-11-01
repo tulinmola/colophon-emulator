@@ -32,9 +32,11 @@
 #define MODE_MFM 2
 
 /* Simon Owen's block after the last track: fifteen bytes of tag, then for
-   every track a length and a position per sector. */
+   every cylinder and side a length and, for each sector, where its
+   identity mark passes. */
 #define OFFSET_TAG_SIZE 15
 static const uint8_t offset_tag[OFFSET_TAG_SIZE] = "Offset-Info\r\n";
+#define ID_MARK (FLOPPY_ID_FIELD - 1) /* from a sector's start to its identity mark */
 
 /* The track's own size code means nothing in the extended layout, where
    every sector carries its length; on a track with no sectors it is the
@@ -57,15 +59,6 @@ static const char creator[] = "Colophon";
 #define ST2_MISSING_DATA_MARK 0x01
 #define ST2_DATA_FIELD_ERROR 0x20
 #define ST2_CONTROL_MARK 0x40
-
-/* The track blocks in the order the image holds them, which is the order
-   the offsets block describes them in: every block counts, readable or
-   not, with the sector count its own header gives. */
-typedef struct {
-  uint8_t cylinder;
-  uint8_t side;
-  uint8_t sectors;
-} block_order_t;
 
 static bool fail(const char **problem, const char *sentence) {
   *problem = sentence;
@@ -214,44 +207,65 @@ static bool read_track(floppy_t *floppy, const uint8_t *image, size_t at, size_t
 
 static uint16_t read_word(const uint8_t *at) { return (uint16_t)(at[0] | (at[1] << 8)); }
 
+static const uint8_t *unreadable_block(const floppy_t *floppy, const floppy_track_t *track) {
+  return floppy->image + track->image_offset;
+}
+
+/* The sectors a track's block lists, which for a track no head can read is
+   what its own header says. */
+static uint8_t sectors_written(const floppy_t *floppy, const floppy_track_t *track) {
+  return track->unreadable ? unreadable_block(floppy, track)[AT_TRACK_SECTORS]
+                           : track->sector_count;
+}
+
 /* Where the sectors really lay, if the image says. The block is optional
    and may be short; a track it does not reach, or describes impossibly,
-   keeps the layout the formatter would have given it. Which byte of the
-   identity field the offset measures to is not written down anywhere, so
-   it is taken as the first of its sync, and is off by at most the sixteen
-   bytes to the mark if it was that. */
+   keeps the layout the formatter would have given it.
+
+   The definition gives an entry to each track block in the image, and
+   does not say which byte of a sector an offset measures to. SAMdisk
+   writes these blocks, and its author wrote the definition: it gives an
+   entry to every cylinder and side, a track never formatted giving its
+   length alone, and measures each offset to the identity mark, after the
+   three bytes of sync mark (src/types/dsk.cpp, ReadDSK and WriteDSK;
+   src/BitstreamDecoder.cpp, scan_bitstream_mfm_fm). Its entries are
+   counted and measured as SAMdisk counts and measures them. */
 static void read_offsets(floppy_t *floppy, const uint8_t *image, size_t length, size_t at,
-                         const block_order_t *order, size_t blocks) {
+                         uint8_t cylinders, uint8_t sides) {
   if (at > length || length - at < sizeof offset_tag ||
       memcmp(image + at, offset_tag, sizeof offset_tag) != 0) {
     return;
   }
   at += sizeof offset_tag;
-  for (size_t block = 0; block < blocks; block++) {
-    floppy_track_t *track = &floppy->tracks[order[block].cylinder][order[block].side];
-    size_t entry = 2 + (size_t)order[block].sectors * 2;
-    if (length - at < entry) {
-      return;
-    }
-    if (!track->unreadable) {
-      /* Sectors pass in the order they are listed, so their offsets must
-         climb; a block that says otherwise is not believed. */
+  for (uint8_t cylinder = 0; cylinder < cylinders; cylinder++) {
+    for (uint8_t side = 0; side < sides; side++) {
+      floppy_track_t *track = &floppy->tracks[cylinder][side];
+      size_t entry = 2 + (size_t)sectors_written(floppy, track) * 2;
+      if (length - at < entry) {
+        return;
+      }
+      /* Sectors pass in the order they are listed, so their marks must
+         climb, and the first must lie far enough from the index for its
+         sync and sync mark to pass after it; a block that says otherwise is
+         not believed. A track no head can read holds no sectors here, and
+         takes the length alone, which is written back as it came. */
       uint32_t track_length = read_word(image + at);
-      bool plausible = track_length > 0;
-      uint32_t previous = 0;
+      bool plausible = true;
+      uint32_t lowest = ID_MARK;
       for (uint8_t index = 0; index < track->sector_count && plausible; index++) {
-        uint32_t offset = read_word(image + at + 2 + (size_t)index * 2);
-        plausible = offset < track_length && (index == 0 || offset > previous);
-        previous = offset;
+        uint32_t mark = read_word(image + at + 2 + (size_t)index * 2);
+        plausible = mark >= lowest && mark < track_length;
+        lowest = mark + 1;
       }
       if (plausible) {
         for (uint8_t index = 0; index < track->sector_count; index++) {
-          track->sectors[index].position = read_word(image + at + 2 + (size_t)index * 2);
+          track->sectors[index].position =
+              (uint32_t)read_word(image + at + 2 + (size_t)index * 2) - ID_MARK;
         }
-        floppy_set_track_length(floppy, order[block].cylinder, order[block].side, track_length);
+        floppy_set_track_length(floppy, cylinder, side, track_length);
       }
+      at += entry;
     }
-    at += entry;
   }
 }
 
@@ -274,8 +288,6 @@ static bool read_image(floppy_t *floppy, uint8_t *image, size_t length, const ch
 
   floppy_mount(floppy, image, length);
 
-  block_order_t order[FLOPPY_MAX_CYLINDERS * FLOPPY_MAX_SIDES];
-  size_t blocks = 0;
   size_t at = HEADER_SIZE;
   for (uint8_t cylinder = 0; cylinder < cylinders; cylinder++) {
     for (uint8_t side = 0; side < sides; side++) {
@@ -299,15 +311,11 @@ static bool read_image(floppy_t *floppy, uint8_t *image, size_t length, const ch
       if (!read_track(floppy, image, at, track_length, extended, cylinder, side, problem)) {
         return false;
       }
-      order[blocks].cylinder = cylinder;
-      order[blocks].side = side;
-      order[blocks].sectors = image[at + AT_TRACK_SECTORS];
-      blocks++;
       at += track_length;
     }
   }
   if (extended) {
-    read_offsets(floppy, image, length, at, order, blocks);
+    read_offsets(floppy, image, length, at, cylinders, sides);
   }
   return true;
 }
@@ -326,35 +334,29 @@ bool dsk_read(floppy_t *floppy, uint8_t *image, size_t length, const char **prob
 
 /* What a track takes in the image: its header and its data, in whole
    256-byte units, which is the only size the table can express. A track
-   too big for the table's byte cannot be written at all, nor one whose
-   length or positions the offsets block's words cannot hold. A track the
-   head cannot decode keeps the block it was read from. */
+   the head cannot decode keeps the block it was read from, padded out to
+   the next unit, since the original layout's one length need not be a
+   whole number of them. A track too big for the table's byte cannot be
+   written at all, nor one whose length the offsets block's words cannot
+   hold, nor one with a sector whose identity mark does not pass before the
+   index, which the block cannot say. */
 static size_t track_block_size(const floppy_track_t *track) {
-  if (track->unreadable) {
-    return track->room;
-  }
   if (track->length > 0xFFFF) {
     return 0;
   }
-  size_t data = 0;
-  for (uint8_t index = 0; index < track->sector_count; index++) {
-    const floppy_sector_t *sector = &track->sectors[index];
-    if (sector->position > 0xFFFF) {
-      return 0;
+  size_t used = track->room;
+  if (!track->unreadable) {
+    used = TRACK_HEADER_SIZE;
+    for (uint8_t index = 0; index < track->sector_count; index++) {
+      const floppy_sector_t *sector = &track->sectors[index];
+      if (sector->position + ID_MARK >= track->length) {
+        return 0;
+      }
+      used += (size_t)sector->recorded * sector->copies;
     }
-    data += (size_t)sector->recorded * sector->copies;
   }
-  size_t block = TRACK_HEADER_SIZE + ((data + 255) & ~(size_t)255);
+  size_t block = (used + 255) & ~(size_t)255;
   return block > (size_t)255 * 256 ? 0 : block;
-}
-
-static const uint8_t *unreadable_block(const floppy_t *floppy, const floppy_track_t *track) {
-  return floppy->image + track->image_offset;
-}
-
-static uint8_t sectors_written(const floppy_t *floppy, const floppy_track_t *track) {
-  return track->unreadable ? unreadable_block(floppy, track)[AT_TRACK_SECTORS]
-                           : track->sector_count;
 }
 
 static void put_word(uint8_t *at, uint32_t value) {
@@ -391,10 +393,14 @@ static void write_track(const floppy_t *floppy, const floppy_track_t *track, uin
 }
 
 size_t dsk_write(const floppy_t *floppy, uint8_t *out, size_t capacity) {
+  /* A disc with no track on it is still a disc with a side. */
+  uint8_t cylinders = floppy->cylinders > 0 ? floppy->cylinders : 1;
+  uint8_t sides = floppy->sides > 0 ? floppy->sides : 1;
   size_t total = HEADER_SIZE + sizeof offset_tag;
-  for (uint8_t cylinder = 0; cylinder < floppy->cylinders; cylinder++) {
-    for (uint8_t side = 0; side < floppy->sides; side++) {
+  for (uint8_t cylinder = 0; cylinder < cylinders; cylinder++) {
+    for (uint8_t side = 0; side < sides; side++) {
       const floppy_track_t *track = &floppy->tracks[cylinder][side];
+      total += 2 + (size_t)sectors_written(floppy, track) * 2;
       if (!track->formatted) {
         continue;
       }
@@ -402,7 +408,7 @@ size_t dsk_write(const floppy_t *floppy, uint8_t *out, size_t capacity) {
       if (block == 0) {
         return 0;
       }
-      total += block + 2 + (size_t)sectors_written(floppy, track) * 2;
+      total += block;
     }
   }
   if (out == NULL || capacity < total) {
@@ -412,22 +418,21 @@ size_t dsk_write(const floppy_t *floppy, uint8_t *out, size_t capacity) {
   memset(out, 0, HEADER_SIZE);
   memcpy(out, extended_tag, sizeof extended_tag - 1);
   memcpy(out + AT_CREATOR, creator, sizeof creator - 1);
-  /* A disc with no track on it is still a disc with a side. */
-  out[AT_CYLINDERS] = floppy->cylinders > 0 ? floppy->cylinders : 1;
-  out[AT_SIDES] = floppy->sides > 0 ? floppy->sides : 1;
+  out[AT_CYLINDERS] = cylinders;
+  out[AT_SIDES] = sides;
   size_t at = HEADER_SIZE;
-  for (uint8_t cylinder = 0; cylinder < floppy->cylinders; cylinder++) {
-    for (uint8_t side = 0; side < floppy->sides; side++) {
+  for (uint8_t cylinder = 0; cylinder < cylinders; cylinder++) {
+    for (uint8_t side = 0; side < sides; side++) {
       const floppy_track_t *track = &floppy->tracks[cylinder][side];
       if (!track->formatted) {
         continue;
       }
       size_t block = track_block_size(track);
-      out[AT_LENGTH_TABLE + (size_t)cylinder * floppy->sides + side] = (uint8_t)(block / 256);
+      out[AT_LENGTH_TABLE + (size_t)cylinder * sides + side] = (uint8_t)(block / 256);
+      memset(out + at, 0, block);
       if (track->unreadable) {
-        memcpy(out + at, unreadable_block(floppy, track), block);
+        memcpy(out + at, unreadable_block(floppy, track), track->room);
       } else {
-        memset(out + at, 0, block);
         write_track(floppy, track, cylinder, side, out + at);
       }
       at += block;
@@ -435,16 +440,15 @@ size_t dsk_write(const floppy_t *floppy, uint8_t *out, size_t capacity) {
   }
   memcpy(out + at, offset_tag, sizeof offset_tag);
   at += sizeof offset_tag;
-  for (uint8_t cylinder = 0; cylinder < floppy->cylinders; cylinder++) {
-    for (uint8_t side = 0; side < floppy->sides; side++) {
+  for (uint8_t cylinder = 0; cylinder < cylinders; cylinder++) {
+    for (uint8_t side = 0; side < sides; side++) {
       const floppy_track_t *track = &floppy->tracks[cylinder][side];
-      if (!track->formatted) {
-        continue;
-      }
+      /* A track never formatted has a length of zero, and its entry is that
+         word alone, which is all SAMdisk reads for one. */
       put_word(out + at, track->length);
       at += 2;
       for (uint8_t index = 0; index < sectors_written(floppy, track); index++) {
-        put_word(out + at, track->unreadable ? 0 : track->sectors[index].position);
+        put_word(out + at, track->unreadable ? 0 : track->sectors[index].position + ID_MARK);
         at += 2;
       }
     }

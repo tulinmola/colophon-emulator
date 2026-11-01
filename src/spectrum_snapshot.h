@@ -31,6 +31,10 @@
  * expected to keep step. Nothing in the 48K format has room for the ULA's
  * position, and nothing here invents one.
  *
+ * Nor does it carry the rest of the last write to the ULA beside the
+ * border. Bits 3 and 4, which set the speaker, come back clear, so the
+ * speaker rests until the program next writes to the port.
+ *
  * Interrupts come back the same roundabout way. The header holds IFF2 alone,
  * because the restart is meant to be a RETN and RETN copies IFF2 into IFF1.
  * Reading one sets both flags from that single bit, which is where a RETN

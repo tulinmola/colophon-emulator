@@ -53,6 +53,25 @@
  *   as eight half-rows of five, each half-row selected by one of the upper
  *   address lines A8 to A15 held low, and read together when more than one
  *   is.
+ * - "Spectrum Cassette, EAR and MIC port, Issue 2 and 3" (Pera Putnik),
+ *   https://zx48.8bitchip.info/cassport.htm — the voltage on pin 28 after
+ *   each setting of bits 4 and 3, measured on an Issue 3 "without input
+ *   signal on EAR"; and, with bit 3 set, bit 6 still reading high for about
+ *   180 to 2800 T-states after bit 4 falls, for "capacitors connected
+ *   between pin 28 of ULA and EAR and MIC connectors", with "no delay" when
+ *   bit 4 rises.
+ * - Sinclair ZX Spectrum Service Manual,
+ *   https://spectrumcomputing.co.uk/pub/sinclair/technical-docs/ZXSpectrum48K_ServiceManual.pdf,
+ *   and its Figure 1.5, the Issue 3 circuit diagram,
+ *   https://spectrumforeveryone.com/wp-content/uploads/2017/08/ZXSpectrumIssue3-Schematics.gif
+ *   — the speaker hung off pin 28 through D9 into TR7, a ZTX450 emitter
+ *   follower, and the EAR socket reaching the pin through R36 and C32; and,
+ *   in §5.4.3, the MIC output alone "barely sufficient to drive the
+ *   loudspeaker".
+ * - ZX Spectrum Introduction (Sinclair), chapter 6,
+ *   https://worldofspectrum.org/ZXSpectrumIntroduction/chapter_six.html — of
+ *   a tape played too loud, "you may be able to hear it coming through the
+ *   computer's own loudspeaker".
  */
 #ifndef COLOPHON_SPECTRUM_H
 #define COLOPHON_SPECTRUM_H
@@ -200,5 +219,24 @@ void spectrum_finish_instruction(spectrum_t *spectrum);
  * ROM, and a poke there lands nowhere, as a write from the processor would. */
 uint8_t spectrum_peek(const spectrum_t *spectrum, uint16_t address);
 void spectrum_poke(spectrum_t *spectrum, uint16_t address, uint8_t value);
+
+/* The speaker is moved by a write to the ULA, which can land on any
+   T-state. */
+#define SPECTRUM_SOUND_STEPS_PER_SECOND (SPECTRUM_TICKS_PER_MILLISECOND * 1000)
+
+/* The voltage across the loudspeaker, in tenths of a millivolt. The ULA
+ * drives one pin for the speaker and both tape sockets, at a level set by
+ * bits 4 and 3 of the last write to it, and the speaker stands two silicon
+ * junctions below that pin, taken at 0.7V each: bit 4 sounds it, and bit 3
+ * alone does not. The board is an Issue 3's.
+ *
+ * Left out, for want of a measurement: the little current the junctions
+ * pass below their drop; the pin's fall, which the capacitors to the tape
+ * sockets slow, taken here as instant; a playing tape, which reaches the
+ * same pin through the EAR socket's capacitor and so the speaker, wherever
+ * it lifts the pin past the junctions, by an amount the recorder's volume
+ * and the ULA's output stage set; and what the speaker makes of its
+ * voltage. */
+uint16_t spectrum_sound_speaker(const spectrum_t *spectrum);
 
 #endif

@@ -50,7 +50,9 @@ The letters are identified by looking each glyph up in the character table the R
 
 A tape is judged the same way, and more sharply. The deck plays a block and the Spectrum's own `LD-BYTES` reads it — the routine that measures the time between edges on the ear line and has no other way of knowing what it has been handed. It returns with the carry set only if every bit arrived and the checksum agreed, so the sixteen bytes that turn up in memory were put there by Sinclair's arithmetic and not by ours.
 
-Then it gives the 6128 a disc — Shaker's, written by somebody else's tool — and types `CAT`. The names and sizes AMSDOS prints are set against what a reader written in the test, which knows nothing of floppies or controllers and walks the image's own directory, finds in the same bytes; a file is then loaded through the controller, the ROM and BASIC and compared byte for byte with that reader's copy of it. Two routes to the same 27,004 bytes, only one of them through the chip. Then `RUN"SHAKE27A` must leave the machine in mode 2 with its program counter inside the module. The menu it draws there is in the ROM's own characters, but mode 2 halves their width on the screen, so this tier can tell whose code is running without being able to read a word of it. The tier below, which counts in mode 2, reads it. With no disc at all, the ROM must find the drive not ready and say so.
+Sound is held to what the firmware plays. The 6128's `SOUND 1,142` must turn channel A over every 1,136 microseconds, a whole wave at 440.14Hz, the international A of its user manual. The Spectrum's `BEEP 1,0` must bring the speaker up once every 13,372 T-states, which is what the ROM's own loop comes to when its instructions are counted out at their documented timings, and is middle C to within a twentieth of a percent; a contended write may stretch a cycle, but never shorten one.
+
+Then it gives the 6128 a disc — Shaker's, written by somebody else's tool — and types `CAT`. The names and sizes AMSDOS prints are set against what a reader written in the test, which knows nothing of floppies or controllers and walks the image's own directory, finds in the same bytes; a file is then loaded through the controller, the ROM and BASIC and compared byte for byte with that reader's copy of it. Two routes to the same 27,004 bytes, only one of them through the chip. Then `RUN"SHAKE27A` must leave the machine in mode 2 with its program counter inside the module. The menu it draws there is in the ROM's own characters, but mode 2 halves their width on the screen, so this tier can tell whose code is running without being able to read a word of it. Shaker's own tier, among what is still to come, counts in mode 2 and reads it. With no disc at all, the ROM must find the drive not ready and say so.
 
 It needs the firmware and disc images, so it fetches them first.
 
@@ -61,6 +63,8 @@ It needs the firmware and disc images, so it fetches them first.
 It matters just as much that we did not write it. It has already caught a real error: we had concluded that an undocumented behaviour under the `DD CB` prefix did not exist, and 168 files said otherwise. The corpus is pinned to a commit, so "passes the complete suite" names something exact that cannot shift underneath us.
 
 Today every instruction the Z80 knows passes it, per cycle.
+
+The tier grades one thing the corpus does not mark: which reads take an instruction's own operands. A case's memory holds the instruction's bytes from its program counter on, among the bytes it reads and writes as data, so the fewest bytes any case of a file holds there are the instruction that file tests. Every one of them must be fetched once and in order, by an opcode fetch or by a read the processor calls an operand, and no other read may be called one.
 
 The first run downloads the corpus, which takes a few minutes; after that it is local.
 

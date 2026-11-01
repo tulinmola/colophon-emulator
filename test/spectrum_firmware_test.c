@@ -394,6 +394,56 @@ static void a_program_loads_off_a_tape_and_runs(void) {
   }
 }
 
+/* "the pitch is given in semitones above middle C" (Steven Vickers, ZX
+   Spectrum BASIC Programming, chapter 19,
+   https://worldofspectrum.org/ZXBasicManual/zxmanchap19.html), so BEEP 1,0
+   is middle C, which the ROM plays by flipping bit 4 of port &FE once a
+   half cycle with HL = &066A ("The complete Spectrum ROM disassembly", Ian
+   Logan and Frank O'Hara, BEEPER at &03B5). Counted from that listing at
+   the Z80's documented timings, each half cycle is 4·HL + 118 T-states, so
+   a whole cycle is 13,372, 261.74Hz against 261.63Hz. An OUT to the ULA is
+   charged up to six T-states inside the picture, once and ahead of its
+   write every time, so an interval between two rising edges holds two
+   OUTs' charges and can be up to twelve longer. */
+static void beep_1_0_plays_middle_c(void) {
+  if (!power_on()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  type_key(SPECTRUM_CAPS_SHIFT, SPECTRUM_SYMBOL_SHIFT); /* the E cursor */
+  type_key(SPECTRUM_KEY(0, 1), SPECTRUM_SYMBOL_SHIFT);  /* BEEP */
+  type_key(SPECTRUM_KEY(3, 0), KEYBOARD_NO_KEY);        /* 1 */
+  type_key(SPECTRUM_KEY(7, 3), SPECTRUM_SYMBOL_SHIFT);  /* , */
+  type_key(SPECTRUM_KEY(4, 0), KEYBOARD_NO_KEY);        /* 0 */
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+
+  /* The note lasts a second and has begun. */
+  uint16_t level = spectrum_sound_speaker(&spectrum);
+  long since_rising = -1;
+  long shortest = 0;
+  int cycles = 0;
+  for (int tick = 0; tick < 50 * SPECTRUM_TICKS_PER_FRAME && cycles < 100; tick++) {
+    spectrum_tick(&spectrum);
+    uint16_t now = spectrum_sound_speaker(&spectrum);
+    if (since_rising >= 0) {
+      since_rising++;
+    }
+    if (now > level) {
+      if (since_rising >= 0) {
+        if (since_rising < 13372 || since_rising > 13372 + 12) {
+          TEST_FAIL("a cycle took %ld T-states", since_rising);
+        }
+        shortest = cycles == 0 || since_rising < shortest ? since_rising : shortest;
+        cycles++;
+      }
+      since_rising = 0;
+    }
+    level = now;
+  }
+  TEST_EQUAL(cycles, 100);
+  TEST_EQUAL(shortest, 13372);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -404,5 +454,6 @@ int main(int argc, char **argv) {
   TEST_RUN(the_keyboard_types_what_is_printed_on_it);
   TEST_RUN(a_block_loads_through_the_roms_own_loader);
   TEST_RUN(a_program_loads_off_a_tape_and_runs);
+  TEST_RUN(beep_1_0_plays_middle_c);
   return TEST_REPORT("spectrum firmware");
 }

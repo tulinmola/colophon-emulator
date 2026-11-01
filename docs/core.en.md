@@ -4,7 +4,7 @@ description: The interface a host builds on — the tick, the pin masks, the buf
 order: 4
 ---
 
-The core is a machine, not an application. It has no `main`, it never asks the operating system for anything, and it cannot print. What it offers a host is a step function and a set of plain structures, and everything else — files, windows, sound, time — belongs to whoever is calling.
+The core is a machine, not an application. It has no `main`, it never asks the operating system for anything, and it cannot print. What it offers a host is a step function and a set of plain structures, and everything else — files, windows, the sound card, time — belongs to whoever is calling.
 
 Two rules produce all of that, and they are worth stating before anything else.
 
@@ -80,17 +80,23 @@ A CPC's links are the ones soldered on its board: the refresh rate, which decide
 
 Every field of every chip is public. This is deliberate and not an oversight: there is no encapsulation to work around anywhere in the core, which is the property [observation](observation.en.md) is built on.
 
-Three functions exist anyway, because each encodes something a host would otherwise have to know for itself:
+A few functions exist anyway, because each encodes something a host would otherwise have to know for itself:
 
 `cpc_peek` and `cpc_poke` resolve through the same mapping the processor's own memory cycles use, so a peek under an enabled ROM sees the ROM and a poke lands in the RAM beneath it.
 
 `cpc_video_address` applies the board's rewiring of the 6845's address lines — which is what scatters a character row across eight blocks two kilobytes apart — to the pins the chip put out on its last character clock. It takes the machine and not the chip, and that is not an accident: by the time a caller holds the pins, the chip's counters have already moved past the values that went out on the wires, so a function reading the counters would name an address the machine never fetched from.
 
+`z80_reading_operand` says whether the memory read on the bus takes one of the instruction's bytes after its opcode or a byte of data, which the pins cannot: both drive MREQ and RD without M1. A host watching what a program reads asks it, and keeps an instruction's operands out.
+
+`cpc_sound_socket` turns the sound chip's three levels into voltages, by a measurement of one output into about a CPC's load, applies the board's resistors to them and gives the stereo socket's two sides in tenths of a millivolt. The chip's outputs are levels from 0 to 15, as its pins are switched; what a level comes to in volts depends on what the pin drives, and that is the board's.
+
+`spectrum_sound_speaker` does the same for a Spectrum's loudspeaker. The ULA keeps the last write's bits 4 and 3 as it was given them; the function turns them into the voltage across the speaker, by a measurement of the ULA's pin less the textbook drop of the two silicon junctions between it and the speaker, in tenths of a millivolt.
+
 A host that sets the registers behind the memory map from outside — restoring a snapshot, say — owes the machine a `cpc_remap` afterwards.
 
 ## What is a chip and what is a machine
 
-A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `ppi.c`, `psg.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word, and `crtc.c` has it only inside a quotation from its source. Nor does a chip hold a machine's data. The key matrix is a grid of switches and nothing more — how many lines a machine wires to it, which key sits where, and what is printed on the keycap all live with the machine whose keyboard it is, and the chip declares only how much room to reserve for them. A comment may name a machine to justify a decision, and three in `z80.c` do — why the processor implements the NMOS parity bug, why it leaves the general case of interrupt mode 0 alone, and why its acknowledge samples WAIT where it does — but that is the comment explaining a choice, not the code making one.
+A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `ppi.c`, `ay38910.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word, and `crtc.c` has it only inside quotations from its source. Nor does a chip hold a machine's data. The key matrix is a grid of switches and nothing more — how many lines a machine wires to it, which key sits where, and what is printed on the keycap all live with the machine whose keyboard it is, and the chip declares only how much room to reserve for them. A comment may name a machine to justify a decision, and three in `z80.c` do — why the processor implements the NMOS parity bug, why it leaves the general case of interrupt mode 0 alone, and why its acknowledge samples WAIT where it does — but that is the comment explaining a choice, not the code making one.
 
 Each machine's wiring gets a file of its own, and that file is the only one that knows what its chips are soldered into: its memory map, its I/O decode, and whatever else its board did — a CPC's file also holds the video address wiring, the motor line running from a port of its own to the drives, and the clock that divides between the chips, none of which a Spectrum has. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it. Nor is the disc: the controller is the µPD765 the Spectrum +3 also used, the drive answers the Shugart lines any such controller reads, and the medium is the shape any of them finds, so all three would go into a second machine as they are.
 
@@ -98,6 +104,6 @@ That is no longer a claim. A ZX Spectrum was built beside the CPC out of the sam
 
 ## What this interface promises
 
-It is young, and it is shaped by its two hosts: the command line in this repository, and the [player](https://github.com/tulinmola/colophon-player), which compiles the same C to WebAssembly. It will change as the machine grows, and no version of it has been declared stable.
+It is young, and it is shaped by the hosts built on it: the command line in this repository, and every project that carries the same C beside a bridge of its own, the [player](https://github.com/tulinmola/colophon-player) among them, which compiles it to WebAssembly. It will change as the machine grows, and no version of it has been declared stable.
 
 A host that needs to reach into a structure from another language should generate what it needs from these headers rather than write it down. The player does exactly that: the field offsets its panels read are produced by a generator at build time, so renaming a field breaks a build instead of leaving a table quietly reporting a number that is no longer true.

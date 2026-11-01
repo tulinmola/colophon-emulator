@@ -1,0 +1,12 @@
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16: tone A only
+write 8 15     # clock 17
+write 0 1      # clock 18: period 1
+wait 96
+write 0 0      # clock 115: period 0
+wait 96
+write 0 3      # clock 212: period 3
+wait 192
+write 0 0x00   # period 0x100 = 256 through R1, for the 12-bit counter
+write 1 1
+wait 4200
