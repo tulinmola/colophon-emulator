@@ -107,6 +107,15 @@ static uint64_t crtc_bus_pins(uint16_t address, uint8_t data) {
   return pins;
 }
 
+/* The Gate Array holds a character's display enable for a microsecond before
+   drawing it, so a write that shuts it during that character is still in time
+   to border it. */
+static void border_what_a_write_shut(cpc_t *cpc) {
+  if (cpc->crtc.display_shut_since_the_tick) {
+    gate_array_shut_the_display(&cpc->gate_array);
+  }
+}
+
 static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
   uint64_t pins = crtc_bus_pins(address, data);
   /* Which edge of the character the access finished on, which every type's
@@ -116,7 +125,9 @@ static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
   if (gate_array_character_clock(&cpc->gate_array)) {
     pins |= CRTC_ON_THE_CHARACTER_CLOCK;
   }
-  return crtc_access(&cpc->crtc, pins);
+  pins = crtc_access(&cpc->crtc, pins);
+  border_what_a_write_shut(cpc);
+  return pins;
 }
 
 /* Whether the CRTC takes a write on the first character clock its I/O cycle
@@ -139,9 +150,9 @@ static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
    early on these two to make up for it. So an OUT's held write lands after
    the tick of the clock that takes it, inside the microsecond that follows,
    and takes back no line end that tick made (land_a_held_crtc_write); an R0
-   lowered onto or below the character C0 stands on is the one exception
-   (hand_over_a_held_r0_write). An OUTI's write is taken on the clock its
-   cycle begins on, through the window the chip keeps a line's end in, as
+   lowered onto or below the character C0 stands on, and an R2 or an R3, are the
+   exceptions (hand_over_a_held_write). An OUTI's write is taken on the clock
+   its cycle begins on, through the window the chip keeps a line's end in, as
    behind a Gate Array: ch. 13.6.3 puts its last placement in time at #3B, as
    ch. 13.6.1 does a type 0's, and the window gives it a microsecond more on
    every type, which Shaker's B (6) grades (crtc.h). Ch. 4.4.4's diagram C
@@ -158,6 +169,7 @@ static bool crtc_takes_writes_on_its_clock(const cpc_t *cpc) {
    of that tick to take back for it. */
 static void land_a_held_crtc_write(cpc_t *cpc, uint16_t address, uint8_t data) {
   crtc_access(&cpc->crtc, crtc_bus_pins(address, data));
+  border_what_a_write_shut(cpc);
 }
 
 /* An R0 written by an OUT the board holds to this clock, lowering the width
@@ -175,16 +187,34 @@ static void land_a_held_crtc_write(cpc_t *cpc, uint16_t address, uint8_t data) {
    photographs #48 and #7A on both. That a lowering write is taken a
    microsecond sooner than a raising one is ours, from those two groups. It
    reaches the chip off the clock, the ending the clock before took being no
-   longer the chip's to take back. Every other register keeps the microsecond
-   ch. 4.4.4 gives these two: handing every held write over ahead of the tick
-   puts six of Shaker's E (4) lines wrong on both ASIC records. Only a write
-   whose instruction is still under way is handed over, a processor restarted
-   under one having left nothing to hand. */
-static void hand_over_a_held_r0_write(cpc_t *cpc) {
+   longer the chip's to take back.
+
+   R2 and R3 are handed over too: the line sync's comparisons take the OUT's
+   write on the character its fourth microsecond lands on. Ch. 14.9's CRTC 4
+   schematic draws "R2-JIT / OUT(C),r8" with the I/O on C0=R2 and the sync
+   starting there, and ch. 14.7.2 says an "R2.JIT ... does not cause the HSYNC
+   black zone to appear later ..." on these two; ch. 14.5.3's "OUT CRTC-R3,5",
+   landing on the character C3l reaches 5 on, ends a five-character sync, and
+   ch. 14.5.4.4's first diagram an R3 of 1 landing on C0=R2+1 a one-character
+   one, where R3 below the count overflows as on every row of ch. 14.5.3.
+   Shakerland photographs Shaker's A (3) R0=3 pages and B (4) with the sync on
+   the line R2 is written on, A (2)'s R0=7 page, A (R)'s R2=#0A page, A (Y)'s
+   R3=5 page, a sync five microseconds long, and B (I)'s R3=1 page as these draw
+   them. R3's VSYNC width comes over with it, counted a line sooner where the
+   write is held to a line's end during a VSYNC, which nothing grades. Every
+   other register keeps the microsecond ch. 4.4.4 gives these two:
+   handing every held write over ahead of the tick puts six of Shaker's E (4)
+   lines wrong on both ASIC records. Only a write whose instruction is still
+   under way is handed over, a processor restarted under one having left nothing
+   to hand. */
+static void hand_over_a_held_write(cpc_t *cpc) {
   uint16_t address = z80_address(cpc->pins);
   bool to_the_data_port = (address & 0x4000) == 0 && (address & 0x0300) == 0x0100;
+  uint8_t number = cpc->crtc.address_register;
+  bool lowers_r0_onto_c0 = number == 0 && z80_data(cpc->pins) <= cpc->crtc.c0;
+  bool moves_the_line_sync = number == 2 || number == 3;
   if (cpc->crtc_write_awaits_the_clock && !z80_instruction_complete(&cpc->cpu) &&
-      to_the_data_port && cpc->crtc.address_register == 0 && z80_data(cpc->pins) <= cpc->crtc.c0) {
+      to_the_data_port && (lowers_r0_onto_c0 || moves_the_line_sync)) {
     cpc->crtc_write_awaits_the_clock = false;
     crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, z80_data(cpc->pins)));
   }
@@ -238,6 +268,22 @@ static bool syncs_follow_the_display(const cpc_t *cpc) {
 static bool acts_on_a_sync_end_at_the_clock(const cpc_t *cpc) {
   return cpc->crtc.type == 3 || cpc->crtc.type == 4;
 }
+
+/* The sample of a displayed character from which a colour written in the
+   microsecond it is displayed in shows. Ch. 9.2.2 draws an OUT (C),r8, an
+   OUT (n),A and an OUTI to the Gate Array's port on every type: on types 0,
+   1, 2 and 4 the new colour begins with the second byte of the character the
+   Gate Array displays in the microsecond the write is made in, the first
+   keeping the old; on type 3 it begins half way through the first byte,
+   four mode 2 pixels sooner. Where mode 2 starts a pixel early on types 0-2
+   the chapter leaves that byte's first pixel in the old colour, and a type
+   4 changes a pixel sooner in mode 2 alone; both wait on the early mode 2
+   pixel this Gate Array does not yet draw (gate_array.h). Shaker's E (5)
+   "SPLIT RAST COLOR POS" draws these edges with their expected pictures, and
+   Shakerland photographs Shaker's A (9) on every type with its boxes beginning
+   where this puts them; on the two ASICs they end a column or so later than
+   here, which is not yet understood. */
+static uint8_t colour_write_reaches_sample(const cpc_t *cpc) { return cpc->crtc.type == 3 ? 4 : 8; }
 
 /* Devices decode single address bits, so one access can reach several at
    once; every test in the two functions below is independent, and their
@@ -414,7 +460,18 @@ uint64_t cpc_tick(cpc_t *cpc) {
     tape_tick(cpc->tape);
   }
   if (gate_array_character_clock(&cpc->gate_array)) {
-    hand_over_a_held_r0_write(cpc);
+    if (cpc->a_character_is_held) {
+      /* A public field and a count here: past the character, nothing is
+         held. */
+      uint8_t from = cpc->character_held_from < GATE_ARRAY_SAMPLES_PER_CHARACTER
+                         ? cpc->character_held_from
+                         : GATE_ARRAY_SAMPLES_PER_CHARACTER;
+      gate_array_redraw_with_colours_since(&cpc->gate_array, from, cpc->character_held);
+      monitor_receive(&cpc->monitor, cpc->character_held + from,
+                      (uint8_t)(GATE_ARRAY_SAMPLES_PER_CHARACTER - from),
+                      cpc->character_held_csync);
+    }
+    hand_over_a_held_write(cpc);
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
     bool hsync = (cpc->crtc_pins & CRTC_HSYNC) != 0;
     bool vsync = (cpc->crtc_pins & CRTC_VSYNC) != 0;
@@ -424,11 +481,13 @@ uint64_t cpc_tick(cpc_t *cpc) {
                     late ? cpc->crtc_vsync_a_character_ago : vsync);
     cpc->crtc_hsync_a_character_ago = hsync;
     cpc->crtc_vsync_a_character_ago = vsync;
-    uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
     gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0,
-                     (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, samples);
-    monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
-                    gate_array_csync(&cpc->gate_array));
+                     (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cpc->character_held);
+    cpc->character_held_from = colour_write_reaches_sample(cpc);
+    cpc->character_held_csync = gate_array_csync(&cpc->gate_array);
+    cpc->a_character_is_held = true;
+    monitor_receive(&cpc->monitor, cpc->character_held, cpc->character_held_from,
+                    cpc->character_held_csync);
     /* The controller counts in microseconds, which is the character
        clock, and turns the drives. */
     if (cpc->disc_interface) {

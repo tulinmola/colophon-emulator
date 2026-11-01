@@ -215,7 +215,14 @@ static bool parity_c9(const crtc_t *crtc) {
    parity comes round to its limit instead of missing it: for an R9 of 6, at
    C9=19, which is a comparison a type 2 does not make. */
 static uint8_t c9_vma(const crtc_t *crtc) {
-  if (!crtc->interlace_video_mode) {
+  /* A type 2 takes the mode into the address the moment R8 asks for it or
+     gives it up, the count going on as it was: "Activation of the IVM mode
+     during the line immediately uses C9.IVM for the display", "this
+     translation between C9 and C9.VMA is immediately considered during the
+     creation of the displayed address, including during the line, from
+     position C0 where R8 is modified" (ch. 19.8.3). */
+  bool video_mode = crtc->type == 2 ? interlace_video_asked(crtc) : crtc->interlace_video_mode;
+  if (!video_mode) {
     return crtc->c9;
   }
   /* "Another counter, C9.IVM, is used for displaying and managing video
@@ -449,6 +456,10 @@ static bool gives_up_interlace_on_its_interlace_line(const crtc_t *crtc) {
    it, not the adjustment that carried it — save a type 2's line given up,
    which was no interlace line after all. */
 static void begin_frame(crtc_t *crtc) {
+  /* "When the IVM state which authorizes the consideration of parity in the
+     test C9 = R9 becomes active with a RFD, it is no longer possible to
+     deactivate it until the frame is finished" (ch. 11.6.2). */
+  crtc->row_end_test_is_faulty = false;
   crtc->vertical_adjustment_in_progress = false;
   crtc->adjustment_opened_at_c4_of_zero = false;
   crtc->r4_moved_at_a_lines_end = false;
@@ -561,8 +572,8 @@ static bool takes_the_frame_end_where_the_line_ends(const crtc_t *crtc) {
    so one unmade at C0=0 is not — save a given-up interlace line (below) —
    and one an R4 or R9 write makes last later in the line is. An R5 written
    while C0 names R0 is taken, as on the ASICs and a type 1, which nothing
-   grades; on a type 1 an R5 raised from 0 there would also set off "a bug
-   described in chapter 11.6", which is not here. */
+   grades; on a type 1 an R5 raised from 0 there also sets off "a bug
+   described in chapter 11.6", the RFD (notice_an_rfd). */
 static bool asks_r5_to_the_end_of_the_last_line(const crtc_t *crtc) { return crtc->type == 2; }
 
 /* Whether a last line unmade at C0=1 is spent on an adjustment, which is a
@@ -609,6 +620,49 @@ static bool holds_the_vsync_count_on_a_line_of_one_character(const crtc_t *crtc)
   return crtc->type == 1;
 }
 
+/* The C9=R9 test a type 1 makes where C0 meets R1, which captures VMA' and
+   ends VMA's taking of R12/R13. An RFD takes the parity into it: "The
+   activation of an RFD implies a test of R9 carried out with the current
+   parity. On the first frame (case 1), VMA' is no longer updated when C0
+   reaches R1 (because the test C9=R9 is faulty) ... On the second frame (case
+   2), VMA' is updated when C0 reaches R1 and C9=R9" (ch. 11.6.1), and an "IVM
+   ON/OFF", which sets an even parity, gives case 1 on every frame where it
+   comes before the RFD and case 2 where it comes after (ch. 11.6.2). That the
+   faulty frame is the one the RFD found even, whatever R9 holds and whatever
+   the parity does after, is ours, from Shakerland's photographs of Shaker's D
+   (9) on a type 1: the test passes on an odd frame at C9=R9=14, fails on an
+   even one at 14, 7 and 6, and still passes after an IVM ON/OFF has made the
+   frame even below the RFD. */
+static bool the_row_end_test_passes(const crtc_t *crtc) {
+  return row_is_on_its_last_scanline(crtc) && !crtc->row_end_test_is_faulty;
+}
+
+/* An RFD owed is set off where the line ends: "this paradox will generate an
+   RFD state, which will be triggered at the end of the line" (ch. 13.7.1.2).
+   The C9=R9 test is made again there with the parity taken in, so that on
+   case 2 "a RFD triggered on the last line C9=R9 disables the state allowing
+   VMA to be updated with R12/R13" (ch. 11.6.1) and on case 1 the state
+   stands. "If R4 is modified (but C9==R9) ... R12/R13 are considered 1 frame
+   out of 2" (ch. 13.7.1.2). An R5 of #10 leaves the parity out on a CRTC
+   1-B, as one of the two machines Shakerland photographs Shaker's B (O) on
+   does. Where C0 never meets R1, "the condition C9=R9 is enough to deactivate
+   the update of VMA with R12/R13" (ch. 11.6); that it is the same test, the
+   parity taken in, is ours. */
+static void trigger_an_rfd(crtc_t *crtc) {
+  bool triggered = crtc->rfd_at_the_line_end;
+  crtc->rfd_at_the_line_end = false;
+  crtc->r0_widened_on_the_last_line = false;
+  if (triggered) {
+    crtc->row_end_test_is_faulty =
+        crtc->row_end_test_is_faulty || (crtc->rfd_takes_the_parity && !crtc->parity_frame);
+    crtc->vma_takes_the_offset = true;
+  }
+  bool c0_never_meets_r1 = crtc->registers[1] > crtc->registers[0];
+  if ((triggered || c0_never_meets_r1) && the_row_end_test_passes(crtc)) {
+    crtc->vma_takes_the_offset = false;
+  }
+}
+
 /* On a type 0 a line that never reaches C0=1 leaves C9's management
    disabled, and then "all of the CRTC counters are frozen as long as R0=0"
    (ch. 13.2.1) — the VSYNC's line counter with them, which is why a VSYNC
@@ -622,6 +676,7 @@ static bool holds_the_vsync_count_on_a_line_of_one_character(const crtc_t *crtc)
 static void enter_scanline(crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
   crtc->line_before_ended_its_padding = false;
+  trigger_an_rfd(crtc);
   /* The disarm is read at C0=3 because a write made at C0=2 lands there, and
      a line of three characters has no C0=3 to read it at — so it is read
      here, where that write has landed just the same. The chip parts its
@@ -1203,9 +1258,9 @@ static void begin_vertical_adjustment(crtc_t *crtc) {
    C4 is 0 and additional row management begins (because R4=0 and R5>0), then
    C4 will be 1 for the first additional rows ... it is possible to modify the
    offset (R12/R13) on each line of this C4, but not of the following ones".
-   The paragraph's own exception is taken at the open above. What is not here
-   is the RFD the sentence after it points at (ch. 11.6), where the same
-   taking outlives C4 altogether.
+   The paragraph's own exception is taken at the open above. The RFD the
+   sentence after it points at (ch. 11.6), where the same taking outlives C4
+   altogether, is vma_takes_the_offset.
 
    Between the two quoted halves stands "in other words, the management of R1
    for the update of the video pointer no longer takes place", which ch. 11's
@@ -1298,39 +1353,51 @@ static bool a_type_2s_padding_ends_with_this_line(const crtc_t *crtc) {
    last-line evaluation and before VMA=VMA' — "it occurs after processing the
    C0=R1 evaluation when R1=0 ... The VMA'=VMA or R12/R13 assignment (depending
    on status) therefore takes place before VMA=VMA' assignment on position C0=0"
-   — so a frame's last line takes VMA as it ran on from the line before and the
-   line after it takes the offset. That load at C0=0 is cut short: of its two
-   operations, "VMA'=VMA' AND (R12 x 256 + R13)" and "VMA'=VMA' OR (R12 x 256 +
-   R13)", "only the first logical operation (AND) is performed". The chapter
-   tells it of the offset a program writes after the last line's head, and ch.
-   20.3.3 has the head take R12/R13 there whole; every load made at a head is
-   taken to be cut short here, and one at a C0 come round to 0 by overflowing,
-   no head, to be whole, which is ours. A load made where C0 meets R1 elsewhere
-   stays open, in crtc_access, to an R12 or R13 written during that same
-   character, as ch. 20.3.3's figure draws it.
+   — so a frame's last line leaves the pointer as its head found it and the
+   line after it takes the offset. VMA'=VMA at a head takes VMA as the head
+   hands it to the line, the line's own start, rather than where the line before
+   ran to: of an R1 moved off 0 on a frame's last line the chapter has VMA' keep
+   "the value that VMA had on position C0=0 of the last line of the previous
+   frame", so that "the first line of the new frame is identical to the last
+   line of the previous frame". Shakerland's photographs of Shaker's A (O) G and
+   C (T) C and D on a real type 2 draw what that reading draws, and not what the
+   pointer taken where the line before ran to does; the reading is ours, the
+   order the chapter gives the two assignments handing on that other value. That
+   load at C0=0 is cut short: of its two operations, "VMA'=VMA' AND (R12 x 256 +
+   R13)" and "VMA'=VMA' OR (R12 x 256 + R13)", "only the first logical operation
+   (AND) is performed". The chapter tells it of the offset a program writes
+   after the last line's head, and ch. 20.3.3 has the head take R12/R13 there
+   whole; every load made at a head is taken to be cut short here, and one at a
+   C0 come round to 0 by overflowing, no head, to be whole, which is ours. A
+   load made where C0 meets R1 elsewhere stays open, in crtc_access, to an R12
+   or R13 written during that same character, as ch. 20.3.3's figure draws it.
 
    Where padding follows the last line, the line the frame ends on is the
-   padding's last, and that line takes the offset as well — "VMA' itself is
+   padding's last, and that line takes the offset instead — "VMA' itself is
    affected by R12/R13 when C0 reach R1 on the last frame line" — while the
-   padding's rows hand VMA on as any row does: "the C9=R9 management considers
-   the video pointer (VMA'=VMA) when C0=R1" (ch. 11.2.3, for types 1 and 2), its
-   table advancing the pointer a row at a time through the padding (ch. 11.2.1).
-   Ch. 11.9 has "the last line of a frame" be one that "can be one of the
-   adjustment lines displayed via R5", and gives the interlace line on this type
-   the "Last Line" condition, which R8=0 written while it is displayed cancels.
-   A photograph bears it out: Shaker's B (RETURN) on a real type 2
-   (https://shaker.logonsystem.eu/tests, "R5 STORIES") draws the frame after
-   twenty-four lines of padding from an R12 written too late for the last line
-   itself. That padding's last line ends a row as well, R9 having been moved to
-   meet C9 inside it, which is how ch. 12.1's sentence for this type glosses the
-   last line: VMA' "is itself updated with R12/R13 when C0=R1 from the last line
-   (when C9=R9)". That the load reads a padding's last line's state wherever its
-   C9 stands is ours. So is a padding made to end only by a write on the R1
-   character or later handing the next frame whatever the latch then holds, as
-   ch. 12.4.2 has a last line made so late do, and an interlace line given up
-   only that late leaving the offset it took to the line after it. The line ch.
-   19.6.3 turns into "an additional line" at a frame's head, a new line 0
-   following it, is read as the interlace line it is and takes the offset as
+   last row itself and the padding's rows hand VMA on as any row does: "the
+   C9=R9 management considers the video pointer (VMA'=VMA) when C0=R1" (ch.
+   11.2.3, for types 1 and 2), its table advancing the pointer a row at a time
+   through the padding (ch. 11.2.1). Ch. 11.9 has "the last line of a frame" be
+   one that "can be one of the adjustment lines displayed via R5", and gives the
+   interlace line on this type the "Last Line" condition, which R8=0 written
+   while it is displayed cancels. A photograph bears it out: Shaker's B (RETURN)
+   on a real type 2 (https://shaker.logonsystem.eu/tests, "R5 STORIES") draws
+   the frame after twenty-four lines of padding from an R12 written too late for
+   the last line itself. That padding's last line ends a row as well, R9 having
+   been moved to meet C9 inside it, which is how ch. 12.1's sentence for this
+   type glosses the last line: VMA' "is itself updated with R12/R13 when C0=R1
+   from the last line (when C9=R9)". Another has the last row itself load
+   nothing: Shaker's A (P) J on a real type 2, whose last row given R12/R13
+   draws a frame the photograph does not. That R5 is read as it stands where C0
+   meets R1, and that an interlace line asked for with R5 at 0 leaves the last
+   row its load, is ours. That the load reads a padding's last line's state
+   wherever its C9 stands is ours. So is a padding made to end only by a write
+   on the R1 character or later handing the next frame whatever the latch then
+   holds, as ch. 12.4.2 has a last line made so late do, and an interlace line
+   given up only that late leaving the offset it took to the line after it. The
+   line ch. 19.6.3 turns into "an additional line" at a frame's head, a new line
+   0 following it, is read as the interlace line it is and takes the offset as
    that line does, given up on the R1 character or later leaving it to the
    frame's second line likewise, save on a line a padding already holds, which
    enter_scanline lets come first: ours too. */
@@ -1340,20 +1407,33 @@ static void move_a_type_2s_video_pointer(crtc_t *crtc, uint16_t offset) {
     bool a_padding_holds_the_line =
         crtc->vertical_adjustment_in_progress && crtc->vertical_adjustment_armed;
     bool begins_the_frame_again = crtc->frame_begins_again && !a_padding_holds_the_line;
-    bool ends_the_frame = at_a_head
-                              ? crtc->line_before_was_last || crtc->line_before_ended_its_padding
-                              : crtc->last_line || begins_the_frame_again ||
-                                    a_type_2s_padding_ends_with_this_line(crtc);
+    bool ends_the_frame =
+        at_a_head ? crtc->line_before_was_last || crtc->line_before_ended_its_padding
+                  : (crtc->last_line && crtc->registers[5] == 0) || begins_the_frame_again ||
+                        a_type_2s_padding_ends_with_this_line(crtc);
     if (ends_the_frame) {
       crtc->vma_ = at_a_head ? (uint16_t)(crtc->vma_ & offset) : offset;
       crtc->offset_taken_where_c0_met_r1 = !at_a_head;
-    } else if (the_pointer_is_left_on_this_scanline(crtc)) {
+    } else if (!at_a_head && the_pointer_is_left_on_this_scanline(crtc)) {
       crtc->vma_ = crtc->vma;
     }
   }
   if (crtc->c0 == 0) {
     crtc->vma = crtc->vma_;
   }
+}
+
+/* VMA' captures VMA, which ends a type 1's taking of R12/R13 after an RFD
+   (trigger_an_rfd), keeping what both held for a write of R1 on the same
+   character to give back (compare_c0_with_a_written_r1). */
+static void leave_the_pointer(crtc_t *crtc) {
+  if (!crtc->pointer_left_on_this_character) {
+    crtc->pointer_left_on_this_character = true;
+    crtc->latch_before_the_pointer_was_left = crtc->vma_;
+    crtc->offset_taken_before_the_pointer_was_left = crtc->vma_takes_the_offset;
+  }
+  crtc->vma_ = crtc->vma;
+  crtc->vma_takes_the_offset = false;
 }
 
 /* VMA reloads from the VMA' latch where a scanline begins, and on the
@@ -1363,14 +1443,19 @@ static void move_a_type_2s_video_pointer(crtc_t *crtc, uint16_t offset) {
    VMA' then captures VMA where C0 reaches R1 on the scanline the predicate
    above names, so the next row starts R1 characters further on (ch.
    20.3.3). A type 2 takes the offset its own way, above. */
-static void move_video_pointer(crtc_t *crtc) {
+static void move_video_pointer(crtc_t *crtc, bool stands_still_on_the_frame_head) {
   uint16_t offset = the_offset(crtc);
   if (crtc->type == 2) {
     move_a_type_2s_video_pointer(crtc, offset);
     return;
   }
   if (crtc->c0 == 0) {
-    if (crtc->type != 1 && on_a_frames_first_line(crtc)) {
+    /* The load is taken "when the counters C4, C9 and C0 change to 0" (ch.
+       20.3.1), and a type 0 standing still on the frame's head changes none of
+       them: "R12/R13 cannot be considered until C4 and C9 both go back to 0"
+       (ch. 13.8.3). Shaker's B (U) I to K, written R13 at every line of such a
+       stretch, are photographed drawing the address the head took. */
+    if (crtc->type != 1 && on_a_frames_first_line(crtc) && !stands_still_on_the_frame_head) {
       crtc->vma_ = offset;
     }
     crtc->vma = crtc->vma_;
@@ -1391,14 +1476,15 @@ static void move_video_pointer(crtc_t *crtc) {
        17.4.2, 11.6). C4 standing at 0 is this chip's plainest case and not
        its rule: ch. 11.2.4 keeps the same taking through the C4 of 1 that a
        run of additional lines gives it, which the predicate above carries,
-       and ch. 11.6 keeps it past any C4 at all where a border on a row's
-       last line is missed, which is not here. */
-    if (crtc->type == 1 && (crtc->c4 == 0 || offset_carries_into_the_adjustment(crtc))) {
+       and ch. 11.6's RFD keeps it past any C4 at all (trigger_an_rfd). */
+    if (crtc->type == 1 &&
+        (crtc->c4 == 0 || offset_carries_into_the_adjustment(crtc) || crtc->vma_takes_the_offset)) {
       crtc->vma = offset;
     }
   }
-  if (crtc->c0 == crtc->registers[1] && the_pointer_is_left_on_this_scanline(crtc)) {
-    crtc->vma_ = crtc->vma;
+  if (crtc->c0 == crtc->registers[1] && the_pointer_is_left_on_this_scanline(crtc) &&
+      !crtc->row_end_test_is_faulty) {
+    leave_the_pointer(crtc);
   }
 }
 
@@ -1412,8 +1498,8 @@ static bool c4_stands_on_r7(const crtc_t *crtc) { return crtc->c4 == crtc->regis
    the VSYNC will be blocked for the condition C4=R7, as if it had had
    place" (ch. 16.4.1.2). Unread is therefore spent, and the block is what
    carries it, so the comparison itself is left to stand as it stands and
-   only the liftings of ch. 16.3 bring it round again. C4 cannot move inside
-   a line, and where it does move the block is lifted with it. The block is
+   only the liftings of ch. 16.3 bring it round again. C4 moves inside a line
+   only by ch. 13.7.2's widening, and lifts the block there too. The block is
    set only where the equality stands at the unarmed line's head, "to block
    for the value C4=R7" (ch. 13.2.2): an R7 written onto C4 later in a line
    whose head found R7 away from C4 triggers as ch. 16.4.1.1 has it past
@@ -1603,10 +1689,21 @@ static void begin_syncs(crtc_t *crtc) {
    line must be considered as a last line for the following line ... At this
    position, if C4==R4 and C9==R9, then the 'Previous Last Line' state is
    activated, otherwise 'Previous Last Line' is cleared and 'Last Line
-   Management' is re-authorized" (ch. 12.4.1). A line with no HSYNC moves
-   neither. The chapter puts that character at "C0=R2+R3-1, within the limit of
-   R0, as a HSYNC can overflow onto the following line", which may bound it by
-   R0 or let it fall on the next line; the second is taken here. The character
+   Management' is re-authorized" (ch. 12.4.1). Where the comparison holds the
+   management is taken away, the state a later paragraph of the chapter assumes:
+   "if 'Last Line' was false and its management was also inactive because of
+   a previous line already considered as a last line, this reactivation allows
+   forcing a new evaluation". Shaker's C (RETURN), photographed on a real type
+   2, reads it so: "R3=15 ON C4=R4/C9=R9 (7), THEN R9=0/7 TO FORCE LAST LINE
+   EVAL" carries a sync from C9=6 onto the head of C9=7, refusing that head and
+   latching there with the comparison true, and R9 written to 0 and back to 7
+   outside the sync then makes no last line: C4 runs on, and the next C4=R7
+   raises no VSYNC where the program looks for it, "5E,5E" on silicon. A line
+   with no HSYNC moves neither. The chapter puts that character at
+   "C0=R2+R3-1, within the limit of R0, as a HSYNC can overflow onto the
+   following line", which may bound it by R0 or let it fall on the next line;
+   the second is taken here, and the same photograph asks for it: bounded by
+   R0, the latch would find C9=6 and give the management back. The character
    is foreseen from R3 as it stands, so an R3 written to land after it, moving
    the sync's end, has the latch taken again on the new last character, the
    later taking standing over the earlier and a management the earlier gave back
@@ -1621,9 +1718,18 @@ static void latch_the_previous_last_line(crtc_t *crtc) {
     return;
   }
   crtc->previous_last_line = crtc->c4 == r[4] && crtc->c9 == r[9];
-  if (!crtc->previous_last_line) {
-    crtc->last_line_management = true;
-  }
+  crtc->last_line_management = !crtc->previous_last_line;
+}
+
+/* Whether this type sends the border of a line R1 never reached half a
+   character early, the first of the two rules pins_of carries. Ch. 17.6.2
+   gives it to "CRTC 0, 2" and denies it the rest: "CRTC 1, 3, 4 ... On these
+   CRTC's, no BORDER bytes are generated between the 'frames'". Shakerland
+   photographs Shaker's A (2), A (5) and A (6) on a type 1 and its A (O) on the
+   two ASICs with no such byte, and its B (CAPS) on a type 2 alternating as the
+   chapter has it under R0=0. */
+static bool sends_its_border_half_a_character_early(const crtc_t *crtc) {
+  return crtc->type == 0 || crtc->type == 2;
 }
 
 /* The other character the R1 border is raised on: where C0 meets R0 having
@@ -1638,11 +1744,18 @@ static void latch_the_previous_last_line(crtc_t *crtc) {
    it a character of its own; with none the chip sends the half character of
    ch. 17.6.2 early instead and this latch is left alone, and the BORDER ON
    function is no delay and gets no character either. Where the border is
-   handed out is a separate question, which the skew answers. */
+   handed out is a separate question, which the skew answers.
+
+   The two ASICs have no border there to defer: "On CRTC's 1, 3 and 4, in the
+   same context (R1>R0 ...), the condition C0=R1 is not met, and the CRTC does
+   not send BORDER ON signal to GATE ARRAY" (ch. 19.2.4). Shakerland
+   photographs Shaker's A (2) on both with its skewed R0=3 bars unbroken and
+   its "R8 STORIES 2" (R0=63, R1=64) with no border over the text. */
 static bool r0_stands_in_for_r1(const crtc_t *crtc) {
   uint8_t skew = display_skew(crtc);
   bool delayed = skew == SKEW_ONE_CHARACTER || skew == SKEW_TWO_CHARACTERS;
-  return delayed && !crtc->display_r1 && crtc->c0 == crtc->registers[0];
+  return delayed && sends_its_border_half_a_character_early(crtc) && !crtc->display_r1 &&
+         crtc->c0 == crtc->registers[0];
 }
 
 /* Whether an R6 of 0 on a frame's first line is a conflict for this type:
@@ -1695,9 +1808,18 @@ static bool r6_of_zero_borders_outright(const crtc_t *crtc) {
    and nothing but a new frame opens it, and while it is shut R1 has no say
    (ch. 18.2.1, 18.2.2). The first line of a frame is exempt, which is what
    leaves an R6 of 0 cancellable there (ch. 18.3.2). */
-static void throw_display_latches(crtc_t *crtc) {
+static void throw_display_latches(crtc_t *crtc, bool stands_still_on_the_frame_head) {
   const uint8_t *r = crtc->registers;
-  bool first_line = on_a_frames_first_line(crtc);
+  /* What lifts the R6 border on a frame's first line is the new frame
+     itself: "BORDER R6 passes to true because C4=R6 and C9=0 / BORDER R6
+     returns to false because for a new frame (C4=C9=0)" (ch. 18.3.2). A type 0
+     standing still on the frame's head enters no new frame, so an equality
+     made there is a border that stands for the frame. Shaker's B (U) "R0=0
+     AFTER ADD LINE ... UPDATE R6 TWICE" writes R6=0 and back during such a
+     stretch, and is photographed bordered from the first write to the frame's
+     end. Ch. 18.3.2's last note ("possible to achieve a BORDER/CHARACTER
+     alternation on CRTC 0 with R0=0") is read as the frame's head itself. */
+  bool first_line = on_a_frames_first_line(crtc) && !stands_still_on_the_frame_head;
   /* A skew holds the signal back on its way out rather than moving the
      equalities that throw it, so the latch is thrown where the registers
      say and read out a character or two later. That is what leaves the line
@@ -1706,14 +1828,18 @@ static void throw_display_latches(crtc_t *crtc) {
      which character hands it to the pin (ch. 19.2.3, 19.2.5.3). */
   crtc->display_r1_earlier[1] = crtc->display_r1_earlier[0];
   crtc->display_r1_earlier[0] = crtc->display_r1;
-  /* The stand-in comes before the opening and the equality after it: only
-     C0=R1 itself outranks the line's head, and where R0 is 0 the two share
-     every character. */
-  if (r0_stands_in_for_r1(crtc)) {
-    crtc->display_r1 = true;
-  }
+  /* Where R0 is 0 the stand-in and the line's head share every character,
+     and C0=R1 itself outranks both. The stand-in's border falls half a
+     character into its character, "0.5 µsec after the condition C0=R0 is
+     satisfied" (ch. 17.6.2, 19.2.4), so the head opens the character first
+     and the stand-in borders it after, and under a skew such a line is border:
+     Shaker's B (U) F to K, photographed on a type 0, border every line of an
+     R0=0 stretch written R8=#10 or #20. */
   if (crtc->c0 == 0 && crtc->c0_reached_r0) {
     crtc->display_r1 = false;
+  }
+  if (r0_stands_in_for_r1(crtc)) {
+    crtc->display_r1 = true;
   }
   if (crtc->c0 == r[1]) {
     crtc->display_r1 = true;
@@ -1757,17 +1883,6 @@ static void latch_status_border(crtc_t *crtc) {
   } else if (crtc->c4 == r[6]) {
     crtc->status_border_r6 = true;
   }
-}
-
-/* Whether this type sends the border of a line R1 never reached half a
-   character early, the first of the two rules below. Ch. 17.6.2 gives it to
-   "CRTC 0, 2" and denies it the rest: "CRTC 1, 3, 4 ... On these CRTC's, no
-   BORDER bytes are generated between the 'frames'". Shakerland photographs
-   Shaker's A (2), A (5) and A (6) on a type 1 and its A (O) on the two ASICs
-   with no such byte, and its B (CAPS) on a type 2 alternating as the chapter
-   has it under R0=0. */
-static bool sends_its_border_half_a_character_early(const crtc_t *crtc) {
-  return crtc->type == 0 || crtc->type == 2;
 }
 
 /* Two rules move DISPLAY ENABLE half a character, and both move it the same
@@ -1818,10 +1933,11 @@ static uint64_t pins_of(const crtc_t *crtc) {
    the VSYNC is looked at, because "ParityFrame management takes priority
    over VSYNC management" — the case that turns on it is an R7 of 0, where
    the equality and the switch fall on the same character (ch. 19.7.2). */
-static void settle_parity(crtc_t *crtc) {
+static bool settle_parity(crtc_t *crtc) {
   bool on_the_frame_head = crtc->c0 == 0 && on_a_frames_first_line(crtc);
-  if (on_the_frame_head &&
-      (!crtc->stood_on_the_frame_head || !stands_still_on_a_line_of_one_character(crtc))) {
+  bool stands_still_on_the_frame_head = on_the_frame_head && crtc->stood_on_the_frame_head &&
+                                        stands_still_on_a_line_of_one_character(crtc);
+  if (on_the_frame_head && !stands_still_on_the_frame_head) {
     /* The other three keep no such anticipation and simply turn over:
        "ParityFrame switch between each frame when C4 = C9 = C0 = 0" and do
        so "whatever the value of R8" (ch. 19.5.3, 19.5.5). Where a type 0 or
@@ -1836,6 +1952,7 @@ static void settle_parity(crtc_t *crtc) {
   if (crtc->c4 == crtc->registers[6]) {
     crtc->parity_r6 = !crtc->parity_frame;
   }
+  return stands_still_on_the_frame_head;
 }
 
 void crtc_give_line_end_rooms(crtc_t *crtc, crtc_t rooms[2]) {
@@ -1856,19 +1973,24 @@ void crtc_give_line_end_rooms(crtc_t *crtc, crtc_t rooms[2]) {
    frame's head, the character before having decided nothing; what it would
    have decided is among the comparisons crtc.h counts lost. */
 static void decide_on_the_character(crtc_t *crtc) {
-  settle_parity(crtc);
+  /* A type 0 standing still on a frame's first character enters nothing:
+     the parity does not turn, the offset is not loaded and the R6 border is
+     not lifted (settle_parity, move_video_pointer, throw_display_latches). */
+  bool stands_still_on_the_frame_head = settle_parity(crtc);
   decide_last_line(crtc);
   begin_vertical_adjustment(crtc);
-  move_video_pointer(crtc);
+  move_video_pointer(crtc, stands_still_on_the_frame_head);
   authorize_vsync(crtc);
   begin_syncs(crtc);
   latch_the_previous_last_line(crtc);
   latch_status_border(crtc);
-  throw_display_latches(crtc);
+  throw_display_latches(crtc, stands_still_on_the_frame_head);
 }
 
 uint64_t crtc_tick(crtc_t *crtc) {
   crtc->offset_taken_where_c0_met_r1 = false;
+  crtc->pointer_left_on_this_character = false;
+  crtc->display_shut_since_the_tick = false;
   enter_character(crtc);
   decide_on_the_character(crtc);
   /* Cleared after the phases rather than before them, a write being made
@@ -1933,10 +2055,11 @@ static uint8_t status_1(const crtc_t *crtc) {
 }
 
 /* STATUS 2, answered in place of R11 (ch. 21.3.4.2). Three of its bits name a
-   frame's last character of a kind, one is a timer, and two are wired. */
+   frame's last character of a kind, one is a timer, one is wired, and one the
+   table calls wired is not. */
 static uint8_t status_2(const crtc_t *crtc) {
   const uint8_t *r = crtc->registers;
-  uint8_t status = 0x37; /* bit 4 "Always 1", bit 6 "Always 0", the rest idle */
+  uint8_t status = 0x37; /* bit 6 "Always 0", the rest idle */
   /* "C9=R9" is the documented counter, and on these two in the interlace
      video mode this chip keeps a count and a parity where ch. 19.8.4 keeps
      the address, so the line the chapter means is the one the row actually
@@ -1967,6 +2090,25 @@ static uint8_t status_2(const crtc_t *crtc) {
   }
   if (row_is_on_its_last_scanline(crtc)) {
     status &= (uint8_t)~0x20; /* "C9=R9 : C0=0 to R0", the whole line long */
+  }
+  /* Bit 4 is "Always 1" in the table, and stands so only on a frame that
+     pads nothing. Shakerland photographs Shaker's D (U) reading it 0 at every
+     line and character of a frame R5 pads by 8, and its R5 search, which
+     counts the lines after the "last char of screen" until the bit reads 1,
+     finding the 8 (R4 #25, R5 #08, R6 #19, R7 #1E): so it reads 1 on the
+     adjustment's last character and 0 everywhere else. Under the interlace
+     video mode with R9=6 it reads 0 in a lattice a row apart in alternate
+     frames, which is the odd field's address passing R9 (ch. 19.8.4: "C9 >=
+     R9"), and on the line the interlace adds to an even frame. All of it is
+     ours, from those photographs; the Compendium gives the bit no event. */
+  bool on_the_adjustments_last_line =
+      crtc->interlace_line_given || (crtc->c9 + 1 >= r[5] && !crtc->interlace_line_owed);
+  bool the_adjustment_ends_here =
+      crtc->vertical_adjustment_in_progress && on_the_adjustments_last_line && crtc->c0 == r[0];
+  bool padded = r[5] != 0 || crtc->vertical_adjustment_in_progress;
+  if ((padded && !the_adjustment_ends_here) ||
+      (crtc->interlace_video_mode && c9_vma(crtc) > r[9])) {
+    status &= (uint8_t)~0x10;
   }
   if (row_and_line_ending || (crtc->c9 == 0 && crtc->c0 < r[0])) {
     status |= 0x80;
@@ -2123,11 +2265,9 @@ static void take_up_r8_parity(crtc_t *crtc, bool was_video_mode) {
    and C (8) reads this line to learn which frame it is on, and in the three
    of those that grade themselves the lines it moved agree with silicon only
    where it is here. What ch. 19.6.3 says the line shows meanwhile — "the C9
-   displayed as soon as R8=3 on this line will be odd (i.e. C9=1)" — is not
-   here: this chip takes the mode up at the next C0=0, which the head of
-   crtc.h declares, and the line keeps its address to its end. The table
-   cannot say which, every one of its rows that carries a write showing the
-   address from before it.
+   displayed as soon as R8=3 on this line will be odd (i.e. C9=1)" — is here
+   too, the address taking the mode at once (c9_vma), though the table shows
+   every one of its rows that carries a write with the address from before it.
 
    The mode given up again inside that line takes the line back: "if the IVM
    mode is disabled during the additional line (C4 being then greater than R4),
@@ -2147,6 +2287,105 @@ static void take_up_r8_on_a_frames_first_line(crtc_t *crtc, bool was_video_mode)
   }
   crtc->frame_begins_again =
       !was_video_mode && crtc->c4 == 0 && crtc->c9 == 0 && crtc->parity_frame;
+}
+
+static bool takes_r1s_equality_where_written(const crtc_t *crtc) { return crtc->type <= 2; }
+
+static bool leaves_the_pointer_where_r1_is_written(const crtc_t *crtc) {
+  return crtc->type == 0 || crtc->type == 1;
+}
+
+static bool takes_the_pointer_back_where_r1_is_written_away(const crtc_t *crtc) {
+  return crtc->type == 1;
+}
+
+/* R1 written during a character is compared with C0 there and then as well as
+   where C0 next meets it: "the condition C0=R1 is considered immediately on a
+   line" (ch. 17.3). Each type reads the character's two comparisons, the old
+   R1's and the new one's, its own way.
+
+   On types 0, 1 and 2 an equality the write makes shuts the display, and ch.
+   17.5.1 draws an R1 of 0 written on C0=0 arriving "just in time" to border
+   that character itself, whose pins have already left the chip: the host is
+   told (crtc.h). Shakerland's photographs of Shaker's A (O) G and H on all
+   three border it. The two ASICs take no equality from the write: ch. 17.5.2
+   has the same R1 of 0 written on C0=0 "too late", only one written on C0=R0 in
+   time, and their photographs of those pages draw the whole row the write
+   lands on.
+
+   VMA' is left where C0 meets R1 on a row's last line (move_video_pointer). A
+   type 1 reads the new comparison alone, an equality the write makes leaving
+   the pointer and one it unmakes taking it back: "if the R1 update takes place
+   exactly when C0=R1 (R1.JIT), then the condition C0=R1 is no longer true and
+   VMA' is not updated" (ch. 17.4.2). Shakerland's A (O) B on a type 1, R1 moved
+   off C0 on that character, draws the row the pointer was not left for. A type
+   0 reads both, which the chapters do not say: its photograph of A (O) I, R1
+   written onto C0 on the line's last character, draws the rows the pointer left
+   there gives, where without it the screen repeats a row. A type 2 reads the
+   old alone — "an update of R1 on position C0=R1 arrives too late. VMA' update
+   has already taken place using the old value of R1" (ch. 17.4.3) — and so do
+   the ASICs. */
+static void compare_c0_with_a_written_r1(crtc_t *crtc, uint8_t r1_before) {
+  bool c0_meets_r1 = crtc->c0 == crtc->registers[1];
+  if (c0_meets_r1 && takes_r1s_equality_where_written(crtc)) {
+    crtc->display_r1 = true;
+    if (!(pins_of(crtc) & CRTC_DISPTMG)) {
+      crtc->display_shut_since_the_tick = true;
+    }
+  }
+  if (c0_meets_r1 && leaves_the_pointer_where_r1_is_written(crtc) &&
+      the_pointer_is_left_on_this_scanline(crtc) && !crtc->row_end_test_is_faulty) {
+    leave_the_pointer(crtc);
+  }
+  if (!c0_meets_r1 && r1_before == crtc->c0 && crtc->pointer_left_on_this_character &&
+      takes_the_pointer_back_where_r1_is_written_away(crtc)) {
+    crtc->vma_ = crtc->latch_before_the_pointer_was_left;
+    crtc->vma_takes_the_offset = crtc->offset_taken_before_the_pointer_was_left;
+    crtc->pointer_left_on_this_character = false;
+  }
+}
+
+/* What sets off a type 1's RFD (ch. 11.6, 13.7.1.2). "On the CRTC 1, there
+   is a very interesting bug when R5 is updated with a value different from 0
+   on the position C0=R0 of some C9s when R5 is equal to 0. Note that this
+   bug can be triggered by other less practical methods (see chapter
+   13.7.1.2 ...)", which is "If R0 is modified on position C0=R0 of this last
+   line of the frame (C9=R9/C4=R4/R5=0) in order to enlarge it, and the last
+   line condition is canceled (by modifying R9 and/or R4) during this
+   enlargement". "On CRTC 1-B, value #10 in R5 deactivates parity management in
+   test C9=R9, while other values activate this parity management", and "if a
+   RFD activates this status, an RFD#10 can no longer deactivate it" (ch.
+   11.6.2). Shaker's B (O) on this machine answers 1-B, as one of Shakerland's
+   two type 1 photographs of it does. */
+static void notice_an_rfd(crtc_t *crtc, uint8_t value_before, bool on_the_lines_last_character) {
+  if (crtc->type != 1) {
+    return;
+  }
+  const uint8_t *r = crtc->registers;
+  bool a_frames_last_line = crtc->c4 == r[4] && row_is_on_its_last_scanline(crtc) && r[5] == 0 &&
+                            !crtc->vertical_adjustment_in_progress;
+  switch (crtc->address_register) {
+    case 5:
+      if (value_before == 0 && r[5] != 0 && on_the_lines_last_character) {
+        crtc->rfd_at_the_line_end = true;
+        crtc->rfd_takes_the_parity = r[5] != 0x10;
+      }
+      break;
+    case 0:
+      if (on_the_lines_last_character && r[0] > value_before && a_frames_last_line) {
+        crtc->r0_widened_on_the_last_line = true;
+      }
+      break;
+    case 4:
+    case 9:
+      if (crtc->r0_widened_on_the_last_line && !a_frames_last_line) {
+        crtc->rfd_at_the_line_end = true;
+        crtc->rfd_takes_the_parity = true;
+      }
+      break;
+    default:
+      break;
+  }
 }
 
 uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
@@ -2186,6 +2425,7 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
     uint8_t mask = writable_bits_of(crtc, crtc->address_register);
     if (mask != 0) {
       bool was_video_mode = interlace_video_asked(crtc);
+      uint8_t width_before = crtc->registers[0];
       if ((crtc->address_register == 4 || crtc->address_register == 9) &&
           crtc->c0 == crtc->registers[0] && (crtc->registers[0] >= 2 || crtc->type != 0) &&
           !crtc->r4_or_r9_written_on_the_last_character) {
@@ -2193,7 +2433,10 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
         crtc->row_ended_before_that_write = row_is_on_its_last_scanline(crtc);
         crtc->c4_stood_on_r4_before_that_write = crtc->c4 == crtc->registers[4];
       }
+      uint8_t value_before = crtc->registers[crtc->address_register];
+      bool on_the_lines_last_character = crtc->c0 == crtc->registers[0];
       crtc->registers[crtc->address_register] = crtc_data(pins) & mask;
+      notice_an_rfd(crtc, value_before, on_the_lines_last_character);
       if (crtc->address_register == 0 && crtc->registers[0] == 0) {
         /* A width of nothing leaves the counter nothing to count to. The
            chapters put that only from a counter already home — "if R0=0,
@@ -2216,6 +2459,23 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            comparison of ch. 13.3's third note being made against a width of
            nothing like any other. */
         crtc->c0 = 0;
+      }
+      if (crtc->address_register == 0 && crtc->type == 0 && width_before == 1 && crtc->c0 == 1 &&
+          crtc->registers[0] > 1 && crtc->c4_increment_armed) {
+        /* An R0 of 1 widened on C0=1: "the C0=R0 test (with a value of 1)
+           takes place before the register is updated, causing 'additional
+           management to begin'. But the R0 register was however updated early
+           enough to be taken into account for the increment of C0", so where
+           C9=R9 "this causes an overflow of C4 without C0 and C9 being reset
+           to 0, even if C4 is not equal to R4" — C4 "incremented from C0=2" —
+           and on a frame's last line "incrementing C4 without C9 returning to
+           0 leaves the additional management activated", C9 running on to R5
+           (ch. 13.7.2, 13.7.2.1, 13.7.2.2), a last line C4 has left at C0=2
+           being spent on an adjustment (begin_vertical_adjustment). Shaker's B
+           (7) is built on it and its A (4) reads it, both photographed on a
+           type 0. */
+        crtc->c4_increment_armed = false;
+        enter_character_row(crtc, (uint8_t)(crtc->c4 + 1));
       }
       if (crtc->address_register == 0 && crtc->a_line_end_is_kept &&
           (pins & CRTC_ON_THE_CHARACTER_CLOCK) != 0) {
@@ -2308,10 +2568,16 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
         crtc->r4_moved_at_a_lines_end = crtc->registers[4] > 0 && crtc->c0 == crtc->registers[0];
       }
       if (crtc->address_register == 6 && crtc->type == 1 && crtc->registers[6] == 0 &&
-          crtc->c4 == 0 && crtc->c9 == 0) {
+          crtc->c4 == 0) {
         /* "However, if C4=R6=0 (1st line-character of a new frame) during
            this update, BORDER R6 becomes true first for all the rest of the
-           frame, until the new frame" (ch. 18.3.3). */
+           frame, until the new frame" (ch. 18.3.3), and on any line of that
+           character row: the border comes "when C4=R6 (1st line-character
+           R6). This rule is true whatever the value of C9" (ch. 18.1), and
+           "if the condition C4=R6 is also fulfilled when C4=0, then this
+           BORDER becomes definitive until C4=C9=C0=0" (ch. 18.2.3).
+           Shakerland's A (P) C and E on a type 1, R6=0 written on C4=0 at
+           C9=1, draw the thin line that leaves. */
         crtc->display_r6 = true;
       }
       if (crtc->address_register == 8) {
@@ -2333,19 +2599,8 @@ uint64_t crtc_access(crtc_t *crtc, uint64_t pins) {
            17.4.3), and takes R12/R13 late in it. */
         crtc->vma_ = the_offset(crtc);
       }
-      if (crtc->address_register == 1 && crtc->registers[1] == crtc->c0) {
-        /* "The condition C0=R1 is considered immediately on a line" (ch.
-           17.3): a write that makes the equality true shuts the display
-           for the rest of the character's line, rather than waiting for C0
-           to meet the new value again. Ch. 17.5.1 has an R1 of 0 written
-           on C0=0 arrive "just in time" on types 0, 1 and 2, and its
-           drawing borders that character too; here it keeps the pins it
-           was given at its tick. VMA' is not captured by the write. Of a
-           type 2 the chapter says "An update of R1 on position C0=R1
-           arrives too late. VMA' update has already taken place using the
-           old value of R1" (ch. 17.4.3), a type 1 takes it in time (ch.
-           17.4.2), and of a type 0 it says nothing. */
-        crtc->display_r1 = true;
+      if (crtc->address_register == 1) {
+        compare_c0_with_a_written_r1(crtc, value_before);
       }
       if (crtc->address_register == 7) {
         /* Where blocks_an_equality_made_by_hand says, an equality made by

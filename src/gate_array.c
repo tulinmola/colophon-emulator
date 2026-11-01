@@ -293,10 +293,13 @@ void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool di
   bool blanked = gate_array->black_hsync || gate_array->black_vsync;
   for (uint8_t half = 0; half < 2; half++) {
     uint8_t *half_samples = samples + (size_t)half * (GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
+    uint8_t *half_drawn_from =
+        gate_array->drawn_from + (size_t)half * (GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
     if (blanked || !gate_array->latched_display[half]) {
       uint8_t colour = blanked ? GATE_ARRAY_BLACK : gate_array->inks[16];
       for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; sample++) {
         half_samples[sample] = colour;
+        half_drawn_from[sample] = blanked ? GATE_ARRAY_UNLIT : 16;
       }
       continue;
     }
@@ -307,10 +310,26 @@ void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool di
     const uint8_t *pens = pens_of_byte[mode][gate_array->latched_bytes[half]];
     for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; sample++) {
       half_samples[sample] = gate_array->inks[pens[sample]];
+      half_drawn_from[sample] = pens[sample];
     }
   }
   gate_array->latched_display[0] = display_first_byte;
   gate_array->latched_display[1] = display_second_byte;
+}
+
+void gate_array_redraw_with_colours_since(const gate_array_t *gate_array, uint8_t from,
+                                          uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]) {
+  for (uint8_t sample = from; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
+    /* A public field and an index here, as the mode is: anything past the
+       border's register is drawn as the blanked beam. */
+    uint8_t source = gate_array->drawn_from[sample];
+    samples[sample] = source < GATE_ARRAY_UNLIT ? gate_array->inks[source] : GATE_ARRAY_BLACK;
+  }
+}
+
+void gate_array_shut_the_display(gate_array_t *gate_array) {
+  gate_array->latched_display[0] = false;
+  gate_array->latched_display[1] = false;
 }
 
 void gate_array_fetch(gate_array_t *gate_array, uint8_t byte0, uint8_t byte1) {

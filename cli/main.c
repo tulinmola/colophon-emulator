@@ -519,10 +519,12 @@ static void cpc_record_displayed(const cpc_t *cpc) {
   uint16_t beam_x = cpc->monitor.beam_x;
   uint16_t beam_y = cpc->monitor.beam_y;
   bool blanked = cpc->gate_array.black_hsync || cpc->gate_array.black_vsync;
+  /* The board has sent the character drawn at this clock as far as the sample
+     a colour still reaches it from, so the beam stands that far into it. */
+  uint16_t sent = cpc->character_held_from;
   if ((pending_display[0] || pending_display[1]) && !blanked && beam_y < CPC_FRAMEBUFFER_HEIGHT &&
-      beam_x >= GATE_ARRAY_SAMPLES_PER_CHARACTER) {
-    uint32_t start =
-        (uint32_t)beam_y * CPC_FRAMEBUFFER_WIDTH + beam_x - GATE_ARRAY_SAMPLES_PER_CHARACTER;
+      beam_x >= sent && beam_x - sent + GATE_ARRAY_SAMPLES_PER_CHARACTER <= CPC_FRAMEBUFFER_WIDTH) {
+    uint32_t start = (uint32_t)beam_y * CPC_FRAMEBUFFER_WIDTH + beam_x - sent;
     for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
       /* Two bytes make sixteen samples, eight each, whatever the mode — and
          the border can have one of them without the other, which is a half

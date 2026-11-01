@@ -824,6 +824,64 @@ static void an_out_lowering_r0_onto_its_own_character_ends_the_line_there(void) 
   }
 }
 
+/* An OUT writing R1 onto the character it writes on borders that character
+   behind a Gate Array: "the condition C0=R1 is considered immediately on a
+   line" (ch. 17.3), and ch. 17.5.1 draws an R1 of 0 written on C0=0 "just in
+   time" for it, on types 0, 1 and 2. The character's display enable left the
+   chip at its tick, and the Gate Array holds it a microsecond before drawing,
+   where the board shuts it (cpc.c). An ASIC takes the OUT a microsecond later
+   and no equality from it (ch. 17.5.2): the board holds the write to the next
+   character clock, and the character it lands on is drawn even where C0
+   stands on the R1 it writes. */
+static void an_out_writing_r1_onto_its_own_character_borders_it(void) {
+  static const uint8_t values[10] = {63, 63, 46, 0x8E, 38, 0, 25, 30, 0, 7};
+  static const uint8_t width = 0x30;
+  for (uint8_t type = 0; type <= 4; type++) {
+    bool seen = false;
+    for (int lead = 20; lead <= 70 && !seen; lead++) {
+      memset(ram, 0, sizeof ram);
+      memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of it */
+      cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+      for (size_t reg = 0; reg < sizeof values; reg++) {
+        crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, (uint8_t)reg));
+        crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, values[reg]));
+      }
+      crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 1)); /* R1 stays selected */
+      lower_rom[UNDER_TEST + lead] = 0xED;
+      lower_rom[UNDER_TEST + lead + 1] = 0x49; /* OUT (C),C */
+      cpc.cpu.pc = UNDER_TEST;
+      cpc.cpu.b = 0xBD;
+      cpc.cpu.c = width;
+      cpc.cpu.sp = 0x8000;
+      for (int tick = 0; tick < 4 * 140; tick++) {
+        bool held = cpc.crtc_write_awaits_the_clock;
+        uint64_t pins = cpc_tick(&cpc);
+        if (type <= 2 && (pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
+          if (cpc.crtc.c0 == width) {
+            seen = true;
+            TEST_EQUAL(cpc.crtc.registers[1], width);
+            TEST_CHECK(!cpc.gate_array.latched_display[0]);
+            TEST_CHECK(!cpc.gate_array.latched_display[1]);
+          }
+          break;
+        }
+        /* Behind an ASIC the write is held at the cycle's first tick and
+           lands at the clock after, which is where the character is read. */
+        if (type >= 3 && held && !cpc.crtc_write_awaits_the_clock) {
+          if (cpc.crtc.c0 == width) {
+            seen = true;
+            TEST_EQUAL(cpc.crtc.registers[1], width);
+            TEST_CHECK(cpc.gate_array.latched_display[0]);
+            TEST_CHECK(cpc.gate_array.latched_display[1]);
+          }
+          break;
+        }
+      }
+    }
+    TEST_CHECK(seen);
+  }
+}
+
 /* Every other register an ASIC's OUT writes keeps the microsecond ch. 4.4.4
    gives it, "on the 3rd NOP for a CRTC equipped with a GATE ARRAY, and on the
    4th NOP for an ASIC that emulates a CRTC": an OUT whose write the processor
@@ -878,6 +936,78 @@ static void an_asic_takes_an_r9_written_on_a_lines_last_character_on_the_next(vo
       }
     }
     TEST_CHECK(seen);
+  }
+}
+
+/* An R2 or R3 an ASIC's OUT writes is taken on the character it lands on, the
+   board handing it to the chip ahead of that clock's comparison (cpc.c): ch.
+   14.9's CRTC 4 schematic draws "R2-JIT / OUT(C),r8" with the sync starting on
+   C0=R2, and ch. 14.5.3's "OUT CRTC-R3,5", landing on the character C3l
+   reaches 5 on, ends a sync five characters long. An R2 of #20 written on the
+   character before #20 starts the line's sync there, and an R3 of 5 written
+   on the fifth character of a sync begun at #20 ends it on the sixth. */
+static void an_asic_takes_an_out_moving_its_line_sync_on_the_character_it_lands_on(void) {
+  static const struct {
+    uint8_t number;
+    uint8_t value;
+    uint8_t r2, r3;     /* standing before the write */
+    uint8_t written_on; /* the C0 the processor writes on */
+    uint8_t rises_on;   /* the line's sync: the first character it is up on */
+    uint8_t falls_on;   /* and the first after that it is down on */
+  } cases[] = {{2, 0x20, 0x30, 0x8E, 0x1F, 0x20, 0x2E}, {3, 0x85, 0x20, 0x8F, 0x24, 0x20, 0x25}};
+  for (uint8_t type = 3; type <= 4; type++) {
+    for (size_t index = 0; index < sizeof cases / sizeof *cases; index++) {
+      bool seen = false;
+      for (int lead = 20; lead <= 100 && !seen; lead++) {
+        memset(ram, 0, sizeof ram);
+        memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of it */
+        cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+        const uint8_t setup[][2] = {{0, 0x3F}, {2, cases[index].r2}, {3, cases[index].r3}};
+        for (unsigned row = 0; row < sizeof setup / sizeof *setup; row++) {
+          crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, setup[row][0]));
+          crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, setup[row][1]));
+        }
+        crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, cases[index].number));
+        lower_rom[UNDER_TEST + lead] = 0xED;
+        lower_rom[UNDER_TEST + lead + 1] = 0x49; /* OUT (C),C */
+        cpc.cpu.pc = UNDER_TEST;
+        cpc.cpu.b = 0xBD;
+        cpc.cpu.c = cases[index].value;
+        cpc.cpu.sp = 0x8000;
+        int written_on = -1;
+        int rises_on = -1;
+        int falls_on = -1;
+        for (int tick = 0; tick < 4 * 250; tick++) {
+          uint64_t pins = cpc_tick(&cpc);
+          bool on_the_clock = gate_array_character_clock(&cpc.gate_array);
+          if (written_on < 0 && (pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
+            written_on = cpc.crtc.c0;
+          }
+          if (!on_the_clock) {
+            continue;
+          }
+          if (cpc.crtc.c0 == 0) {
+            if (written_on >= 0) {
+              break;
+            }
+            rises_on = falls_on = -1;
+          }
+          bool hsync = (cpc.crtc_pins & CRTC_HSYNC) != 0;
+          if (hsync && rises_on < 0) {
+            rises_on = cpc.crtc.c0;
+          }
+          if (!hsync && rises_on >= 0 && falls_on < 0) {
+            falls_on = cpc.crtc.c0;
+          }
+        }
+        if (written_on == cases[index].written_on) {
+          seen = true;
+          TEST_EQUAL(rises_on, cases[index].rises_on);
+          TEST_EQUAL(falls_on, cases[index].falls_on);
+        }
+      }
+      TEST_CHECK(seen);
+    }
   }
 }
 
@@ -1025,7 +1155,9 @@ int main(void) {
   TEST_RUN(an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest);
   TEST_RUN(an_asic_takes_an_out_widening_r0_from_nothing_a_microsecond_late);
   TEST_RUN(an_out_lowering_r0_onto_its_own_character_ends_the_line_there);
+  TEST_RUN(an_out_writing_r1_onto_its_own_character_borders_it);
   TEST_RUN(an_asic_takes_an_r9_written_on_a_lines_last_character_on_the_next);
+  TEST_RUN(an_asic_takes_an_out_moving_its_line_sync_on_the_character_it_lands_on);
   TEST_RUN(an_interrupt_costs_five_microseconds_where_an_rst_costs_four);
   TEST_RUN(an_instruction_looping_on_itself_costs_the_same);
   return TEST_REPORT("cpc timing");

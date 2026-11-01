@@ -138,32 +138,30 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
   cpc->mmr = (uint8_t)(0xC0 | (bytes[AT_RAM_CONFIGURATION] & 0x3F));
   cpc->upper_rom_number = bytes[AT_UPPER_ROM];
 
-  /* Through the chip's own bus, so its writable-bit masks apply and a
-     snapshot cannot install a value no 6845 could hold. Selecting each
-     register in turn clobbers the selection, so that goes back last. The
-     load of R12/R13 a type 2 may have made on the character just drawn is
-     closed first, or it would take the restored pair as a late write. */
-  cpc->crtc.offset_taken_where_c0_met_r1 = false;
-  bool last_line = cpc->crtc.last_line;
+  /* Through the chip's own bus, so its writable-bit masks apply and a snapshot
+     cannot install a value no 6845 could hold, but on a copy whose registers
+     alone are taken back: a restore is no write a program made on a character,
+     and a write there moves the chip. R3 lets a type 0's second sync through;
+     R4 or R9 make a type 2's last line of the line it stands on; R1 leaves the
+     video pointer or borders a character already drawn; R0 moves a type 0's C4
+     and, with R4, R5 or R9, sets off a type 1's RFD; R6 moves a type 1's
+     border; R7 counts as written in a sync; R8 moves a type 1's C9 and begins a
+     type 2's frame again; R12 and R13 reach a type 2's offset load as a late
+     write. Selecting each register in turn clobbers the selection, so that goes
+     back last, and a type 2's line head compares C9 with R9 as restored. Nor is
+     any of this a line's end: a chip loaded with one still kept would go back
+     to the line end the machine before it kept, its counters and all. */
+  crtc_t written = cpc->crtc;
   for (int index = 0; index < 18; index++) {
-    crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, (uint8_t)index));
-    crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, bytes[AT_CRTC_REGISTERS + index]));
+    crtc_access(&written, CRTC_CS | crtc_set_data(0, (uint8_t)index));
+    crtc_access(&written, CRTC_CS | CRTC_RS | crtc_set_data(0, bytes[AT_CRTC_REGISTERS + index]));
   }
-  crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
-  /* Restoring R3 is not a write made on a character, and leaving the chip
-     believing it was would let a type 0's second sync through on the first tick
-     back; nor is restoring R4 or R9, which a type 2 reads where it is made and
-     would make a last line of the line it stands on, and an R4 written during a
-     head's own character later compares with the R9 restored. Nor is any of
-     this a line's end: a chip loaded with one still armed would take the whole
-     of itself back on the next R0 written to a character clock, registers and
-     all; nor is restoring R7 a write a program made inside a sync. */
-  cpc->crtc.r3_written_for_this_character = false;
-  cpc->crtc.last_line = last_line;
+  crtc_access(&written, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
+  memcpy(cpc->crtc.registers, written.registers, sizeof cpc->crtc.registers);
+  cpc->crtc.address_register = written.address_register;
   cpc->crtc.r9_at_the_line_head = cpc->crtc.registers[9];
   cpc->crtc.a_line_end_is_kept = false;
   cpc->crtc.the_line_end_before_is_kept = false;
-  cpc->crtc.r7_was_written_in_the_hsync = false;
 
   /* The control word first, because setting it clears the output latches.
      The format stores inputs for A and B, outputs for C. */

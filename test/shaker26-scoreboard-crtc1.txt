@@ -92,7 +92,7 @@ A (U)       R4 & R9 CHECKING (54 TST)                                           
       PREV R9=7 >> UPD R9=1 WHEN C9=3>>C9=0 (OK FOR CRT 3+4 ONLY):xKOx
 A (I)       VSYNC CONDITIONS (413 TST)                                                       1 graded, 0 wrong, 7 pages
       WAIT VSYNC ON R7=C4=1, THEN R7=2 > VSYNC LENGTH=#66 (Exp #66)
-A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded, 9 pages
+A (O)       R1 STORIES (8 TST)                                                               recorded, ungraded, 9 pages, cut off at the cap
 A (P)       R6 STORIES (13 TST)                                                              recorded, ungraded, 15 pages
 A (COPY)    CRTC 2 OFFSET                                                                    another CRTC type's
 B (1)       INTERLACE C4/C9 COUNTERS (Y=PARITY CRT 0/2/3/4:O)(Z/X)=R9 BASE (07)              recorded, ungraded, 11 pages

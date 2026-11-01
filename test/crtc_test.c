@@ -708,16 +708,17 @@ static void a_type_2_reads_a_write_of_r4_or_r9_on_its_own_character(void) {
   }
 }
 
-/* The sync's last character gives the management back only where it finds the
+/* The sync's last character gives the management back where it finds the
    comparison false — "otherwise 'Previous Last Line' is cleared and 'Last Line
-   Management' is re-authorized" (ch. 12.4.1) — and no other character of the
-   sync moves it. A write made on the character before that last one makes
-   nothing itself, being inside the sync, and is read by the latch; the same
-   write made again after the sync shows what the latch left. On a row's last
-   line the management stands through a latch that finds the comparison true,
-   and the second write makes the line last; on a frame's first line such a
-   latch gives none, and the second write makes nothing. */
-static void a_type_2_takes_its_management_back_only_on_a_mismatch(void) {
+   Management' is re-authorized" (ch. 12.4.1) — and takes it away where it finds
+   it true, "its management was also inactive because of a previous line already
+   considered as a last line"; no other character of the sync moves it. A write
+   made on the character before that last one makes nothing itself, being inside
+   the sync, and is read by the latch; the same write made again after the sync
+   shows what the latch left: on a row's last line and on a frame's first alike,
+   a latch that finds the comparison true leaves the second write nothing to
+   make. Shaker's C (RETURN) photographed on a real type 2 reads it so. */
+static void a_type_2s_sync_end_takes_its_management_away_or_back(void) {
   static const struct {
     uint8_t r4;               /* as the frame runs, R9 being 7 */
     uint8_t row;              /* C4 where the writes are made */
@@ -725,7 +726,7 @@ static void a_type_2_takes_its_management_back_only_on_a_mismatch(void) {
     uint8_t register_written; /* R4 or R9, at C0=50 and again at 55 */
     uint8_t value;
     uint8_t next_c4; /* where the line after stands, C9 being 0 */
-  } cases[] = {{38, 1, 7, 4, 1, 0}, {0, 0, 0, 9, 0, 1}};
+  } cases[] = {{38, 1, 7, 4, 1, 2}, {0, 0, 0, 9, 0, 1}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     run_a_type_2(46, cases[index].r4, 7);
     TICK_UNTIL(crtc.c0 == 50 && crtc.c4 == cases[index].row && crtc.c9 == cases[index].line);
@@ -735,6 +736,33 @@ static void a_type_2_takes_its_management_back_only_on_a_mismatch(void) {
     TICK_UNTIL(crtc.c0 == 0);
     TEST_EQUAL(crtc.c4, cases[index].next_c4);
     TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* A type 2 takes R8's video mode into the address from the character after
+   the write, in and out — "Activation of the IVM mode during the line
+   immediately uses C9.IVM for the display" (ch. 19.8.3) — where a type 0 takes
+   it at the next line's head (ch. 19.8.1). On an even frame's C9=1, C9.IVM
+   stands at 1 and the address at 2; on an odd frame's first line it is 1,
+   "the C9 displayed as soon as R8=3 on this line will be odd (i.e. C9=1)" (ch.
+   19.6.3). Shaker's C (8) "ADD LINE ON PARITY BUG" draws both on a real type
+   2, its ODD PARITY page photographed with neither one-line mark a delayed
+   take-up leaves. */
+static void a_type_2_takes_the_video_mode_into_the_address_at_once(void) {
+  static const struct {
+    uint8_t type;
+    bool odd_frame;
+    uint8_t line;    /* C9 the write is made on, at C0=20, C4 being 0 */
+    uint8_t in_mode; /* the address on the character after R8=3 */
+  } cases[] = {{0, false, 1, 1}, {2, false, 1, 2}, {0, true, 0, 0}, {2, true, 0, 1}};
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    program_standard_as(cases[index].type);
+    TICK_UNTIL(crtc.parity_frame == cases[index].odd_frame && crtc.c4 == 0 &&
+               crtc.c9 == cases[index].line && crtc.c0 == 20);
+    write_register(8, 3);
+    TEST_EQUAL(crtc_ra(crtc_tick(&crtc)), cases[index].in_mode);
+    write_register(8, 0);
+    TEST_EQUAL(crtc_ra(crtc_tick(&crtc)), cases[index].line);
   }
 }
 
@@ -1028,19 +1056,22 @@ static void a_type_2_hands_the_next_frame_the_state_its_last_line_had_at_r1(void
    position C0=0" (ch. 17.4.3). R1 goes to 0 on row 38's sixth line. Its
    seventh line ends no row, and begins where the row did, at 0x0123 + 38 x
    40 = 0x0713; its eighth, the frame's last, its line before being no last
-   line, takes VMA as it ran on through that line, 64 characters on, 0x0753.
-   And the next frame's first line takes the offset with only the first of
-   the load's two operations, "VMA'=VMA' AND (R12 x 256 + R13)". The chapter
-   tells that of an offset written after the last line's head: R13 moved
-   from 0 to 0x23 there gives 0x0730 AND 0x0123, 0x0120, the row having begun
-   at 0x0100 + 1520. That an offset written long before is cut short the same
-   way, 0x0753 AND 0x0123 = 0x0103, is ours, and so is the load made at the
-   head being closed to an offset written during that same character, which
-   the frame's next line shows. Where eight lines of padding follow, they
-   begin from 0x0103; their row ends at the head of their last line, which
-   hands on VMA as it ran on, 0x0143; and the next frame's head, its line
-   before having ended the padding, takes R13 as moved to 0x21 among them,
-   0x0143 AND 0x0121, 0x0101. */
+   line, begins there too, VMA' taking VMA at the head as the head hands it to
+   the line rather than as it ran on through the line before. That is ours,
+   from Shakerland's photographs of Shaker's A (O) G and C (T) C and D on a
+   real type 2 and from the chapter's VMA' holding "the value that VMA had on
+   position C0=0 of the last line", where the order it gives the head's two
+   assignments would hand on the run-on value, 0x0753. And the next frame's
+   first line takes the offset with only the first of the load's two operations,
+   "VMA'=VMA' AND (R12 x 256 + R13)". The chapter tells that of an offset
+   written after the last line's head: R13 moved from 0 to 0x23 there gives
+   0x06F0 AND 0x0123, 0x0020, the row having begun at 0x0100 + 1520. That an
+   offset written long before is cut short the same way, 0x0713 AND 0x0123 =
+   0x0103, is ours, and so is the load made at the head being closed to an
+   offset written during that same character, which the frame's next line shows.
+   Where eight lines of padding follow, they begin from 0x0103, every one of
+   them; and the next frame's head, its line before having ended the padding,
+   takes R13 as moved to 0x21 among them, 0x0103 AND 0x0121, 0x0101. */
 static void a_type_2_takes_its_offset_at_the_head_where_r1_is_0(void) {
   static const struct {
     uint8_t r13;                     /* as the frame runs */
@@ -1048,9 +1079,9 @@ static void a_type_2_takes_its_offset_at_the_head_where_r1_is_0(void) {
     uint8_t r5;
     uint16_t last_line_begins_at;
     uint16_t next_frame_begins_at;
-  } cases[] = {{0x23, false, 0, 0x0753, 0x0103},
-               {0x00, true, 0, 0x0730, 0x0120},
-               {0x23, false, 8, 0x0753, 0x0101}};
+  } cases[] = {{0x23, false, 0, 0x0713, 0x0103},
+               {0x00, true, 0, 0x06F0, 0x0020},
+               {0x23, false, 8, 0x0713, 0x0101}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     run_a_type_2(46, 38, 7);
     write_register(5, cases[index].r5);
@@ -1063,7 +1094,7 @@ static void a_type_2_takes_its_offset_at_the_head_where_r1_is_0(void) {
     write_register(1, 0);
     TICK_UNTIL(crtc.c0 == 0);
     TEST_EQUAL(crtc.c9, 6);
-    TEST_EQUAL(crtc.vma, cases[index].last_line_begins_at - 64);
+    TEST_EQUAL(crtc.vma, cases[index].last_line_begins_at);
     TICK_UNTIL(crtc.c0 == 1);
     TICK_UNTIL(crtc.c0 == 0);
     TEST_EQUAL(crtc.c9, 7);
@@ -1116,9 +1147,9 @@ static void a_type_2_takes_its_offset_whole_where_c0_comes_round_to_0(void) {
    17.4.3); that it is the state that line ended on, and not the latch its sync
    left, is ours. Row 38's last line is made the frame's last by an R4 written
    after its sync, whose last character found it no last line; it begins at
-   0x0713 + 64, as R1 at 0 has its row end take VMA, and the next frame's head,
-   the line before having ended a last line, still takes the offset: 0x0753 AND
-   0x0123, 0x0103. */
+   0x0713, where its row did (above), and the next frame's head, the line
+   before having ended a last line, still takes the offset: 0x0713 AND 0x0123,
+   0x0103. */
 static void a_type_2_reads_at_an_r1_of_0_the_state_its_line_before_ended_on(void) {
   run_a_type_2(46, 39, 7);
   write_register(12, 0x01);
@@ -1129,7 +1160,7 @@ static void a_type_2_reads_at_an_r1_of_0_the_state_its_line_before_ended_on(void
   TICK_UNTIL(crtc.c0 == 30 && crtc.c4 == 38 && crtc.c9 == 5);
   write_register(1, 0);
   TICK_UNTIL(crtc.c0 == 55 && crtc.c4 == 38 && crtc.c9 == 7);
-  TEST_EQUAL(crtc.vma_, 0x0753);
+  TEST_EQUAL(crtc.vma_, 0x0713);
   write_register(4, 38);
   TICK_UNTIL(crtc.c0 == 0);
   TEST_EQUAL(crtc.c4, 0);
@@ -1137,15 +1168,16 @@ static void a_type_2_reads_at_an_r1_of_0_the_state_its_line_before_ended_on(void
 }
 
 /* Where padding follows the frame's last line, the padding's last line is
-   the frame's last for the pointer and takes the offset too, "when C0 reach
-   R1 on the last frame line" (ch. 17.4.3), the padding's rows handing VMA on
-   as any row does (ch. 11.2.1, 11.2.3) — as Shaker's B (RETURN) is
-   photographed doing on a real type 2, its frame drawn from an R12 written
-   too late for the last line itself. An offset written after C0 has passed
-   R1 on the last line still begins the next frame, after one line of padding,
-   seven or eight; after sixteen, two rows, the second row begins a row on
-   from the offset the last line took; and the next frame's rows go on from
-   its first as any frame's do. Ch. 11.9 calls a line of the padding the
+   the frame's last for the pointer and takes the offset in the last row's
+   stead, "when C0 reach R1 on the last frame line" (ch. 17.4.3), that row and
+   the padding's handing VMA on as any row does (ch. 11.2.1, 11.2.3) — as
+   Shaker's B (RETURN) is photographed doing on a real type 2, its frame drawn
+   from an R12 written too late for the last line itself, and its A (P) J, the
+   last row taking nothing. An offset written after C0 has passed R1 on the
+   last line still begins the next frame, after one line of padding, seven or
+   eight; after sixteen, two rows, the second row begins two rows on from
+   where the last row began, 0x1000 + 40 x 40; and the next frame's rows go on
+   from its first as any frame's do. Ch. 11.9 calls a line of the padding the
    frame's last; that the load reads it where its C9 has not reached R9, as
    on every line here, and that it is open to an offset written during its R1
    character as the last line is, are ours. */
@@ -1161,7 +1193,7 @@ static void a_type_2_takes_its_offset_on_the_last_line_of_its_padding(void) {
   } cases[] = {{1, 38, 7, 50, 0x40, 0, 0x1040},
                {7, 38, 7, 50, 0x40, 0, 0x1040},
                {8, 38, 7, 50, 0x40, 0, 0x1040},
-               {16, 38, 7, 50, 0x40, 0x1028, 0x1040},
+               {16, 38, 7, 50, 0x40, 0x1640, 0x1040},
                {7, 39, 6, 40, 0x80, 0, 0x1080}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     run_a_type_2(46, 38, 7);
@@ -1190,16 +1222,17 @@ static void a_type_2_takes_its_offset_on_the_last_line_of_its_padding(void) {
    round its five bits, thirty-two lines in all, and R5 dropped under C5 at its
    ninth runs C5 round to the new R5, thirty-six; each frame begins from an R12
    written too late for the last line, and the padding's rows before its last
-   hand VMA on, the one beginning at its seventeenth line two rows on from the
-   frame's offset. R5 moved to end the padding on a line whose R1 is past hands
-   the next frame the offset the last line took, which is ours. */
+   hand VMA on, the one beginning at its seventeenth line three rows on from
+   where the last row began, 0x1000 + 41 x 40. R5 moved to end the padding on a
+   line whose R1 is past hands the next frame whatever the latch then holds,
+   where the last row ran to, which is ours. */
 static void a_type_2s_padding_ends_where_r5_moved_inside_it_ends_it(void) {
   static const struct {
     uint8_t c5;        /* the padding line R5 is moved on */
     uint8_t character; /* and the C0 it is moved at */
     uint8_t r5;
     uint16_t next_frame_begins_at;
-  } cases[] = {{3, 10, 0, 0x2000}, {8, 10, 4, 0x2000}, {3, 50, 4, 0x1000}};
+  } cases[] = {{3, 10, 0, 0x2000}, {8, 10, 4, 0x2000}, {3, 50, 4, 0x1618}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     run_a_type_2(46, 38, 7);
     write_register(5, 16);
@@ -1215,7 +1248,7 @@ static void a_type_2s_padding_ends_where_r5_moved_inside_it_ends_it(void) {
     write_register(12, 0x20);
     if (cases[index].character < 40) {
       TICK_UNTIL(crtc.c0 == 0 && crtc.vertical_adjustment_in_progress && crtc.c5 == 16);
-      TEST_EQUAL(crtc.vma, 0x1050);
+      TEST_EQUAL(crtc.vma, 0x1668);
     }
     TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
     TEST_EQUAL(crtc.vma, cases[index].next_frame_begins_at);
@@ -1277,10 +1310,11 @@ static void a_type_2_line_begun_again_takes_the_offset_as_the_interlace_line(voi
    padding, R4 at 127 and rows of one line so that C4 comes round to 0 under the
    padding's lines (ch. 11.2.3), is padding still: the mode written on its first
    line under an odd frame begins no frame again there, so the line takes no R12
-   written on it and hands VMA on at its row's end as the padding's rows do. A
-   frame's head that R5 written at its C0=0 arms, where no padding holds it, is
-   begun again all the same, a type 2 asking R5 again at the end of its last
-   line alone (enter_scanline), and the line takes the offset. Ours. */
+   written on it and hands VMA on at its row's end as the padding's rows do,
+   from where the last row ran to, 0x1000 + 129 x 40. A frame's head that R5
+   written at its C0=0 arms, where no padding holds it, is begun again all the
+   same, a type 2 asking R5 again at the end of its last line alone
+   (enter_scanline), and the line takes the offset. Ours. */
 static void a_type_2s_line_begun_again_yields_only_to_a_padding_holding_it(void) {
   crtc_init(&crtc, 2);
   write_register(0, 63);
@@ -1302,7 +1336,7 @@ static void a_type_2s_line_begun_again_yields_only_to_a_padding_holding_it(void)
   write_register(8, 3);
   TICK_UNTIL(crtc.c0 == 0);
   TEST_CHECK(crtc.vertical_adjustment_in_progress);
-  TEST_EQUAL(crtc.vma, 0x1028);
+  TEST_EQUAL(crtc.vma, 0x2428);
 
   run_a_type_2(46, 0, 0);
   write_register(6, 50);
@@ -1328,13 +1362,13 @@ static void a_type_2s_line_begun_again_yields_only_to_a_padding_holding_it(void)
    that line the padding's last, and the next frame begins from an R12
    written on the line before, too late for the frame's last line; taken to 0
    after R1, the line ends the padding all the same but has not taken the
-   offset, and the next frame begins from the one the last line took, which
-   is ours. */
+   offset, and the next frame begins where the last row ran to, 0x1000 + 39 x
+   40, which is ours. */
 static void a_type_2s_padding_reads_r8_where_c0_meets_r1(void) {
   static const struct {
     uint8_t character; /* C0 R8=0 is written on */
     uint16_t next_frame_begins_at;
-  } cases[] = {{5, 0x2000}, {50, 0x1000}};
+  } cases[] = {{5, 0x2000}, {50, 0x1618}};
   for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
     crtc_init(&crtc, 2);
     write_register(0, 63);
@@ -1676,7 +1710,8 @@ static void the_two_asics_read_a_table_of_eight(void) {
     uint8_t status_2 = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
     crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 3));
     TEST_EQUAL(crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW)), status_2);
-    /* The bits those two chapters wire rather than trace. */
+    /* The bits those two chapters wire rather than trace, and status 2's
+       fourth, which the table wires and a frame nothing pads leaves at 1. */
     TEST_EQUAL(status_1 & 0x40, 0x40); /* status 1 bit 6, "Always 1" */
     TEST_EQUAL(status_2 & 0x10, 0x10); /* status 2 bit 4, "Always 1" */
     TEST_EQUAL(status_2 & 0x40, 0x00); /* status 2 bit 6, "Always 0" */
@@ -1724,11 +1759,136 @@ static void the_asic_hsync_end_bit_follows_a_width_of_nothing(void) {
   }
 }
 
+/* Status 2's fourth bit, "Always 1" in ch. 21.3.4.2's table, reads 0 all
+   through a frame R5 pads and 1 on the padding's last character alone, which
+   is where Shaker's D (U) R5 search stops counting lines and finds R5 as
+   Shakerland photographs it, #08 on both ASICs, and where a padding longer
+   than a row ends as well. Ours, from those photographs. */
+static void an_asics_status_2_bit_4_reads_1_where_the_padding_ends(void) {
+  static const uint8_t asics[] = {3, 4};
+  static const uint8_t paddings[] = {8, 12};
+  for (unsigned index = 0; index < 2 * sizeof asics / sizeof *asics; index++) {
+    uint8_t r5 = paddings[index % 2];
+    program_standard_as(asics[index / 2]);
+    write_register(5, r5);
+    run_scanlines(100); /* off the head power-on stands at */
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    unsigned characters_read_1 = 0;
+    for (long character = 0; character < FRAME_TICKS + r5 * SCANLINE; character++) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      if (status & 0x10) {
+        characters_read_1++;
+        TEST_CHECK(crtc.vertical_adjustment_in_progress);
+        TEST_EQUAL(crtc.c9, r5 - 1);
+        TEST_EQUAL(crtc.c0, 63);
+      }
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(characters_read_1, 1u);
+  }
+}
+
+/* The line interlace adds to an even frame is a padding of its own, R5 or no
+   R5, and the bit reads it as one: 0 along it and 1 on its last character,
+   which is the padding's last whenever it comes, so the last of R5's lines
+   before it reads 0 like the rest. An odd frame adds no line and ends its
+   padding on R5's last. Ours, as the rule above it (crtc.h). */
+static void an_asics_status_2_bit_4_reads_the_interlace_line_as_padding(void) {
+  static const uint8_t asics[] = {3, 4};
+  static const uint8_t paddings[] = {0, 8};
+  for (unsigned index = 0; index < 2 * sizeof asics / sizeof *asics; index++) {
+    uint8_t r5 = paddings[index % 2];
+    program_standard_as(asics[index / 2]);
+    write_register(5, r5);
+    write_register(8, 1); /* the interlace sync mode: an even frame's line, no doubling */
+    run_scanlines(1000);
+    TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
+    /* Two frames from a head are one of each parity: 2 x 39 rows of 8 lines,
+       R5 twice, and the one line interlace adds. */
+    long characters = (2L * (39 * 8 + r5) + 1) * SCANLINE;
+    unsigned read_1_on_the_interlace_lines_last = 0;
+    unsigned read_1_on_r5s_last = 0;
+    unsigned read_0_on_r5s_last = 0;
+    unsigned read_1_elsewhere_in_a_padded_frame = 0;
+    unsigned read_0_on_the_interlace_line = 0;
+    unsigned read_0_elsewhere = 0;
+    for (long character = 0; character < characters; character++) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      bool read_1 = (status & 0x10) != 0;
+      bool padding = crtc.vertical_adjustment_in_progress;
+      bool interlace_line = padding && crtc.interlace_line_given;
+      bool last = crtc.c0 == 63;
+      bool r5s_last = padding && !interlace_line && crtc.c9 == r5 - 1 && last;
+      if (interlace_line && last) {
+        read_1_on_the_interlace_lines_last += read_1 ? 1 : 0;
+      } else if (r5s_last) {
+        read_1_on_r5s_last += read_1 ? 1 : 0;
+        read_0_on_r5s_last += read_1 ? 0 : 1;
+      } else if (interlace_line) {
+        read_0_on_the_interlace_line += read_1 ? 0 : 1;
+        read_1_elsewhere_in_a_padded_frame += read_1 ? 1 : 0;
+      } else if (r5 != 0) {
+        read_1_elsewhere_in_a_padded_frame += read_1 ? 1 : 0;
+      } else {
+        read_0_elsewhere += read_1 ? 0 : 1;
+      }
+      crtc_tick(&crtc);
+    }
+    TEST_EQUAL(read_1_on_the_interlace_lines_last, 1u); /* the even frame's */
+    TEST_EQUAL(read_1_on_r5s_last, r5 != 0 ? 1u : 0u);  /* the odd frame's */
+    TEST_EQUAL(read_0_on_r5s_last, r5 != 0 ? 1u : 0u);  /* the even frame's */
+    TEST_EQUAL(read_0_on_the_interlace_line, 63u);
+    TEST_EQUAL(read_1_elsewhere_in_a_padded_frame, 0u);
+    TEST_EQUAL(read_0_elsewhere, 0u);
+  }
+}
+
+/* And under the interlace video mode the bit reads 0 wherever the line
+   address has passed R9, which with R9=6 is every row's last line in the odd
+   field (1, 3, 5, 7) and no line of the even one (0, 2, 4, 6) — the lattice
+   Shakerland photographs in Shaker's D (U) on both ASICs. Ours, as above. */
+static void an_asics_status_2_bit_4_reads_0_where_the_odd_field_passes_r9(void) {
+  static const uint8_t asics[] = {3, 4};
+  for (unsigned index = 0; index < sizeof asics / sizeof *asics; index++) {
+    program_standard_as(asics[index]);
+    write_register(4, 77); /* 78 rows of 4 lines a field */
+    write_register(9, 6);
+    write_register(8, 3);
+    run_scanlines(1000);
+    uint64_t pins = 0;
+    long waited = 0;
+    while (!(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0) && waited++ < 4L * FRAME_TICKS) {
+      pins = crtc_tick(&crtc);
+    }
+    unsigned read_0_past_r9 = 0;
+    unsigned read_1_past_r9 = 0;
+    unsigned read_0_elsewhere = 0;
+    for (long character = 0; character < (2L * 78 * 4 + 1) * SCANLINE; character++) {
+      crtc_access(&crtc, CRTC_CS | crtc_set_data(0, 11));
+      uint8_t status = crtc_data(crtc_access(&crtc, CRTC_CS | CRTC_RS | CRTC_RW));
+      bool read_1 = (status & 0x10) != 0;
+      if (!crtc.vertical_adjustment_in_progress && crtc_ra(pins) > 6) {
+        read_0_past_r9 += read_1 ? 0 : 1;
+        read_1_past_r9 += read_1 ? 1 : 0;
+      } else if (!crtc.vertical_adjustment_in_progress && !read_1) {
+        read_0_elsewhere++;
+      }
+      pins = crtc_tick(&crtc);
+    }
+    TEST_EQUAL(read_0_past_r9, 78u * SCANLINE); /* one field's last lines */
+    TEST_EQUAL(read_1_past_r9, 0u);
+    TEST_EQUAL(read_0_elsewhere, 0u);
+  }
+}
+
 /* Every bit of those two bytes but the wired ones traces something, so across
    a frame each must be caught at both values, and the wired ones at neither.
    Ch. 4.3's own view of the registers is what says which is which: on these
    two chips R10 reads "s 1 s s s s s s" and R11 "s 0 s 1 s s s s", one fixed
-   bit in the first and two in the second.
+   bit in the first and two in the second, of which the second's fourth
+   stands only on a frame nothing pads (above).
 
    This is the shape of failure the bit-by-bit tables cannot show on their own.
    Status 1's seventh bit was idled at 0 here, so it could never rise and the
@@ -1792,8 +1952,9 @@ static void the_asic_status_bytes_trace_rather_than_stand(void) {
     TEST_EQUAL(traced[0], 0x9F);
     TEST_EQUAL(ones[0] & 0x40, 0x40);  /* "Always 1" */
     TEST_EQUAL(zeros[0] & 0x40, 0x00); /* and never otherwise */
-    /* Status 2: every bit but the fourth and sixth, which are wired, and the
-       third, which counts whole frames and cannot turn inside one. */
+    /* Status 2: every bit but the sixth, which is wired, the fourth, which
+       stands at 1 on a frame nothing pads, and the third, which counts whole
+       frames and cannot turn inside one. */
     TEST_EQUAL(traced[1], 0xA7);
     TEST_EQUAL(ones[1] & 0x10, 0x10);  /* "Always 1" */
     TEST_EQUAL(zeros[1] & 0x40, 0x40); /* "Always 0" */
@@ -3560,12 +3721,12 @@ static void stand_on_the_head_of_the_interlace_line(uint8_t type, uint8_t r5, ui
 
 /* And where interlace adds its line after the padding's R5 lines, that line
    is the frame's last rather than the R5 lines' own last: eight R5 lines end
-   a row and hand VMA on, so the interlace line begins forty on from the
-   frame's offset of 0, and the frame after it begins from the offset that
-   line took. */
+   a row and hand VMA on, so the interlace line begins a row on from where the
+   last row ran to, 40 x 40, and the frame after it begins from the offset
+   that line took. */
 static void a_type_2s_interlace_line_is_the_last_its_pointer_knows(void) {
   stand_on_the_head_of_the_interlace_line(2, 8, 1);
-  TEST_EQUAL(crtc.vma, 0x28);
+  TEST_EQUAL(crtc.vma, 0x640);
   TICK_UNTIL(crtc.c0 == 0 && crtc.c4 == 0 && crtc.c9 == 0);
   TEST_EQUAL(crtc.vma, 0);
 }
@@ -5792,10 +5953,36 @@ static void a_line_too_short_to_reach_c0_2_costs_the_next_its_vsync(void) {
   }
 }
 
-/* And the state is a state, not a rule read afresh: R0 put back before the
-   line has passed C0=2 arms it after all, and the VSYNC comes as it would
-   have. */
-static void an_r0_restored_before_c0_2_keeps_the_vsync(void) {
+/* And the state is a state, not a rule read afresh: a width brought down to 2
+   on C0=1 of the line before C4 meets R7, where no width of 1 was ever in
+   force and nothing can overflow, still lets C0 reach 2 and arm it, and the
+   frame sync comes at the head of the row R7 names. */
+static void an_r0_of_2_written_on_c0_1_arms_the_next_lines_vsync(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(29));
+  run_scanlines(7);
+  crtc_tick(&crtc);
+  TEST_EQUAL(crtc.c0, 1);
+  write_register(0, 2);
+  run_characters(2); /* C0=2, then the head of the row R7 names */
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 30);
+  write_register(0, 63);
+  int vsync_characters = 0;
+  for (int character = 0; character < 12 * SCANLINE; character++) {
+    if (crtc_tick(&crtc) & CRTC_VSYNC) {
+      vsync_characters++;
+    }
+  }
+  /* The head's own character was drawn under the pulse before the count. */
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE - 1);
+}
+
+/* An R0 of 1 put back on C0=1 of the line before C4 meets R7 does not wait
+   for the next head: where C9=R9 the width overflows C4 onto R7 from C0=2
+   (ch. 13.7.2), and a type 0 raises the pulse where C4 meets R7 whatever C0
+   stands on (ch. 19.7.1), counting its lines from the next C0=0. */
+static void an_r0_of_1_widened_on_c0_1_raises_the_vsync_from_c0_2(void) {
   program_standard();
   TEST_CHECK(run_to_row(29));
   run_scanlines(7);
@@ -5808,7 +5995,223 @@ static void an_r0_restored_before_c0_2_keeps_the_vsync(void) {
       vsync_characters++;
     }
   }
-  TEST_EQUAL(vsync_characters, 8 * SCANLINE);
+  TEST_EQUAL(vsync_characters, 8 * SCANLINE + SCANLINE - 2);
+}
+
+/* An R0 of 1 widened on C0=1 of a line where C9=R9: "the C0=R0 test (with a
+   value of 1) takes place before the register is updated ... But the R0
+   register was however updated early enough to be taken into account for the
+   increment of C0", which "causes an overflow of C4 without C0 and C9 being
+   reset to 0, even if C4 is not equal to R4" — C4 "incremented from C0=2",
+   the counting going on as usual after it (ch. 13.7.2, 13.7.2.1, 13.7.2.2). */
+static void an_r0_of_1_widened_on_c0_1_moves_c4_from_c0_2(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(5));
+  run_scanlines(7);
+  write_register(0, 1);
+  crtc_tick(&crtc);
+  write_register(0, 63);
+  crtc_tick(&crtc);
+  TEST_EQUAL(crtc.c0, 2);
+  TEST_EQUAL(crtc.c4, 6);
+  TEST_EQUAL(crtc.c9, 7);
+  run_characters(SCANLINE - 2);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 7);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* "Note that this overflow would not have occurred if C9 had been different
+   from R9" (ch. 13.7.2.1). */
+static void an_r0_of_1_widened_on_c0_1_leaves_c4_where_c9_is_not_r9(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(5));
+  run_scanlines(6);
+  write_register(0, 1);
+  crtc_tick(&crtc);
+  write_register(0, 63);
+  run_characters(SCANLINE - 1);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 5);
+  TEST_EQUAL(crtc.c9, 7);
+}
+
+/* "If we want to avoid that C4 is incremented during an 'enlargement' of R0
+   which was 1, it is therefore imperative to do it on the position C0 = 0"
+   (ch. 13.7.2.2): the line before is one of two characters, and the width is
+   put back on the head of the line where C9=R9, before C0 has met an R0 of 1.
+   C4 moves where that line ends and not before. */
+static void an_r0_of_1_widened_on_c0_0_leaves_c4_to_the_line_end(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(5));
+  run_scanlines(6);
+  write_register(0, 1);
+  run_characters(2); /* C0=1, then the head of the line where C9=R9 */
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c9, 7);
+  write_register(0, 63);
+  run_characters(2);
+  TEST_EQUAL(crtc.c0, 2);
+  TEST_EQUAL(crtc.c4, 5);
+  run_characters(SCANLINE - 2);
+  TEST_EQUAL(crtc.c0, 0);
+  TEST_EQUAL(crtc.c4, 6);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* Only a width of 1 makes C0=1 the character the line ends on, so a width
+   rewritten there from anything wider moves nothing, nor does a width of 1
+   written again there, which ends the line as it was going to (ch. 13.7.2). */
+static void only_an_r0_of_1_widened_on_c0_1_moves_c4(void) {
+  static const uint8_t widths[][2] = {{63, 63}, {63, 50}, {1, 1}};
+  for (unsigned which = 0; which < sizeof widths / sizeof widths[0]; which++) {
+    program_standard();
+    TEST_CHECK(run_to_row(5));
+    run_scanlines(7);
+    write_register(0, widths[which][0]);
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.c0, 1);
+    write_register(0, widths[which][1]);
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.c4, widths[which][1] == 1 ? 6 : 5);
+    TEST_EQUAL(crtc.c9, widths[which][1] == 1 ? 0 : 7);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 6);
+    TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* The C4 the widening moves is a row entered, and lifts a VSYNC's block as C4
+   moving on does (ch. 16.3): a block standing on row 30 is gone once the
+   widening has taken C4 to 31, and an R7 then written onto 31 past C0=1 raises
+   the pulse (ch. 16.4.1.1). */
+static void an_r0_of_1_widened_on_c0_1_lifts_the_vsync_block(void) {
+  program_standard();
+  write_register(3, 0x2E);
+  TEST_CHECK(run_to_row(30));
+  run_scanlines(7);
+  TEST_CHECK(crtc.vsync_blocked);
+  write_register(0, 1);
+  crtc_tick(&crtc);
+  write_register(0, 63);
+  crtc_tick(&crtc);
+  TEST_EQUAL(crtc.c4, 31);
+  run_characters(4);
+  write_register(7, 31);
+  bool pulsed = false;
+  for (int character = 0; character < 4 * SCANLINE && !pulsed; character++) {
+    pulsed = (crtc_tick(&crtc) & CRTC_VSYNC) != 0;
+  }
+  TEST_CHECK(pulsed);
+}
+
+/* The overflow is a type 0's, ch. 13.7.2 standing under that type's own
+   heading; that the others leave C4 to the line's end under the same widening
+   is ours. */
+static void an_r0_of_1_widened_on_c0_1_moves_no_c4_on_types_1_to_4(void) {
+  for (uint8_t type = 1; type <= 4; type++) {
+    program_standard_as(type);
+    TEST_CHECK(run_to_row(5));
+    run_scanlines(7);
+    write_register(0, 1);
+    crtc_tick(&crtc);
+    write_register(0, 63);
+    crtc_tick(&crtc);
+    TEST_EQUAL(crtc.c0, 2);
+    TEST_EQUAL(crtc.c4, 5);
+    run_characters(SCANLINE - 2);
+    TEST_EQUAL(crtc.c0, 0);
+    TEST_EQUAL(crtc.c4, 6);
+    TEST_EQUAL(crtc.c9, 0);
+  }
+}
+
+/* And on a frame's last line "incrementing C4 without C9 returning to 0 leaves
+   the additional management activated": with R5 at 0, "C9 will increment to
+   display lines 8 to 31, until it reaches R5. When the additional management
+   is complete, then C4 returns to 0" (ch. 13.7.2.2). */
+static void an_r0_of_1_widened_on_c0_1_of_a_last_line_runs_c9_round_to_r5(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(38));
+  run_scanlines(7);
+  write_register(0, 1);
+  crtc_tick(&crtc);
+  write_register(0, 63);
+  crtc_tick(&crtc);
+  TEST_EQUAL(crtc.c4, 39);
+  run_characters(SCANLINE - 2);
+  TEST_EQUAL(crtc.c4, 39);
+  TEST_EQUAL(crtc.c9, 8);
+  run_scanlines(23);
+  TEST_EQUAL(crtc.c4, 39);
+  TEST_EQUAL(crtc.c9, 31);
+  run_scanlines(1);
+  TEST_EQUAL(crtc.c4, 0);
+  TEST_EQUAL(crtc.c9, 0);
+}
+
+/* A type 0 standing still on a frame's first character enters no new frame:
+   an R6 of 0 met there is a border that a later R6 does not take back, where
+   on the head itself it is the conflict ch. 18.3.2 lets a write cancel. */
+static void an_r6_of_0_met_standing_still_on_the_frame_head_borders_the_frame(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  TEST_CHECK(run_to_row(0));
+  write_register(0, 0);
+  run_characters(4);
+  write_register(6, 0);
+  run_characters(4);
+  write_register(6, 25);
+  run_characters(4);
+  write_register(0, 63);
+  int displayed = 0;
+  uint64_t pins = 0;
+  for (long character = 0; character < FRAME_TICKS; character++) {
+    pins = crtc_tick(&crtc);
+    if (crtc.c4 == 0 && crtc.c9 == 0 && crtc.c0 == 0) {
+      break;
+    }
+    if (pins & CRTC_DISPTMG) {
+      displayed++;
+    }
+  }
+  TEST_EQUAL(displayed, 0);
+  TEST_CHECK(pins & CRTC_DISPTMG);
+}
+
+/* Nor does it load the offset: "when the counters C4, C9 and C0 change to 0"
+   (ch. 20.3.1), and standing still they change to nothing. */
+static void the_offset_is_not_loaded_standing_still_on_the_frame_head(void) {
+  program_standard();
+  TEST_CHECK(run_to_row(1));
+  TEST_CHECK(run_to_row(0));
+  write_register(0, 0);
+  run_characters(2);
+  write_register(13, 0x10);
+  uint64_t pins = 0;
+  for (int character = 0; character < 4; character++) {
+    pins = crtc_tick(&crtc);
+  }
+  TEST_EQUAL(crtc_ma(pins), 0x3000);
+}
+
+/* A line of one character under a skew is border: the line's head opens each
+   character and the stand-in for R1 borders it after, the border of C0=R0
+   falling half a character into its own character on this type (ch. 17.6.2,
+   19.2.4). */
+static void a_skewed_line_of_one_character_is_border(void) {
+  for (uint8_t skew = 0x10; skew <= 0x20; skew += 0x10) {
+    program_standard();
+    write_register(8, skew);
+    TEST_CHECK(run_to_row(5));
+    run_scanlines(1);
+    write_register(0, 0);
+    uint64_t pins = 0;
+    for (int character = 0; character < 4; character++) {
+      pins = crtc_tick(&crtc);
+    }
+    TEST_CHECK(!(pins & (CRTC_DISPTMG | CRTC_DISPTMG_SECOND_BYTE)));
+  }
 }
 
 /* The equality is not merely missed but spent: "This will also cause the
@@ -7347,11 +7750,17 @@ static void an_r6_of_zero_meets_each_type_differently(void) {
    keep what the equality threw: "the BORDER is activated as long as the
    register value is 0" (ch. 18.3.3), read at every character rather than
    latched. The write that makes it outlive its register is the one made
-   while C4 is 0, which the same chapter keeps for the rest of the frame. */
+   while C4 is 0, which the same chapter keeps for the rest of the frame, on
+   whichever line of that row it is made: the border comes "when C4=R6 (1st
+   line-character R6). This rule is true whatever the value of C9" (ch. 18.1),
+   and is definitive where "the condition C4=R6 is also fulfilled when C4=0"
+   (ch. 18.2.3). Shakerland's photographs of Shaker's A (P) C and E on a type 1,
+   R6=0 written on C4=0 at C9=1, draw it so. */
 static void a_type_1_gives_up_its_r6_border_with_the_register(void) {
   static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 0, 30, 0, 7, 0, 0, 0x30, 0};
-  for (int written_while_c4_was_zero = 0; written_while_c4_was_zero <= 1;
-       written_while_c4_was_zero++) {
+  static const int written_on_line[] = {-1, 0, 1, 7}; /* C9 under C4=0, or not written */
+  for (size_t index = 0; index < sizeof written_on_line / sizeof *written_on_line; index++) {
+    bool written_while_c4_was_zero = written_on_line[index] >= 0;
     crtc_init(&crtc, 1);
     for (int reg = 0; reg < 14; reg++) {
       write_register(reg, values[reg]);
@@ -7360,7 +7769,7 @@ static void a_type_1_gives_up_its_r6_border_with_the_register(void) {
       /* The update ch. 18.3.3 keeps: an R6 written with 0 while C4 stands at
          0 "becomes true first for all the rest of the frame". */
       TEST_CHECK(run_to_row(0));
-      crtc_tick(&crtc);
+      TICK_UNTIL(crtc.c9 == written_on_line[index] && crtc.c0 == 1);
       write_register(6, 0);
     }
     TEST_CHECK(run_to_row(2));
@@ -7463,6 +7872,243 @@ static void a_type_1_takes_its_offset_all_through_the_first_row(void) {
       crtc_tick(&crtc);
     }
     TEST_EQUAL(crtc.vma, opened_the_line);
+  }
+}
+
+/* Stop having drawn the character named, on the row and line named. */
+static void run_to_character(uint8_t row, uint8_t line, uint8_t character) {
+  TICK_UNTIL(crtc.c4 == row && crtc.c9 == line && crtc.c0 == character);
+}
+
+/* Stop on the first character of a frame the chip calls odd, or even. */
+static void run_to_a_frame_called(bool odd) {
+  for (int frames = 0; frames < 3; frames++) {
+    TEST_CHECK(run_to_row(1));
+    TEST_CHECK(run_to_row(0));
+    if (crtc.parity_frame == odd) {
+      return;
+    }
+  }
+  TEST_FAIL("no frame came out %s", odd ? "odd" : "even");
+}
+
+/* A type 1's RFD set off by R5: "there is a very interesting bug when R5 is
+   updated with a value different from 0 on the position C0=R0 of some C9s when
+   R5 is equal to 0", after which VMA takes R12/R13 at every C0=0 until the
+   C9=R9 test made where C0 meets R1 passes, a test that "is faulty" on one
+   frame of two and sound on the other (ch. 11.6, 11.6.1); "On CRTC 1-B, value
+   #10 in R5 deactivates parity management in test C9=R9" (ch. 11.6.2), and this
+   chip is a 1-B, as one of Shakerland's two photographs of Shaker's B (O) has
+   it. The RFD is set off on row 5's third line with "OUT R5,1+OUT R5,0" (ch.
+   11.6.3), R12/R13 having been moved on the line before; written anywhere but
+   C0=R0 it is no RFD. Where C0 never meets R1, "the condition C9=R9 is enough
+   to deactivate the update of VMA with R12/R13" (ch. 11.6), and the rows run on
+   from the frozen VMA'; where it meets R1 on the line's last character and R9
+   is written onto C9 only after, the row ends with the state standing. An IVM
+   ON/OFF below the RFD turns the frame even and leaves the test as the RFD made
+   it, which is Shaker's D (9) photographed. "Going from R5>0 to R5=0, or from
+   R5>0 to another value of R5>0 does not trigger this bug" (ch. 11.6), and
+   neither does a 0 written over a 0. Once an even frame's RFD has made the test
+   faulty, "an RFD#10 can no longer deactivate it" (ch. 11.6.2), and an R1
+   written onto C0 on a row's last line makes C0 meet R1 for a test that is
+   still faulty, so VMA' stays where it was. On a sound frame an R1 moved off C0
+   on the very character the test passed takes the capture back (ch. 17.4.2's
+   R1.JIT, "the condition C0=R1 is no longer true and VMA' is not updated"), and
+   with it the state the capture had ended: the next row takes R12/R13 again,
+   and the R1 now behind C0 is met on its own last line. The other four types
+   take no RFD: their rows run on from VMA' as ever. Shaker's D (9) and B (COPY)
+   draw these rows on a real type 1 and ours, both parities. */
+static void a_type_1s_rfd_by_r5_hands_vma_the_offset(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t r5_standing; /* written on row 5's second line, at C0=0 */
+    uint8_t r5;
+    bool odd_frame;
+    uint8_t r1_written; /* with R12/R13; 0: R1 left at 40 */
+    bool ivm_on_off_below;
+    uint8_t r5_written_at;
+    bool r1_moved_behind_c0_at_r1; /* on row 5's last line */
+    uint8_t r5_below;              /* written on row 6's third line, at C0=R0 */
+    bool r1_written_onto_c0_below; /* on row 6's last line */
+    uint8_t r9_met_on;             /* row 5's line R9 is written onto at C0=R0 */
+    uint16_t line_after_begins_at;
+    uint16_t next_row_begins_at;
+    uint16_t row_after_begins_at;
+  } cases[] = {
+      {1, 0, 1, false, 0, false, 63, false, 0, false, 0, 0x2000, 0x2000, 0x2000},
+      {1, 0, 1, true, 0, false, 63, false, 0, false, 0, 0x2000, 0x2028, 0x2050},
+      {1, 0, 0x10, false, 0, false, 63, false, 0, false, 0, 0x2000, 0x2028, 0x2050},
+      {1, 0, 0x10, true, 0, false, 63, false, 0, false, 0, 0x2000, 0x2028, 0x2050},
+      {1, 0, 1, true, 64, false, 63, false, 0, false, 0, 0x2000, 0x10C8, 0x10C8},
+      {1, 0, 1, true, 0, true, 63, false, 0, false, 0, 0x2000, 0x2028, 0x2050},
+      {1, 0, 1, false, 0, false, 50, false, 0, false, 0, 0x10C8, 0x10F0, 0x1118},
+      {1, 2, 1, false, 0, false, 63, false, 0, false, 0, 0x10C8, 0x10F0, 0x1118},
+      {1, 0, 0, false, 0, false, 63, false, 0, false, 0, 0x10C8, 0x10F0, 0x1118},
+      {1, 0, 1, false, 0, false, 63, false, 0x10, false, 0, 0x2000, 0x2000, 0x2000},
+      {1, 0, 1, false, 0, false, 63, false, 0, true, 0, 0x2000, 0x2000, 0x2000},
+      {1, 0, 1, true, 0, false, 63, true, 0, false, 0, 0x2000, 0x2000, 0x200A},
+      {1, 0, 1, true, 63, false, 63, false, 0, false, 4, 0x2000, 0x2000, 0x203F},
+      {0, 0, 1, false, 0, false, 63, false, 0, false, 0, 0x10C8, 0x10F0, 0x1118},
+      {2, 0, 1, true, 0, false, 63, false, 0, false, 0, 0x10C8, 0x10F0, 0x1118},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, cases[index].type);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    run_to_a_frame_called(cases[index].odd_frame);
+    run_to_character(5, 1, 0);
+    write_register(12, 0x20);
+    write_register(13, 0x00);
+    if (cases[index].r1_written != 0) {
+      write_register(1, cases[index].r1_written);
+    }
+    write_register(5, cases[index].r5_standing);
+    run_to_character(5, 2, cases[index].r5_written_at);
+    write_register(5, cases[index].r5);
+    write_register(5, 0);
+    run_to_character(5, 3, 0);
+    TEST_EQUAL(crtc.vma, cases[index].line_after_begins_at);
+    if (cases[index].r1_moved_behind_c0_at_r1) {
+      run_to_character(5, 7, 40);
+      write_register(1, 10);
+    }
+    if (cases[index].r9_met_on != 0) {
+      run_to_character(5, cases[index].r9_met_on, 63);
+      write_register(9, cases[index].r9_met_on);
+    }
+    run_to_character(6, 0, 0);
+    TEST_EQUAL(crtc.vma, cases[index].next_row_begins_at);
+    write_register(9, 7);
+    if (cases[index].ivm_on_off_below) {
+      /* The frame turns even below the RFD, and the test it made stands. */
+      write_register(8, 3);
+      write_register(8, 0);
+      TEST_CHECK(!crtc.parity_frame);
+    }
+    if (cases[index].r5_below != 0) {
+      run_to_character(6, 2, 63);
+      write_register(5, cases[index].r5_below);
+      write_register(5, 0);
+    }
+    if (cases[index].r1_written_onto_c0_below) {
+      run_to_character(6, 7, 20);
+      write_register(1, 20);
+    }
+    run_to_character(7, 0, 0);
+    TEST_EQUAL(crtc.vma, cases[index].row_after_begins_at);
+    write_register(1, 40);
+    /* And the frame after takes R12/R13 at its head and runs on from VMA' as
+       any frame does: "it is no longer possible to deactivate it until the
+       frame is finished". */
+    TEST_CHECK(run_to_row(0));
+    run_to_character(1, 0, 0);
+    TEST_EQUAL(crtc.vma, 0x2028);
+  }
+}
+
+/* The RFD's "other less practical" trigger: "If R0 is modified on position
+   C0=R0 of this last line of the frame (C9=R9/C4=R4/R5=0) in order to enlarge
+   it, and the last line condition is canceled (by modifying R9 and/or R4)
+   during this enlargement, this paradox will generate an RFD state, which will
+   be triggered at the end of the line ... If R9 is modified so that C9<>R9 at
+   the end of the last line, then R12/R13 are considered, and 1 frame out of 2,
+   there is a default when updating VMA' with VMA (e.g. line repetition). If R4
+   is modified (but C9==R9) so that C4<>R4 is at the end of the last line, then
+   R12/R13 are considered 1 frame out of 2" (ch. 13.7.1.2). Shaker's D (9) does
+   it with R0 written #BD on the last character of row 7, a frame's last line
+   under R4=7, and R4 and R9 moved during the widened line; Shakerland
+   photographs a real type 1. The rows are read where the RFD lets them show:
+   the first line after the widened one, and the first line of the row after
+   that line's. R9 moved alone is an RFD as R4 moved alone is. Widening the line
+   without cancelling it, cancelling it without widening, widening a line that
+   does not end the frame — another row's, the row's own but not its last, one
+   R5 pads, a padding's own line made to look last — R0 written before its last
+   character or with the value it holds, or R4 written as it stands, is no RFD;
+   the rows run on from VMA', a padding's as any row's (ch. 11.2.3). */
+static void a_type_1s_rfd_by_a_widened_last_line_hands_vma_the_offset(void) {
+  static const struct {
+    uint8_t row;
+    uint8_t line;
+    uint8_t r5_standing;    /* written on row 1 */
+    bool padding_made_last; /* R4, R9 and R5 written at C0=10 to name the line */
+    uint8_t r0_written;     /* 0: R0 left alone */
+    uint8_t r0_written_at;
+    uint8_t cancelled_at;
+    uint8_t r4_written; /* 0: R4 left alone */
+    bool r9_moved;
+    uint8_t r5_after; /* written at C0=90, 0: none */
+    bool odd_frame;
+    uint16_t line_after_begins_at;
+    uint16_t next_row_begins_at; /* 0: not read */
+  } cases[] = {
+      {7, 7, 0, false, 127, 63, 80, 37, true, 0, false, 0x2000, 0x2000},
+      {7, 7, 0, false, 127, 63, 80, 37, true, 0, true, 0x2000, 0x2028},
+      {7, 7, 0, false, 127, 63, 80, 37, false, 0, false, 0x2000, 0x2000},
+      {7, 7, 0, false, 127, 63, 80, 37, false, 0, true, 0x1140, 0x1168},
+      {7, 7, 0, false, 127, 63, 80, 0, true, 0, false, 0x2000, 0},
+      {7, 7, 0, false, 0, 0, 50, 37, true, 0, false, 0x1140, 0x1168},
+      {7, 7, 0, false, 127, 63, 80, 0, false, 0, false, 0x2000, 0},
+      {6, 7, 0, false, 127, 63, 80, 0, true, 0, false, 0x1118, 0},
+      {7, 6, 0, false, 127, 63, 80, 37, false, 0, false, 0x1118, 0x1140},
+      {7, 7, 2, false, 127, 63, 80, 37, true, 0, false, 0x1140, 0x1168},
+      {8, 1, 3, true, 127, 63, 80, 37, false, 0, false, 0x1168, 0},
+      {7, 7, 0, false, 127, 50, 80, 37, true, 0, false, 0x1140, 0x1168},
+      {7, 7, 0, false, 63, 63, 63, 37, false, 0, false, 0x1140, 0x1168},
+      {7, 7, 0, false, 127, 63, 80, 7, false, 2, false, 0x1140, 0},
+  };
+  for (unsigned index = 0; index < sizeof cases / sizeof *cases; index++) {
+    static const uint8_t values[14] = {63, 40, 46, 0x8E, 7, 0, 25, 30, 0, 7, 0, 0, 0x10, 0};
+    crtc_init(&crtc, 1);
+    for (int reg = 0; reg < 14; reg++) {
+      write_register(reg, values[reg]);
+    }
+    run_to_a_frame_called(cases[index].odd_frame);
+    run_to_character(1, 0, 0);
+    write_register(12, 0x20);
+    write_register(13, 0x00);
+    write_register(5, cases[index].r5_standing);
+    uint8_t row = cases[index].row;
+    uint8_t line = cases[index].line;
+    if (cases[index].padding_made_last) {
+      /* Row 7 ends the frame and R5 pads it with three lines, row 8's first
+         three on this type, the row going on being counted (ch. 11.1); its
+         second is made to name C4, C9 and R5 as a frame's last line does. */
+      run_to_character(row, line, 10);
+      write_register(4, row);
+      write_register(9, line);
+      write_register(5, 0);
+    }
+    if (cases[index].r0_written != 0) {
+      run_to_character(row, line, cases[index].r0_written_at);
+      write_register(0, cases[index].r0_written);
+    }
+    run_to_character(row, line, cases[index].cancelled_at);
+    if (cases[index].r4_written != 0) {
+      write_register(4, cases[index].r4_written);
+    }
+    if (cases[index].r9_moved) {
+      write_register(9, 14);
+    }
+    if (cases[index].r5_after != 0) {
+      run_to_character(row, line, 90);
+      write_register(5, cases[index].r5_after);
+    }
+    TICK_UNTIL(crtc.c0 == 0);
+    write_register(0, 63);
+    TEST_EQUAL(crtc.vma, cases[index].line_after_begins_at);
+    if (cases[index].next_row_begins_at == 0) {
+      /* Only the line after is read: the frame ended, or a padding or a row of
+         R9's 14 runs on past it. */
+      continue;
+    }
+    /* The row after the one that line belongs to: row 7 runs on to the R9 of
+       14 where R9 was moved, and row 8 has begun where it was not. */
+    uint8_t row_after = (uint8_t)(crtc.c4 + 1);
+    TICK_UNTIL(crtc.c4 == row_after && crtc.c9 == 0 && crtc.c0 == 0);
+    write_register(9, 7);
+    TEST_EQUAL(crtc.vma, cases[index].next_row_begins_at);
   }
 }
 
@@ -8153,47 +8799,137 @@ static void an_r1_of_zero_borders_every_line(void) {
   }
 }
 
-/* Ch. 17.5.1's four drawings for types 0, 1 and 2: an OUT R1,0 whose write
-   reaches the chip before the line's C0=0, or on it, is "just in time" and
-   the line is BORDER; one reaching it on C0=1 is "too late" and the line is
-   displayed, to be bordered from the next. Written where this harness
-   writes everything, after the tick that named the character; the
-   character a write lands on keeps the pins it was given (see crtc.c). */
+/* Ch. 17.5's drawings of an OUT R1,0 at a line's end. On types 0, 1 and 2 a
+   write reaching the chip before the line's C0=0, or on it, is "just in time"
+   and the line is BORDER; one reaching it on C0=1 is "too late" and the line
+   is displayed, to be bordered from the next (ch. 17.5.1). The one reaching
+   it on C0=0 borders that character too, whose pins its tick has already
+   handed out, and the chip tells its host so. The two ASICs take no equality
+   from the write, and one reaching them on C0=0 is already too late (ch.
+   17.5.2). Written where this harness writes everything, after the tick that
+   named the character. */
 static void r1_of_zero_is_just_in_time_up_to_the_lines_c0_of_0(void) {
-  static const struct {
-    uint8_t lands_on; /* C0 when the write reaches the chip */
-    bool line_displayed;
-  } cases[] = {{0x3E, false}, {0x3F, false}, {0x00, false}, {0x01, true}};
-  for (size_t index = 0; index < sizeof cases / sizeof cases[0]; index++) {
-    program_standard();
-    TEST_CHECK(run_to_row(1));
-    while (crtc.c0 != cases[index].lands_on) {
-      crtc_tick(&crtc);
-    }
-    write_register(1, 0);
-    /* The rest of the line the write lands on, or the whole of the next one
-       where it lands before C0=0: C0 2 to 63 carry the answer either way,
-       and C0=1 too wherever the write came before it. */
-    while (crtc.c0 != 1) {
-      uint64_t pins = crtc_tick(&crtc);
-      if (crtc.c0 == 1) {
-        TEST_CHECK(!(pins & CRTC_DISPTMG));
+  static const uint8_t lands_on[] = {0x3E, 0x3F, 0x00, 0x01};
+  for (uint8_t type = 0; type <= 4; type++) {
+    for (size_t index = 0; index < sizeof lands_on; index++) {
+      bool in_time = lands_on[index] != 0x01 && (lands_on[index] != 0x00 || type <= 2);
+      program_standard_as(type);
+      TEST_CHECK(run_to_row(1));
+      TICK_UNTIL(crtc.c0 == lands_on[index]);
+      write_register(1, 0);
+      TEST_EQUAL(crtc.display_shut_since_the_tick, lands_on[index] == 0x00 && type <= 2);
+      /* The rest of the line the write lands on, or the whole of the next one
+         where it lands before C0=0: C0 2 to 63 carry the answer either way,
+         and C0=1 too wherever the write came before it. */
+      if (crtc.c0 != 1) {
+        TICK_UNTIL(crtc.c0 == 0);
+        TEST_EQUAL((crtc_tick(&crtc) & CRTC_DISPTMG) != 0, !in_time);
       }
+      int displayed = 0;
+      for (int character = 2; character <= 63; character++) {
+        displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
+      }
+      TEST_EQUAL(displayed, in_time ? 0 : 62);
+      /* And whichever it was, the line after it is border. */
+      TICK_UNTIL(crtc.c0 == 63);
+      displayed = 0;
+      for (int character = 0; character <= 63; character++) {
+        displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
+      }
+      TEST_EQUAL(displayed, 0);
     }
-    int displayed = 0;
-    for (int character = 2; character <= 63; character++) {
-      displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
+  }
+}
+
+/* Under a delay of a character a type 0 gives a line R1 never reaches a
+   character of border of its own, R0 standing in for R1 (ch. 19.2.4); the two
+   ASICs give it none: "On CRTC's 1, 3 and 4 ... the CRTC does not send BORDER
+   ON signal to GATE ARRAY" (ch. 19.2.4). */
+static void only_a_type_0_defers_the_border_of_a_line_r1_never_reaches(void) {
+  static const uint8_t types[] = {0, 3, 4};
+  for (size_t index = 0; index < sizeof types; index++) {
+    program_standard_as(types[index]);
+    write_register(1, 64);
+    write_register(8, 0x10);
+    TEST_CHECK(run_to_row(2));
+    int bordered = 0;
+    for (int character = 0; character < SCANLINE; character++) {
+      bordered += (crtc_tick(&crtc) & CRTC_DISPTMG) == 0;
     }
-    TEST_EQUAL(displayed, cases[index].line_displayed ? 62 : 0);
-    /* And whichever it was, the line after it is border. */
-    while (crtc.c0 != 63) {
-      crtc_tick(&crtc);
+    TEST_EQUAL(bordered, types[index] == 0 ? 1 : 0);
+  }
+}
+
+/* Where SKEW-DISPTMG holds the display enable back a character (ch. 19.2.3),
+   the pins the character an R1 write lands on was given come from the latch
+   as it stood a character before, which the write does not reach: that
+   character stays displayed, and only the next is bordered. Without the delay
+   the write shuts the character it lands on. */
+static void a_delayed_display_keeps_the_character_an_r1_write_lands_on(void) {
+  for (uint8_t r8 = 0x00; r8 <= 0x10; r8 += 0x10) {
+    program_standard();
+    write_register(8, r8);
+    TEST_CHECK(run_to_row(1));
+    TICK_UNTIL(crtc.c0 == 20);
+    write_register(1, 20);
+    TEST_EQUAL(crtc.display_shut_since_the_tick, r8 == 0x00);
+    TEST_CHECK(!(crtc_tick(&crtc) & CRTC_DISPTMG));
+    TEST_CHECK(!crtc.display_shut_since_the_tick);
+  }
+}
+
+/* An R1 written onto the character C0 stands on, on a row's last line, leaves
+   VMA' there on types 0 and 1, which read the new comparison; a type 2 reads
+   the old one alone, "an update of R1 on position C0=R1 arrives too late" (ch.
+   17.4.3), and so do the two ASICs. Written on C0=20 of row 1's last line, R1
+   standing at 40, which C0 then never meets: row 2 begins twenty characters on
+   from row 1 on types 0 and 1, and where row 1 did on the rest. */
+static void an_r1_written_onto_c0_leaves_the_pointer_on_types_0_and_1(void) {
+  for (uint8_t type = 0; type <= 4; type++) {
+    program_standard_as(type);
+    TEST_CHECK(run_to_row(1));
+    uint16_t row_begins_at = crtc.vma;
+    TICK_UNTIL(crtc.c9 == 7 && crtc.c0 == 20);
+    write_register(1, 20);
+    TICK_UNTIL(crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 2);
+    TEST_EQUAL(crtc.vma, row_begins_at + (type <= 1 ? 20 : 0));
+  }
+}
+
+/* Where C0 has met R1 on a row's last line and VMA' has been left there, an R1
+   written away from C0 during that same character takes it back on a type 1:
+   "if the R1 update takes place exactly when C0=R1 (R1.JIT), then the condition
+   C0=R1 is no longer true and VMA' is not updated. If the modification of R1
+   occurs when C0=R1+1 (C0>R1), then the condition C0=R1 is satisfied and VMA'
+   is updated" (ch. 17.4.2). An R1 written with the value it holds first changes
+   nothing of that, and on a line that is not a row's last, where C0 meeting R1
+   left nothing, an R1 moved off C0 takes nothing back: the next row begins
+   where the frozen VMA' says (ch. 17.4.2). A type 0 keeps it. */
+static void a_type_1_takes_the_pointer_back_where_r1_moves_off_c0(void) {
+  static const struct {
+    uint8_t type;
+    uint8_t line;       /* of row 1 */
+    uint8_t written_on; /* the C0 R1 is moved past R0 on */
+    bool written_as_it_stands_first;
+    bool left;
+  } cases[] = {{1, 7, 40, false, false},
+               {1, 7, 40, true, false},
+               {1, 7, 41, false, true},
+               {1, 3, 40, false, false},
+               {0, 7, 40, false, true}};
+  for (size_t index = 0; index < sizeof cases / sizeof *cases; index++) {
+    program_standard_as(cases[index].type);
+    TEST_CHECK(run_to_row(1));
+    uint16_t row_begins_at = crtc.vma;
+    TICK_UNTIL(crtc.c9 == cases[index].line && crtc.c0 == cases[index].written_on);
+    if (cases[index].written_as_it_stands_first) {
+      write_register(1, 40);
     }
-    displayed = 0;
-    for (int character = 0; character <= 63; character++) {
-      displayed += (crtc_tick(&crtc) & CRTC_DISPTMG) != 0;
-    }
-    TEST_EQUAL(displayed, 0);
+    write_register(1, 0xBD);
+    TICK_UNTIL(crtc.c9 == 0 && crtc.c0 == 0);
+    TEST_EQUAL(crtc.c4, 2);
+    TEST_EQUAL(crtc.vma, row_begins_at + (cases[index].left ? 40 : 0));
   }
 }
 
@@ -8251,7 +8987,8 @@ int main(void) {
   TEST_RUN(types_1_to_4_take_r5_on_any_character_of_a_last_line);
   TEST_RUN(a_type_2_makes_a_last_line_where_r4_or_r9_is_written);
   TEST_RUN(a_type_2_reads_a_write_of_r4_or_r9_on_its_own_character);
-  TEST_RUN(a_type_2_takes_its_management_back_only_on_a_mismatch);
+  TEST_RUN(a_type_2s_sync_end_takes_its_management_away_or_back);
+  TEST_RUN(a_type_2_takes_the_video_mode_into_the_address_at_once);
   TEST_RUN(a_type_2_reads_r9_at_a_line_head_as_it_stood);
   TEST_RUN(a_type_2s_head_compared_again_keeps_what_it_found);
   TEST_RUN(a_type_2_refuses_the_line_after_a_last_line);
@@ -8277,6 +9014,9 @@ int main(void) {
   TEST_RUN(the_two_asics_read_a_table_of_eight);
   TEST_RUN(the_first_status_bit_follows_the_character_counter);
   TEST_RUN(the_asic_status_bytes_trace_rather_than_stand);
+  TEST_RUN(an_asics_status_2_bit_4_reads_1_where_the_padding_ends);
+  TEST_RUN(an_asics_status_2_bit_4_reads_the_interlace_line_as_padding);
+  TEST_RUN(an_asics_status_2_bit_4_reads_0_where_the_odd_field_passes_r9);
   TEST_RUN(the_asic_hsync_end_bit_follows_a_width_of_nothing);
   TEST_RUN(the_asic_screen_ends_once_in_a_padded_frame);
   TEST_RUN(the_asic_row_end_bit_stands_for_the_line_the_row_ends_on);
@@ -8353,7 +9093,18 @@ int main(void) {
   TEST_RUN(the_disarm_tests_the_interlace_line_as_well_as_r5);
   TEST_RUN(an_r4_of_127_does_not_trap_the_frame);
   TEST_RUN(a_line_too_short_to_reach_c0_2_costs_the_next_its_vsync);
-  TEST_RUN(an_r0_restored_before_c0_2_keeps_the_vsync);
+  TEST_RUN(an_r0_of_2_written_on_c0_1_arms_the_next_lines_vsync);
+  TEST_RUN(an_r0_of_1_widened_on_c0_1_lifts_the_vsync_block);
+  TEST_RUN(an_r0_of_1_widened_on_c0_1_raises_the_vsync_from_c0_2);
+  TEST_RUN(an_r0_of_1_widened_on_c0_1_moves_c4_from_c0_2);
+  TEST_RUN(an_r0_of_1_widened_on_c0_1_leaves_c4_where_c9_is_not_r9);
+  TEST_RUN(an_r0_of_1_widened_on_c0_0_leaves_c4_to_the_line_end);
+  TEST_RUN(only_an_r0_of_1_widened_on_c0_1_moves_c4);
+  TEST_RUN(an_r0_of_1_widened_on_c0_1_moves_no_c4_on_types_1_to_4);
+  TEST_RUN(an_r0_of_1_widened_on_c0_1_of_a_last_line_runs_c9_round_to_r5);
+  TEST_RUN(an_r6_of_0_met_standing_still_on_the_frame_head_borders_the_frame);
+  TEST_RUN(the_offset_is_not_loaded_standing_still_on_the_frame_head);
+  TEST_RUN(a_skewed_line_of_one_character_is_border);
   TEST_RUN(a_vsync_lost_to_a_short_line_stays_lost_for_that_row);
   TEST_RUN(a_line_of_three_characters_still_arms_the_vsync);
   TEST_RUN(the_chip_wakes_with_its_counters_managed);
@@ -8405,6 +9156,8 @@ int main(void) {
   TEST_RUN(a_type_1_gives_up_its_r6_border_with_the_register);
   TEST_RUN(an_r6_of_zero_is_taken_back_only_before_r1);
   TEST_RUN(a_type_1_takes_its_offset_all_through_the_first_row);
+  TEST_RUN(a_type_1s_rfd_by_r5_hands_vma_the_offset);
+  TEST_RUN(a_type_1s_rfd_by_a_widened_last_line_hands_vma_the_offset);
   TEST_RUN(types_1_and_2_leave_their_latch_frozen_where_c0_cannot_reach_r1);
   TEST_RUN(a_type_1_carries_its_offset_into_the_added_lines);
   TEST_RUN(an_r4_moved_at_a_lines_end_takes_the_carry_away);
@@ -8429,6 +9182,10 @@ int main(void) {
   TEST_RUN(the_r6_border_is_shut_for_the_whole_frame);
   TEST_RUN(an_r1_of_zero_borders_every_line);
   TEST_RUN(r1_of_zero_is_just_in_time_up_to_the_lines_c0_of_0);
+  TEST_RUN(only_a_type_0_defers_the_border_of_a_line_r1_never_reaches);
+  TEST_RUN(a_delayed_display_keeps_the_character_an_r1_write_lands_on);
+  TEST_RUN(an_r1_written_onto_c0_leaves_the_pointer_on_types_0_and_1);
+  TEST_RUN(a_type_1_takes_the_pointer_back_where_r1_moves_off_c0);
   TEST_RUN(a_c0_that_overflowed_does_not_open_the_display);
   TEST_RUN(a_sync_width_of_zero_makes_no_hsync);
   return TEST_REPORT("crtc");

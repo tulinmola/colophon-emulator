@@ -249,6 +249,80 @@ static void a_restore_is_no_write_on_a_character(void) {
   TEST_EQUAL(restored.crtc.r9_at_the_line_head, 5);
 }
 
+/* Nor is restoring R1 a write made onto C0: on a type 1, which takes VMA'
+   from VMA where an R1 written there meets C0 on a row's last line, the
+   latch keeps what the machine had, and no character the tick has already
+   handed out is shut. Nor is restoring R5 one made where C0 names R0, nor R6
+   one made while C4 stands at 0. */
+static void a_restore_writes_nothing_a_type_1_acts_on(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x43 + 0] = 63; /* R0, restored first: one of 0 would send C0 home */
+  bytes[0x43 + 1] = 10; /* R1 */
+  bytes[0x43 + 9] = 5;  /* R9 */
+
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 1);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.vma = 0x0456;
+  restored.crtc.vma_ = 0x0123;
+  restored.crtc.c0 = 10;
+  restored.crtc.c9 = 5;
+  restored.crtc.registers[6] = 25; /* R1 is restored before both, and */
+  restored.crtc.registers[9] = 5;  /* a type 1's R6 of 0 borders it all */
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.vma_, 0x0123);
+  TEST_CHECK(!restored.crtc.display_shut_since_the_tick);
+
+  /* Nor R5 raised from 0 where C0 names R0, which sets off a type 1's RFD
+     (ch. 11.6). */
+  bytes[0x43 + 5] = 1;
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 1);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.c0 = 63;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.crtc.rfd_at_the_line_end);
+
+  /* Nor R6 restored to 0 while C4 stands at 0, which a type 1 keeps as a
+     border for the rest of the frame (ch. 18.2.3). */
+  bytes[0x43 + 6] = 0;
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 1);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.c9 = 3;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.crtc.display_r6);
+}
+
+/* Nor is restoring R0 a width a type 0 widens from 1 on its second character,
+   which would move C4 there (ch. 13.7.2), nor restoring R8 the interlace video
+   mode a type 2 switches on at an odd frame's head, which would begin that
+   frame again (ch. 19.6.3). */
+static void a_restore_moves_no_row(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x43 + 0] = 63; /* R0 */
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  restored.crtc.registers[0] = 1;
+  restored.crtc.c0 = 1;
+  restored.crtc.c4 = 5;
+  restored.crtc.c4_increment_armed = true;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.c4, 5);
+  TEST_CHECK(restored.crtc.c4_increment_armed);
+
+  bytes[0x43 + 8] = 3; /* R8 */
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 2);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.parity_frame = true;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.registers[8], 3);
+  TEST_CHECK(!restored.crtc.frame_begins_again);
+}
+
 /* A CRTC write the board holds for the next character clock belongs to the
    instruction that made it, and a restore restarts the processor: an ASIC
    machine stopped inside an OUT to R0, on the quarter before the clock the
@@ -337,6 +411,8 @@ int main(void) {
   TEST_RUN(machines_restored_from_one_snapshot_agree);
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
   TEST_RUN(a_restore_is_no_write_on_a_character);
+  TEST_RUN(a_restore_writes_nothing_a_type_1_acts_on);
+  TEST_RUN(a_restore_moves_no_row);
   TEST_RUN(a_restore_leaves_a_held_write_behind);
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);

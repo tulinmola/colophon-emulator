@@ -596,6 +596,73 @@ static void the_border_byte_reaches_the_screen(void) {
   TEST_EQUAL(framebuffer[row + 912 + 384 - 8], 4);
 }
 
+/* A colour written to the Gate Array reaches the character it displays in the
+   microsecond of the write part of the way in: from that character's second
+   byte on types 0, 1, 2 and 4, and half way through its first on type 3, the
+   samples before keeping the old colour (ch. 9.2.2). Mode 2 with characters
+   alternately all pen 1 and all pen 0 shows the grid, and a loop a line long
+   writes pen 1's ink blue and white again, so every edge between the two that
+   falls inside a pen 1 character falls that far into it. */
+static void a_colour_reaches_the_character_on_display_part_of_the_way_in(void) {
+  for (uint8_t type = 0; type < 5; type++) {
+    int into_a_character = -1;
+    for (int phase = 0; phase < 2; phase++) {
+      power_on_with_crtc(sizeof ram, type);
+      memset(framebuffer, 0xEE, sizeof framebuffer);
+      for (size_t address = 0xC000; address < 0x10000; address++) {
+        ram[address] = ((address >> 1) & 1) == 0 ? 0xFF : 0x00;
+      }
+      cpc_connect_monitor(&cpc, framebuffer);
+      uint8_t body[200];
+      size_t length = append_standard_screen(body, 0);
+      length = append_gate_array_write(body, length, 0x00); /* PENR: pen 0 */
+      length = append_gate_array_write(body, length, 0x40 | GATE_ARRAY_BLACK);
+      length = append_gate_array_write(body, length, 0x10); /* PENR: border */
+      length = append_gate_array_write(body, length, 0x40 | GATE_ARRAY_BLACK);
+      length = append_gate_array_write(body, length, 0x01);       /* PENR: pen 1 */
+      length = append_gate_array_write(body, length, 0x40 | 11);  /* bright white */
+      length = append_gate_array_write(body, length, 0x8A);       /* RMR: mode 2 */
+      const uint8_t registers[] = {0x01, 0x44, 0x7F, 0x1E, 0x4B}; /* LD BC,&7F44; LD E,&4B */
+      memcpy(body + length, registers, sizeof registers);
+      length += sizeof registers;
+      for (int nop = 0; nop < phase; nop++) {
+        body[length++] = 0x00;
+      }
+      /* Sixty-four microseconds: two OUTs of four, fifty-three NOPs and a JR of
+         three. */
+      size_t loop = length;
+      body[length++] = 0xED; /* OUT (C),C: blue */
+      body[length++] = 0x49;
+      memset(body + length, 0x00, 26);
+      length += 26;
+      body[length++] = 0xED; /* OUT (C),E: white */
+      body[length++] = 0x59;
+      memset(body + length, 0x00, 27);
+      length += 27;
+      body[length++] = 0x18; /* JR loop */
+      body[length] = (uint8_t)(loop - (length + 1));
+      length++;
+      rom_program(body, length);
+      run_ticks(3 * CPC_TICKS_PER_STANDARD_FRAME);
+
+      const uint8_t *line = framebuffer + (size_t)150 * CPC_FRAMEBUFFER_WIDTH;
+      for (int x = 1; x < CPC_FRAMEBUFFER_WIDTH; x++) {
+        bool edge = (line[x] == 4 && line[x - 1] == 11) || (line[x] == 11 && line[x - 1] == 4);
+        if (!edge) {
+          continue;
+        }
+        int start = x - 1;
+        while (start > 0 && (line[start - 1] == 4 || line[start - 1] == 11)) {
+          start--;
+        }
+        into_a_character = x - start;
+        TEST_EQUAL(into_a_character, type == 3 ? 4 : 8);
+      }
+    }
+    TEST_EQUAL(into_a_character, type == 3 ? 4 : 8);
+  }
+}
+
 static void the_border_surrounds_the_display(void) {
   draw_a_full_screen();
   TEST_EQUAL(framebuffer[70 * CPC_FRAMEBUFFER_WIDTH + 271], 4);  /* left of it */
@@ -1156,6 +1223,7 @@ int main(void) {
   TEST_RUN(an_unheard_interrupt_is_held);
   TEST_RUN(the_display_lands_where_the_syncs_put_it);
   TEST_RUN(the_border_byte_reaches_the_screen);
+  TEST_RUN(a_colour_reaches_the_character_on_display_part_of_the_way_in);
   TEST_RUN(the_border_surrounds_the_display);
   TEST_RUN(the_beam_sweeps_every_line_below_the_flyback);
   TEST_RUN(the_screen_is_read_from_the_base_ram_alone);

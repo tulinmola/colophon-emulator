@@ -386,6 +386,66 @@ static void serialise(uint8_t byte0, uint8_t byte1, uint8_t samples[16]) {
   draw_character(true, 0, 0, samples);
 }
 
+/* A colour written since a character was drawn reaches it from the sample the
+   board names (Compendium ch. 9.2.2, cpc.c): the pens, the border and nothing
+   of the blanked beam, the samples before keeping the colours they had. */
+static void a_colour_written_since_reaches_what_is_redrawn(void) {
+  gate_array_init(&gate_array);
+  inks_name_their_pens();
+  gate_array_write(&gate_array, 0x8D); /* RMR: mode 1 */
+  take_the_mode();
+  uint8_t samples[16];
+  serialise(0x80, 0x08, samples); /* pen 1, then pen 2 a byte on */
+  gate_array_write(&gate_array, 0x01);
+  gate_array_write(&gate_array, 0x40 | 20); /* pen 1 */
+  gate_array_write(&gate_array, 0x02);
+  gate_array_write(&gate_array, 0x40 | 21); /* pen 2 */
+  gate_array_redraw_with_colours_since(&gate_array, 8, samples);
+  TEST_EQUAL(samples[0], 1);
+  TEST_EQUAL(samples[8], 21);
+  TEST_EQUAL(samples[10], 0);
+  gate_array_redraw_with_colours_since(&gate_array, 0, samples);
+  TEST_EQUAL(samples[0], 20);
+
+  gate_array_write(&gate_array, 0x10); /* the border */
+  gate_array_write(&gate_array, 0x40 | 4);
+  draw_character(false, 0, 0, samples);
+  draw_character(false, 0, 0, samples);
+  gate_array_write(&gate_array, 0x40 | 6);
+  gate_array_redraw_with_colours_since(&gate_array, 4, samples);
+  TEST_EQUAL(samples[3], 4);
+  TEST_EQUAL(samples[4], 6);
+
+  gate_array.black_hsync = true;
+  draw_character(false, 0, 0, samples);
+  gate_array_write(&gate_array, 0x40 | 9);
+  gate_array_redraw_with_colours_since(&gate_array, 0, samples);
+  for (int sample = 0; sample < 16; sample++) {
+    TEST_EQUAL(samples[sample], GATE_ARRAY_BLACK);
+  }
+  gate_array.drawn_from[0] = 200; /* a public field, past every register */
+  gate_array_redraw_with_colours_since(&gate_array, 0, samples);
+  TEST_EQUAL(samples[0], GATE_ARRAY_BLACK);
+}
+
+/* A display enable shut after a character's flags were handed over borders
+   both of its bytes when it is drawn (crtc.h, cpc.c). */
+static void a_display_shut_after_the_flags_borders_the_character(void) {
+  gate_array_init(&gate_array);
+  inks_name_their_pens();
+  gate_array_write(&gate_array, 0x8E); /* RMR: mode 2 */
+  take_the_mode();
+  gate_array_write(&gate_array, 0x10);
+  gate_array_write(&gate_array, 0x40 | 4); /* the border */
+  uint8_t samples[16];
+  draw_character(true, 0xFF, 0xFF, samples);
+  gate_array_shut_the_display(&gate_array);
+  draw_character(true, 0, 0, samples);
+  for (int sample = 0; sample < 16; sample++) {
+    TEST_EQUAL(samples[sample], 4);
+  }
+}
+
 static void mode_0_paints_two_fat_pixels_a_byte(void) {
   gate_array_init(&gate_array);
   inks_name_their_pens();
@@ -778,5 +838,7 @@ int main(void) {
   TEST_RUN(the_frame_sync_lasts_four_lines);
   TEST_RUN(the_beam_is_blanked_for_twenty_six_lines);
   TEST_RUN(the_palette_is_the_one_measured_on_silicon);
+  TEST_RUN(a_colour_written_since_reaches_what_is_redrawn);
+  TEST_RUN(a_display_shut_after_the_flags_borders_the_character);
   return TEST_REPORT("gate_array");
 }

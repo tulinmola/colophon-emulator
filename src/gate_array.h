@@ -17,9 +17,11 @@
  *
  * Implemented: the registers, the interrupt generator, the byte-to-pixel
  * serialiser, the composite sync and READY. Not yet: the 40010's habit of
- * starting mode 2 one pixel early, which waits for Shaker, and where inside
- * the character a new mode begins, a few pixels in (ch. 9.3.4.1), a mode
- * being taken here on a whole character.
+ * starting mode 2 one pixel early, which waits for Shaker and which the type 4
+ * ASIC shares (ch. 9.1), a colour written in that mode changing a pixel sooner
+ * with it on that chip (ch. 9.2.2); and where inside the character a new mode
+ * begins, a few pixels in (ch. 9.3.4.1), a mode being taken here a whole
+ * character at a time.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -71,6 +73,10 @@
 /* Hardware colour code 20 (the INKR command &54) is black — the level the
    Gate Array drives on R, G and B while the beam is blanked. */
 #define GATE_ARRAY_BLACK 20
+
+/* What a sample is drawn from when the beam is blanked: no colour register,
+   so no colour written to one reaches it. */
+#define GATE_ARRAY_UNLIT 17
 
 /* What an HSYNC end is to the interrupt generator: one step of R52, or the
    check the frame makes two HSYNCs after its VSYNC began (ch. 27.3.2). */
@@ -128,6 +134,11 @@ typedef struct {
      fetched last time. */
   uint8_t latched_bytes[2];
   bool latched_display[2];
+  /* A colour written in the microsecond a character is displayed reaches it
+     part of the way in (Compendium ch. 9.2.2): what each sample of the last
+     character drawn was drawn from, a pen, 16 for the border or
+     GATE_ARRAY_UNLIT for the blanked beam. */
+  uint8_t drawn_from[GATE_ARRAY_SAMPLES_PER_CHARACTER];
 
   /* Where the machine stands in the four CPU cycles that make a character.
      The real chip runs a sequencer over sixteen 16MHz ticks; counting the
@@ -206,6 +217,17 @@ static inline bool gate_array_ready(const gate_array_t *gate_array) {
  * gate_array_fetch. */
 void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool display_second_byte,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]);
+
+/* The display enable fell after the character's flags were handed over, a
+ * write having shut it inside the character (crtc.h): both of its bytes are
+ * drawn as border. */
+void gate_array_shut_the_display(gate_array_t *gate_array);
+
+/* The samples of the character drawn last, from the one named onwards, drawn
+ * again in the colours in force now: the board names the sample a colour
+ * written since the character was drawn reaches it from (cpc.c). */
+void gate_array_redraw_with_colours_since(const gate_array_t *gate_array, uint8_t from,
+                                          uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]);
 
 /* The two bytes read at the address the CRTC handed over with the flags,
  * held with them for the next gate_array_video. */
