@@ -48,8 +48,8 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 | `--screenshot PATH` | Write the screen here as a PNG. |
 | `--tape PATH` | Put this TZX, CDT or TAP image in the deck. A TAP is a Spectrum's alone: it carries that ROM's timings and nothing else, so a CPC is not handed one. A CPC turns its own motor; a Spectrum has none, so its tape starts once the typing is done. |
 | `--writes PATH` | A CPC's. Write a map of memory writes here as a PNG. |
-| `--sound PATH` | A CPC's. Write the stereo socket here as a 48kHz WAV. |
-| `--sound-steps PATH` | A CPC's. Write the stereo socket here as it stands at each step of the sound chip, 125kHz, unfiltered. |
+| `--sound PATH` | Write the sound here as a 48kHz WAV: a CPC's stereo socket, a Spectrum's speaker. |
+| `--sound-steps PATH` | Write the sound here as it stands at each step of it, unfiltered: 125kHz on a CPC, 3.5MHz on a Spectrum. |
 | `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
 | `--disc PATH` | A CPC's. Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
 | `--disc-b PATH` | A CPC's. And this one in drive B. |
@@ -99,12 +99,12 @@ The machine is told nothing about any of this. See [observation](observation.en.
 
 ## The sound
 
-This is a CPC's alone; a Spectrum's speaker is not heard.
+`--sound` and `--sound-steps` are both in tenths of a millivolt. A CPC's are the stereo socket, channel A's side on the left as cpcwiki has it: A or C alone at full volume swings its side between 0 and 636mV, 6359 in the file, about a fifth of full scale and quiet beside a modern recording; B alone gives each side 289mV. The socket has no capacitor, so a side carries its DC, and so do the files.
 
-Both files are the stereo socket, A's side on the left as cpcwiki has it, in tenths of a millivolt: A or C alone at full volume swings its side between 0 and 636mV, 6359 in the file, about a fifth of full scale and quiet beside a modern recording; B alone gives each side 289mV. The socket has no capacitor, so a side carries its DC, and so do the files.
+A Spectrum's are one channel, the voltage across its speaker: 2.16V, 21600 in the file, while bit 4 of the last write to port &FE is set, 2.30V while bit 3 is set beside it, and nothing otherwise, so the beeper swings across about seven tenths of full scale. A tape playing is not heard; [the machine](machine.en.md) says why.
 
-`--sound-steps` is the socket as it stands at each of the sound chip's steps, 125,000 a second, and nothing more: integers from integers, the same bytes on every compiler, and the file to measure a game's sound with. Few players will open a WAV at that rate.
+`--sound-steps` is the sound as it stands at each of the machine's steps, and nothing more: integers from integers, the same bytes on every compiler, and the file to measure a game's sound with. A CPC's step is its sound chip's, 125,000 a second. A Spectrum's is the T-state, 3,500,000 a second, because a write can move the speaker on any of them; that costs seven megabytes for every second the machine runs, and a WAV holds 4GiB, about ten minutes of it. Few players will open a WAV at either rate.
 
 `--sound` is the same sound at 48kHz, to be heard. A step that falls between two samples is not moved to one of them; it is laid down where it fell, as a low-pass filter at 24kHz passes it, so a tone keeps its pitch and whatever folds back below 20kHz is at least 80dB down. A sharp edge rings, as it does through any such filter, and overshoots by about a tenth. The machine's time begins at the file's first sample. Its tests grade it as a filter: flat to a hundredth of a decibel up to 15kHz, and nothing folding back below 20kHz within 80dB of the tone.
 
-Both cover the whole run, from the first frame to the last, typing included. The machine is told nothing: the chip's outputs are fields, read after every tick.
+Both cover the whole run, from the first frame to the last, typing included. The machine is told nothing: what it sounds is read from its fields after every tick.

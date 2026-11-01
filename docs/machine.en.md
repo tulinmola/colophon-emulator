@@ -73,7 +73,7 @@ Five things are not known or not modelled, and what the sound rests on in their 
 
 **The levels become voltages by one measurement.** An output's voltage depends on what it drives, and the one published measurement with its loads stated is of an AY-3-8910 into 983Ω, the nearest of them to a CPC's; that column is used. How the three outputs pull on one another through the board, a few tens of millivolts, is left out, and the socket is taken as a listener that draws no current would find it.
 
-**The speaker is not heard.** Its path filters, amplifies and has a volume control, and none of that is modelled; what a host plays is the socket.
+**The CPC's speaker is not heard.** Its path filters, amplifies and has a volume control, and none of that is modelled; what a host plays is the socket.
 
 **Where nothing measured the chip, it follows the die.** A period of 0, a period written below the count, and a write to register 13 while the envelope runs all do what the chip's reconstruction from photographs of its die does, which no published measurement of an AY checks.
 
@@ -129,13 +129,23 @@ The interrupt itself is a window rather than an event. The ULA holds the line lo
 
 A memory access is charged once, at the T-state it begins. An internal T-state that only holds an address is charged like an access of its own, because these ULAs weigh the address and not the request. A port is charged by a rule of its own, at up to four of the T-states of the one access, turning on the port's low bit as well as its address. An interrupt acknowledge is charged nothing, and nothing here can settle whether the chip would: the acknowledge always falls in the top border, where nothing is owed under any rule.
 
-Three things are missing.
+Two things are missing.
 
 **The EAR socket hears nothing the machine itself writes.** On hardware the EAR and MIC sockets and the speaker share one ULA pin, so a program that writes to bit 4 of port &FE changes what bit 6 reads back, by a path whose exact behaviour is what separates an issue 2 board from an issue 3. Here the socket hears the deck and nothing else. Loading is unaffected — the tape drives the pin — but the handful of programs that measure the machine by writing and reading their own bit will not find what they wrote.
 
 **The floating bus is not modelled.** The chip fetches ahead of the beam through a pipeline that this collapses into a single T-state, and that pipeline is exactly what a read of an unattached port observes. Software that steers by it — waiting for the beam to reach a particular place by watching what the bus happens to be carrying — will not find what it is looking for.
 
-**Nothing sounds.** The speaker bit is stored and never heard.
+The speaker sounds. The ULA drives one pin for the speaker and both tape sockets, at a voltage set by bits 4 and 3 of the last write to port &FE, and the speaker hangs off that pin through a diode and a transistor, two silicon junctions the pin must clear before more than a little passes. Bit 4 clears them and is the beeper; bit 3 alone, which is what a SAVE toggles, does not, and is not heard; bit 3 beside bit 4 lifts the speaker from 2.16V to 2.30V. `BEEP 1,0` plays the ROM's middle C, a cycle every 13,372 T-states as its own loop counts them, 261.74Hz. What a host plays is the voltage across the speaker.
+
+Four things are not known or not modelled, and what the sound rests on in their place is said here.
+
+**The pin's levels are one board's, and the speaker's are reasoned from them.** The board is an Issue 3, whose four voltages were measured. An Issue 2's stand a little higher by the same measurement, and Sinclair's service manual draws its speaker hanging off two diodes rather than a transistor; neither is modelled. The two junctions between the pin and the speaker are taken at the textbook 0.7V each, and the little current they let through below that, which the service manual calls barely sufficient to drive the speaker while a SAVE runs, is left out.
+
+**Every edge is square.** On hardware the capacitors between the pin and the two tape sockets slow its fall: with bit 3 left set, bit 6 has been measured still reading high for about 180 to 2800 T-states after bit 4 fell, longer the longer bit 4 had been set, and without delay when it rose. Bit 6 turns at 0.7V, just above where that write leaves the pin, and the speaker at twice that, so the speaker's own tail is shorter, by how much no measurement says; here the speaker follows the port at once.
+
+**The tape is not heard.** On hardware the EAR socket reaches the same pin through a resistor and one of those capacitors, and nothing switches it, so a playing tape reaches the speaker whether or not anything is loading; Sinclair's introduction booklet says one played too loud may be heard there. How loud turns on the recorder's volume and on the ULA's output stage; here a tape loads in silence.
+
+**What the speaker makes of its voltage is not modelled.** It is a small moving coil, and no measurement of its response was found.
 
 A tape plays, in both the formats a Spectrum's came in. A `.tap` is bytes at the ROM's own timings; a `.tzx` records the timings themselves, block by block, which is what a tape that brought a loader of its own needs — and most commercial releases brought one, for speed and to be hard to copy. Either way the deck plays the edges and the firmware measures the time between them, exactly as it did on hardware. A Spectrum has no motor line, so the tape turns from the moment it starts and the machine cannot stop it, which is why loading was always a race the program had to win.
 
@@ -143,11 +153,11 @@ What a `.tzx` can still ask for and not get is a waveform recorded sample by sam
 
 What is not refused is an element of no length: a pulse of no T-states, or a run of none. Rippers leave those in the tails of blocks and distributed tapes carry them, so they are passed over in silence, as they sound.
 
-What the machine writes to tape goes nowhere here, as on the CPC: bit 3 of a write to port &FE is the MIC socket, and it is stored and goes no further. Nothing here records.
+What the machine writes to tape goes nowhere here, as on the CPC: bit 3 of a write to port &FE is the MIC socket, and past the little it lifts the speaker it goes no further. Nothing here records.
 
 A tape can also stop before it ends: a multiload marks the point between its parts, and there the reel stops where a real one would have. Playing it again carries on from the next block — but nothing here presses PLAY a second time, so from the command line a multiload loads its first part and waits.
 
-A snapshot it keeps too: the 48K `.sna`, read and written. What that format has no room for is where the beam stood, so a machine picked up from one begins its frame again from the top — the same limitation the CPC's snapshots have, for the same reason.
+A snapshot it keeps too: the 48K `.sna`, read and written. What that format has no room for is where the beam stood, so a machine picked up from one begins its frame again from the top — the same limitation the CPC's snapshots have, for the same reason. Nor does it keep the two bits that set the speaker, so a machine picked up from one has its speaker at rest until the program next writes to the port.
 
 One smaller declaration. The colours are chosen rather than measured: the shape of the answer is fixed by the hardware, one line per gun and one more for brightness, but no measurement of what those lines reach was found, so the levels are the ones the field has settled on and a real reading would replace them.
 

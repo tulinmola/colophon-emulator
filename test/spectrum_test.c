@@ -199,6 +199,24 @@ static void the_ear_socket_reads_on_bit_6(void) {
   TEST_EQUAL(spectrum.cpu.a & 0x40, 0x40);
 }
 
+/* Putnik's Issue 3 column, 0.34V, 0.66V, 3.56V and 3.7V for bits 4 and 3
+   written as 00, 01, 10 and 11 (https://zx48.8bitchip.info/cassport.htm),
+   less the two junctions at the 0.7V each spectrum.h takes them at. */
+static void bit_4_sounds_the_speaker_and_bit_3_alone_does_not(void) {
+  const struct {
+    uint8_t written;
+    uint16_t tenths_of_millivolts;
+  } rows[] = {{0x00, 0}, {0x08, 0}, {0x10, 21600}, {0x18, 23000}};
+  for (size_t row = 0; row < sizeof rows / sizeof rows[0]; row++) {
+    /* LD A,n : OUT (&FE),A : HALT */
+    const uint8_t program[] = {0x3E, rows[row].written, 0xD3, 0xFE, 0x76};
+    power_on(SPECTRUM_RAM_48K);
+    rom_program(program, sizeof program);
+    TEST_CHECK(run_to_halt());
+    TEST_EQUAL(spectrum_sound_speaker(&spectrum), rows[row].tenths_of_millivolts);
+  }
+}
+
 static void an_odd_port_reaches_nothing_and_floats(void) {
   power_on(SPECTRUM_RAM_48K);
   keyboard_press(&spectrum.keyboard, SPECTRUM_ENTER);
@@ -617,6 +635,7 @@ int main(void) {
   TEST_RUN(selected_half_rows_read_together);
   TEST_RUN(the_ula_interrupts_once_a_frame);
   TEST_RUN(the_ear_socket_reads_on_bit_6);
+  TEST_RUN(bit_4_sounds_the_speaker_and_bit_3_alone_does_not);
   TEST_RUN(an_odd_port_reaches_nothing_and_floats);
   TEST_RUN(the_first_interrupt_is_accepted_sixteen_tstates_in);
   TEST_RUN(the_keyboard_finds_a_character_where_it_is_printed);

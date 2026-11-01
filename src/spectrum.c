@@ -284,3 +284,22 @@ uint8_t spectrum_peek(const spectrum_t *spectrum, uint16_t address) {
 void spectrum_poke(spectrum_t *spectrum, uint16_t address, uint8_t value) {
   write_memory(spectrum, address, value);
 }
+
+/* Pin 28's voltage after a write, in tenths of a millivolt, by bit 4 and
+   then bit 3 of it: Putnik's measurement of an Issue 3 board, "without
+   input signal on EAR". */
+static const uint16_t pin_28[2][2] = {{3400, 6600}, {35600, 37000}};
+
+/* The speaker hangs off pin 28 through D9 into TR7, a ZTX450 emitter
+   follower, with nothing else in the branch (the Issue 3 circuit diagram),
+   so it stands two silicon junctions below the pin. Each is taken at the
+   textbook 0.7V, an assumption: no measurement of them was found. Bit 3
+   alone leaves the pin below them, and the little current they pass there,
+   the service manual's "barely sufficient to drive the loudspeaker"
+   (§5.4.3), is left out. */
+#define SPEAKER_DROP 14000
+
+uint16_t spectrum_sound_speaker(const spectrum_t *spectrum) {
+  uint16_t pin = pin_28[spectrum->ula.speaker ? 1 : 0][spectrum->ula.microphone ? 1 : 0];
+  return pin > SPEAKER_DROP ? (uint16_t)(pin - SPEAKER_DROP) : 0;
+}

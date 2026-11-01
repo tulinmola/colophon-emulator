@@ -88,6 +88,8 @@ A few functions exist anyway, because each encodes something a host would otherw
 
 `cpc_sound_socket` turns the sound chip's three levels into voltages, by a measurement of one output into about a CPC's load, applies the board's resistors to them and gives the stereo socket's two sides in tenths of a millivolt. The chip's outputs are levels from 0 to 15, as its pins are switched; what a level comes to in volts depends on what the pin drives, and that is the board's.
 
+`spectrum_sound_speaker` does the same for a Spectrum's loudspeaker. The ULA keeps the last write's bits 4 and 3 as it was given them; the function turns them into the voltage across the speaker, by a measurement of the ULA's pin less the textbook drop of the two silicon junctions between it and the speaker, in tenths of a millivolt.
+
 A host that sets the registers behind the memory map from outside — restoring a snapshot, say — owes the machine a `cpc_remap` afterwards.
 
 ## What is a chip and what is a machine
