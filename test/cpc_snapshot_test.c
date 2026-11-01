@@ -22,7 +22,7 @@ static cpc_t cpc;
 static cpc_t restored;
 
 static void power_on(cpc_t *machine, uint8_t *memory, uint32_t size) {
-  cpc_init(machine, memory, size, lower_rom);
+  cpc_init(machine, memory, size, lower_rom, 0);
   cpc_set_upper_rom(machine, 0, upper_rom);
 }
 
@@ -72,7 +72,10 @@ static void a_snapshot_is_refused_unless_it_is_one(void) {
   TEST_CHECK(!cpc_snapshot_load(&cpc, rubbish, sizeof rubbish, &problem));
   TEST_CHECK(problem != NULL);
 
-  memcpy(bytes, "MV - SNA", 8);
+  /* A snapshot's signature is a fixed-width field rather than a string: the
+     bytes go in without the terminator the literal carries. */
+  static const char signature[] = "MV - SNA";
+  memcpy(bytes, signature, sizeof signature - 1);
   memset(bytes + 8, 0, CPC_SNAPSHOT_HEADER_SIZE - 8);
   bytes[0x10] = 1;
   TEST_CHECK(!cpc_snapshot_load(&cpc, bytes, CPC_SNAPSHOT_HEADER_SIZE, &problem));
@@ -216,6 +219,150 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
   TEST_EQUAL(restored.crtc.registers[8], 0xF3);
   TEST_EQUAL(restored.crtc.registers[16], 0x00);
   TEST_EQUAL(restored.crtc.address_register, 9);
+}
+
+/* Nor is a restore a write a program made on a character: the chip must not
+   read it as one, where an R3 would let a type 0's second sync through on
+   the first tick back and an R4 or R9 make a type 2's last line of the line
+   it stands on — here one whose C4 and C9 the restored R4 and R9 meet — and
+   an R4 written during a type 2's line head compares with the R9 restored.
+   Nor may a type 2's load of R12/R13 on the character just drawn take the
+   restored ones as a late write. */
+static void a_restore_is_no_write_on_a_character(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x43 + 9] = 5;     /* R9 */
+  bytes[0x43 + 12] = 0x30; /* R12 */
+
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 2);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.offset_taken_where_c0_met_r1 = true;
+  restored.crtc.vma_ = 0x0123;
+  restored.crtc.c0 = 10;
+  restored.crtc.c4 = bytes[0x43 + 4];
+  restored.crtc.c9 = 5;
+  restored.crtc.last_line_management = true;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.vma_, 0x0123);
+  TEST_CHECK(!restored.crtc.r3_written_for_this_character);
+  TEST_CHECK(!restored.crtc.last_line);
+  TEST_EQUAL(restored.crtc.r9_at_the_line_head, 5);
+}
+
+/* Nor is restoring R1 a write made onto C0: on a type 1, which takes VMA'
+   from VMA where an R1 written there meets C0 on a row's last line, the
+   latch keeps what the machine had, and no character the tick has already
+   handed out is shut. Nor is restoring R5 one made where C0 names R0, nor R6
+   one made while C4 stands at 0. */
+static void a_restore_writes_nothing_a_type_1_acts_on(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x43 + 0] = 63; /* R0, restored first: one of 0 would send C0 home */
+  bytes[0x43 + 1] = 10; /* R1 */
+  bytes[0x43 + 9] = 5;  /* R9 */
+
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 1);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.vma = 0x0456;
+  restored.crtc.vma_ = 0x0123;
+  restored.crtc.c0 = 10;
+  restored.crtc.c9 = 5;
+  restored.crtc.registers[6] = 25; /* R1 is restored before both, and */
+  restored.crtc.registers[9] = 5;  /* a type 1's R6 of 0 borders it all */
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.vma_, 0x0123);
+  TEST_CHECK(!restored.crtc.display_shut_since_the_tick);
+
+  /* Nor R5 raised from 0 where C0 names R0, which sets off a type 1's RFD
+     (ch. 11.6). */
+  bytes[0x43 + 5] = 1;
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 1);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.c0 = 63;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.crtc.rfd_at_the_line_end);
+
+  /* Nor R6 restored to 0 while C4 stands at 0, which a type 1 keeps as a
+     border for the rest of the frame (ch. 18.2.3). */
+  bytes[0x43 + 6] = 0;
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 1);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.c9 = 3;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.crtc.display_r6);
+}
+
+/* Nor is restoring R0 a width a type 0 widens from 1 on its second character,
+   which would move C4 there (ch. 13.7.2), nor restoring R8 the interlace video
+   mode a type 2 switches on at an odd frame's head, which would begin that
+   frame again (ch. 19.6.3). */
+static void a_restore_moves_no_row(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  bytes[0x43 + 0] = 63; /* R0 */
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  restored.crtc.registers[0] = 1;
+  restored.crtc.c0 = 1;
+  restored.crtc.c4 = 5;
+  restored.crtc.c4_increment_armed = true;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.c4, 5);
+  TEST_CHECK(restored.crtc.c4_increment_armed);
+
+  bytes[0x43 + 8] = 3; /* R8 */
+  cpc_init(&restored, other_ram, sizeof other_ram, lower_rom, 2);
+  cpc_set_upper_rom(&restored, 0, upper_rom);
+  restored.crtc.parity_frame = true;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.crtc.registers[8], 3);
+  TEST_CHECK(!restored.crtc.frame_begins_again);
+}
+
+/* A CRTC write the board holds for the next character clock belongs to the
+   instruction that made it, and a restore restarts the processor: an ASIC
+   machine stopped inside an OUT to R0, on the quarter before the clock the
+   write waits for, keeps the R0 it is given back, whether a snapshot gives it
+   or a processor restarted bare leaves the one it had. */
+static void a_restore_leaves_a_held_write_behind(void) {
+  for (int restart = 0; restart < 2; restart++) {
+    memset(lower_rom, 0, sizeof lower_rom);
+    cpc_init(&cpc, ram, sizeof ram, lower_rom, 4);
+    cpc_set_upper_rom(&cpc, 0, upper_rom);
+    crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0, selected in the snapshot too */
+    crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 63));
+    const char *problem = NULL;
+    TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+
+    lower_rom[0x45] = 0xED;
+    lower_rom[0x46] = 0x49; /* OUT (C),C */
+    cpc.cpu.pc = 0x40;
+    cpc.cpu.b = 0xBD;
+    cpc.cpu.c = 0x30;
+    for (int tick = 0; tick < 200; tick++) {
+      cpc_tick(&cpc);
+      if (cpc.crtc_write_awaits_the_clock && cpc.gate_array.cpu_phase == 3) {
+        break;
+      }
+    }
+    TEST_CHECK(cpc.crtc_write_awaits_the_clock);
+    TEST_EQUAL(cpc.gate_array.cpu_phase, 3);
+    if (restart == 0) {
+      TEST_CHECK(cpc_snapshot_load(&cpc, bytes, sizeof bytes, &problem));
+    } else {
+      z80_init(&cpc.cpu);
+    }
+    for (int tick = 0; tick < 8; tick++) {
+      cpc_tick(&cpc);
+    }
+    TEST_EQUAL(cpc.crtc.registers[0], 63);
+  }
 }
 
 /* The format holds the sound chip's registers and not its generators. A
@@ -464,6 +611,10 @@ int main(void) {
   TEST_RUN(a_half_done_instruction_cannot_be_saved);
   TEST_RUN(machines_restored_from_one_snapshot_agree);
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
+  TEST_RUN(a_restore_is_no_write_on_a_character);
+  TEST_RUN(a_restore_writes_nothing_a_type_1_acts_on);
+  TEST_RUN(a_restore_moves_no_row);
+  TEST_RUN(a_restore_leaves_a_held_write_behind);
   TEST_RUN(the_psg_keeps_only_the_bits_it_has);
   TEST_RUN(a_snapshot_starts_the_sound_afresh_and_lets_an_ended_envelope_rest);
   TEST_RUN(a_resting_envelope_rests_after_a_snapshot);

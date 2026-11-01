@@ -42,13 +42,23 @@ void cpc_remap(cpc_t *cpc) {
 /* Port B is wired to the outside world and to the CRTC: bit 7 the cassette,
    bit 6 the printer's ready line inverted, bit 5 the expansion port, bit 4
    the refresh-rate link, bits 3-1 the manufacturer's, and bit 0 the CRTC's
-   VSYNC straight through ("8255 PPI"). Nothing is connected to the printer
-   here and reads high; the cassette reads what is at the play head, and with
-   no deck in nothing drives it, so it reads high with the other inputs. */
+   VSYNC straight through ("8255 PPI"). Bit 7 is driven by the tape circuit
+   rather than pulled anywhere, so it reads what is at the play head and
+   reads low with no tape in the deck, and bit 6 is pulled up and stands high
+   with no printer on the far end.
+
+   Bit 5 is low on a measurement rather than on a derivation. "8255 PPI"
+   gives it as 0 where no device is connected, and Shaker's D (R) names #5E
+   for a 50Hz Amstrad with the VSYNC down and #5F with it up, which is what
+   these levels answer. Amstrad's own CPC6128 circuit diagram nevertheless
+   pulls that pin up through NR101 and carries it to the expansion connector
+   and nowhere else, which would leave it high on a bare board; the disc
+   interface's link to the same pin is the likeliest reconciliation, and the
+   sheet that would settle it is one we have not seen. */
 static void present_port_b(cpc_t *cpc) {
-  uint8_t levels = 0xE0;
-  if (cpc->tape != NULL && !tape_level(cpc->tape)) {
-    levels &= (uint8_t)~PORT_B_CASSETTE;
+  uint8_t levels = 0x40;
+  if (cpc->tape != NULL && tape_level(cpc->tape)) {
+    levels |= PORT_B_CASSETTE;
   }
   if (cpc->fifty_hz) {
     levels |= 0x10;
@@ -86,7 +96,7 @@ static void run_psg(cpc_t *cpc) {
    I/O ports. The direction comes from the address and not from the CPU, so
    the chip is strobed by any I/O request when A14 is low, and a CPU read of
    one of the two write ports latches whatever the address bus carried. */
-static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
+static uint64_t crtc_bus_pins(uint16_t address, uint8_t data) {
   uint64_t pins = CRTC_CS | crtc_set_data(0, data);
   if (address & 0x0100) {
     pins |= CRTC_RS;
@@ -94,8 +104,186 @@ static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
   if (address & 0x0200) {
     pins |= CRTC_RW;
   }
-  return crtc_access(&cpc->crtc, pins);
+  return pins;
 }
+
+/* The Gate Array holds a character's display enable for a microsecond before
+   drawing it, so a write that shuts it during that character is still in time
+   to border it. */
+static void border_what_a_write_shut(cpc_t *cpc) {
+  if (cpc->crtc.display_shut_since_the_tick) {
+    gate_array_shut_the_display(&cpc->gate_array);
+  }
+}
+
+static uint64_t crtc_bus(cpc_t *cpc, uint16_t address, uint8_t data) {
+  uint64_t pins = crtc_bus_pins(address, data);
+  /* Which edge of the character the access finished on, which every type's
+     line-ending comparison turns on, and the C4/R7 comparison of types 1 and 2
+     besides (ch. 13.3, note 3; ch. 13.7.1 for a type 1, the disc for a type 2,
+     crtc.c). */
+  if (gate_array_character_clock(&cpc->gate_array)) {
+    pins |= CRTC_ON_THE_CHARACTER_CLOCK;
+  }
+  pins = crtc_access(&cpc->crtc, pins);
+  border_what_a_write_shut(cpc);
+  return pins;
+}
+
+/* Whether the CRTC takes a write on the first character clock its I/O cycle
+   spans rather than where the cycle begins, which is how the two ASICs that
+   emulate one are clocked: "an output entry with an 'OUT(C),R8' occurs on the
+   3rd NOP for a CRTC equipped with a GATE ARRAY, and on the 4th NOP for an
+   ASIC that emulates a CRTC (CRTC's 3 and 4)", the ASICs not clocking the
+   chip "exactly like the GATE ARRAY", while "the update of a CRTC register
+   takes place on the 5th µsec of the OUTI instruction, regardless of the type
+   of CRTC" (Compendium ch. 4.4.4). An OUT(C),r holds its I/O cycle across the
+   next character clock and is taken there, a microsecond later; an OUTI's
+   cycle begins on a character clock and is taken where it begins, as it is on
+   a Gate Array. The chronograms fix the microsecond each lands in: ch. 13.6.3
+   has an OUT writing R0 a microsecond after ch. 13.6.1 has a type 0's or 2's
+   — its last placement in time on a line of width #3F starting at #3C
+   rather than #3D, and C0 leaving a width of nothing on its fifth microsecond
+   rather than its fourth — and ch. 13.5 says as much, "the I/O takes place
+   with 1 μs delay, which implies placing the OUT 1 μsec before those that
+   would be done on a CRTC 1"; Shaker's B (P) starts its OUTs a microsecond
+   early on these two to make up for it. So an OUT's held write lands after
+   the tick of the clock that takes it, inside the microsecond that follows,
+   and takes back no line end that tick made (land_a_held_crtc_write); an R0
+   lowered onto or below the character C0 stands on, and an R2 or an R3, are the
+   exceptions (hand_over_a_held_write). An OUTI's write is taken on the clock
+   its cycle begins on, through the window the chip keeps a line's end in, as
+   behind a Gate Array: ch. 13.6.3 puts its last placement in time at #3B, as
+   ch. 13.6.1 does a type 0's, and the window gives it a microsecond more on
+   every type, which Shaker's B (6) grades (crtc.h). Ch. 4.4.4's diagram C
+   draws the ASIC's sampling window straddling each edge and names no instant
+   inside it. A read of one of the CRTC's write ports, which writes it
+   (io_read), is taken where it falls, as behind a Gate Array: the chapter
+   speaks of OUTs, and nothing grades it. */
+static bool crtc_takes_writes_on_its_clock(const cpc_t *cpc) {
+  return cpc->crtc.type == 3 || cpc->crtc.type == 4;
+}
+
+/* A write held from a cycle begun before this clock lands in the microsecond
+   after the clock's tick rather than on its edge, so the chip has no line end
+   of that tick to take back for it. */
+static void land_a_held_crtc_write(cpc_t *cpc, uint16_t address, uint8_t data) {
+  crtc_access(&cpc->crtc, crtc_bus_pins(address, data));
+  border_what_a_write_shut(cpc);
+}
+
+/* An R0 written by an OUT the board holds to this clock, lowering the width
+   onto or below the character C0 stands on, is handed to the chip ahead of
+   the clock's tick, so that the comparison of C0 with R0 made there ends the
+   line. Shaker's B (R) writes R0=1 with an OUT on C0=1 on every type, its
+   build for these two a microsecond shorter to make up for their later
+   interrupt, and silicon's two ASICs end that line there: Shakerland
+   photographs "R0=1/R3=1/R52 CALC=#34 (Exp:#34)(REF #0169)" on both, the other
+   types' #0168 and the microsecond of ch. 27.6.1. Landing after the tick, the
+   write would find C0 already moved to 2 and end the line a character later
+   (never_runs_past_r0, crtc.c). A width written above C0 lands after the tick
+   as every other held write does, as ch. 13.6.3 draws it and as Shaker's B
+   (P) needs it, whose 74 microseconds of R0=0 end where Shakerland
+   photographs #48 and #7A on both. That a lowering write is taken a
+   microsecond sooner than a raising one is ours, from those two groups. It
+   reaches the chip off the clock, the ending the clock before took being no
+   longer the chip's to take back.
+
+   R2 and R3 are handed over too: the line sync's comparisons take the OUT's
+   write on the character its fourth microsecond lands on. Ch. 14.9's CRTC 4
+   schematic draws "R2-JIT / OUT(C),r8" with the I/O on C0=R2 and the sync
+   starting there, and ch. 14.7.2 says an "R2.JIT ... does not cause the HSYNC
+   black zone to appear later ..." on these two; ch. 14.5.3's "OUT CRTC-R3,5",
+   landing on the character C3l reaches 5 on, ends a five-character sync, and
+   ch. 14.5.4.4's first diagram an R3 of 1 landing on C0=R2+1 a one-character
+   one, where R3 below the count overflows as on every row of ch. 14.5.3.
+   Shakerland photographs Shaker's A (3) R0=3 pages and B (4) with the sync on
+   the line R2 is written on, A (2)'s R0=7 page, A (R)'s R2=#0A page, A (Y)'s
+   R3=5 page, a sync five microseconds long, and B (I)'s R3=1 page as these draw
+   them. R3's VSYNC width comes over with it, counted a line sooner where the
+   write is held to a line's end during a VSYNC, which nothing grades. Every
+   other register keeps the microsecond ch. 4.4.4 gives these two:
+   handing every held write over ahead of the tick puts six of Shaker's E (4)
+   lines wrong on both ASIC records. Only a write whose instruction is still
+   under way is handed over, a processor restarted under one having left nothing
+   to hand. */
+static void hand_over_a_held_write(cpc_t *cpc) {
+  uint16_t address = z80_address(cpc->pins);
+  bool to_the_data_port = (address & 0x4000) == 0 && (address & 0x0300) == 0x0100;
+  uint8_t number = cpc->crtc.address_register;
+  bool lowers_r0_onto_c0 = number == 0 && z80_data(cpc->pins) <= cpc->crtc.c0;
+  bool moves_the_line_sync = number == 2 || number == 3;
+  if (cpc->crtc_write_awaits_the_clock && !z80_instruction_complete(&cpc->cpu) &&
+      to_the_data_port && (lowers_r0_onto_c0 || moves_the_line_sync)) {
+    cpc->crtc_write_awaits_the_clock = false;
+    crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, z80_data(cpc->pins)));
+  }
+}
+
+/* Whether the syncs the Gate Array follows are the CRTC's a character late,
+   which is the two ASICs' way. A character is displayed a microsecond after
+   its address is handed over, and "this display time lag of the GATE ARRAY
+   with respect to the CRTC would not be a problem if the entirety of what is
+   sent by the CRTC to the GATE ARRAY were always delayed by 1 μsec. But this
+   is not always the case, especially for HSYNC signal management for
+   machines equipped with CRTC's 0, 1 and 2" (Compendium ch. 7.1). Behind a
+   Gate Array "the HSYNC visually begins approximately 1 µsec before the
+   display of the corresponding CRTC character", where "on CRTC's 3 and 4,
+   the HSYNC begins at the start of the display by the GATE ARRAY of the CRTC
+   character corresponding to C0=R2", so that "an interrupt occurs 1 µsec
+   later on CRTC's 3 and 4 than on the other CRTC's" (ch. 27.6.1; the
+   diagrams of ch. 27.6.5 draw the count beginning a character later at every
+   width, and ch. 13.1 says the same). Ch. 15.1 says it of the picture: the
+   ASICs "manage a HSYNC consistent with the C0 value displayed, delaying the
+   display of the HSYNC by 1 μsec", and on the monitor of a type 0, 1 or 2
+   machine a type 4's "image is shifted to the left because HSYNC occurs
+   1 µsec later". The frame sync going with it is our reading of ch. 7.1's
+   "entirety", which no diagram draws: it keeps the two meeting the Gate Array
+   in the order they leave the chip. What the PPI reads of the frame sync is
+   the chip's own, which is what ch. 27.6's diagrams count C0vs from. */
+static bool syncs_follow_the_display(const cpc_t *cpc) {
+  return cpc->crtc.type == 3 || cpc->crtc.type == 4;
+}
+
+/* Whether the interrupt generator acts on a line sync's end a quarter of a
+   microsecond sooner than behind a Gate Array: on the character clock that
+   hands the end over, which on the two ASICs is itself a character late
+   (above). The Compendium draws a line sync's black to the mode 2 pixel, a
+   sixteenth of a microsecond, and ch. 14.9's schematics show where it ends:
+   four pixels into a character on a type 0 and a type 2, five on a type 1,
+   two on a type 4. That is the second of the processor's four cycles on the
+   first three, which is where a Gate Array here acts, and the first on a
+   type 4. No end is drawn for a type 3, whose black ch. 14.7.2 assumes
+   begins on the 17th pixel of the displayed character before C0=R2, two
+   before a type 4's 19th (where ch. 14.7.1 gives a type 0 the 5th); as wide
+   as a type 4's, it would end in the first cycle too. Where the chapters see
+   half a pixel more displayed, a type 4's black begins a sixteenth later,
+   which leans the other way, and ch. 27.7.2 finds types 2, 3 and 4 "generally
+   give results identical to the CRTC 0, with a few small differences". That
+   the interrupt keeps the cycle the sync's black ends in is our reading.
+   Shaker's D (I), racing the interrupt against a DEC DE's last T-state, finds
+   silicon's ASICs catching it where the other three types miss it, which is
+   what this gives (gate_array.c). Read on every character clock, as the type
+   is. */
+static bool acts_on_a_sync_end_at_the_clock(const cpc_t *cpc) {
+  return cpc->crtc.type == 3 || cpc->crtc.type == 4;
+}
+
+/* The sample of a displayed character from which a colour written in the
+   microsecond it is displayed in shows. Ch. 9.2.2 draws an OUT (C),r8, an
+   OUT (n),A and an OUTI to the Gate Array's port on every type: on types 0,
+   1, 2 and 4 the new colour begins with the second byte of the character the
+   Gate Array displays in the microsecond the write is made in, the first
+   keeping the old; on type 3 it begins half way through the first byte,
+   four mode 2 pixels sooner. Where mode 2 starts a pixel early on types 0-2
+   the chapter leaves that byte's first pixel in the old colour, and a type
+   4 changes a pixel sooner in mode 2 alone; both wait on the early mode 2
+   pixel this Gate Array does not yet draw (gate_array.h). Shaker's E (5)
+   "SPLIT RAST COLOR POS" draws these edges with their expected pictures, and
+   Shakerland photographs Shaker's A (9) on every type with its boxes beginning
+   where this puts them; on the two ASICs they end a column or so later than
+   here, which is not yet understood. */
+static uint8_t colour_write_reaches_sample(const cpc_t *cpc) { return cpc->crtc.type == 3 ? 4 : 8; }
 
 /* Devices decode single address bits, so one access can reach several at
    once; every test in the two functions below is independent, and their
@@ -114,7 +302,11 @@ static void io_write(cpc_t *cpc, uint16_t address, uint8_t data) {
     }
   }
   if ((address & 0x4000) == 0) {
-    crtc_bus(cpc, address, data);
+    if (crtc_takes_writes_on_its_clock(cpc)) {
+      cpc->crtc_write_awaits_the_clock = true;
+    } else {
+      crtc_bus(cpc, address, data);
+    }
   }
   if ((address & 0x2000) == 0) {
     cpc->upper_rom_number = data;
@@ -151,8 +343,13 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
        writes: whatever the CPU happened to put on the address bus lands in
        the selected register. For IN A,(n) that byte is A, which is the
        documented three-microsecond way to write a register (Compendium ch.
-       4.4.2); for IN r,(C) it is B, which the document leaves undefined. */
-    data = crtc_data(crtc_bus(cpc, address, (uint8_t)(address >> 8)));
+       4.4.2); for IN r,(C) it is B, which the document leaves undefined.
+       The two read ports write nothing, so what goes in is only what comes
+       back where the chip declines to drive: a bus at rest, which is what a
+       real machine reads there — "my CPC CRTC 2 always returns 255 ... my
+       CPC CRTC 0 randomly returns 255 or 127" (ch. 21.3.2). */
+    uint8_t floating = (address & 0x0200) ? 0xFF : (uint8_t)(address >> 8);
+    data = crtc_data(crtc_bus(cpc, address, floating));
   }
   if ((address & 0x0800) == 0) {
     present_port_b(cpc);
@@ -172,10 +369,12 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
   return data;
 }
 
-void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom) {
+void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
+              uint8_t crtc_type) {
   *cpc = (cpc_t){0};
   z80_init(&cpc->cpu);
-  crtc_init(&cpc->crtc);
+  crtc_init(&cpc->crtc, crtc_type);
+  crtc_give_line_end_rooms(&cpc->crtc, cpc->crtc_line_end_rooms);
   gate_array_init(&cpc->gate_array);
   ppi_init(&cpc->ppi);
   ay38910_init(&cpc->psg);
@@ -232,6 +431,10 @@ uint16_t cpc_video_address(const cpc_t *cpc) {
 void cpc_insert_tape(cpc_t *cpc, tape_t *tape) { cpc->tape = tape; }
 
 uint64_t cpc_tick(cpc_t *cpc) {
+  /* Pointed here rather than once at power-on: a host may copy a whole
+     machine and copy it back — the test suites do — and a pointer into the
+     copy it came from would outlive the copying. */
+  crtc_give_line_end_rooms(&cpc->crtc, cpc->crtc_line_end_rooms);
   gate_array_advance_phase(&cpc->gate_array);
   /* The motor line is held, not sampled: the board turns the reel for as
      long as the bit is set, whether or not the processor is looking at the
@@ -257,17 +460,34 @@ uint64_t cpc_tick(cpc_t *cpc) {
     tape_tick(cpc->tape);
   }
   if (gate_array_character_clock(&cpc->gate_array)) {
+    if (cpc->a_character_is_held) {
+      /* A public field and a count here: past the character, nothing is
+         held. */
+      uint8_t from = cpc->character_held_from < GATE_ARRAY_SAMPLES_PER_CHARACTER
+                         ? cpc->character_held_from
+                         : GATE_ARRAY_SAMPLES_PER_CHARACTER;
+      gate_array_redraw_with_colours_since(&cpc->gate_array, from, cpc->character_held);
+      monitor_receive(&cpc->monitor, cpc->character_held + from,
+                      (uint8_t)(GATE_ARRAY_SAMPLES_PER_CHARACTER - from),
+                      cpc->character_held_csync);
+    }
+    hand_over_a_held_write(cpc);
     cpc->crtc_pins = crtc_tick(&cpc->crtc);
-    gate_array_tick(&cpc->gate_array, (cpc->crtc_pins & CRTC_HSYNC) != 0,
-                    (cpc->crtc_pins & CRTC_VSYNC) != 0);
-    /* The video hardware reads the base 64K and nothing else: no ROM, no
-       banked RAM, whatever the CPU is looking at ("The Gate Array", MMR). */
-    uint16_t address = cpc_video_address(cpc);
-    uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER];
-    gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0, cpc->ram[address],
-                     cpc->ram[address | 1], samples);
-    monitor_receive(&cpc->monitor, samples, GATE_ARRAY_SAMPLES_PER_CHARACTER,
-                    gate_array_csync(&cpc->gate_array));
+    bool hsync = (cpc->crtc_pins & CRTC_HSYNC) != 0;
+    bool vsync = (cpc->crtc_pins & CRTC_VSYNC) != 0;
+    bool late = syncs_follow_the_display(cpc);
+    cpc->gate_array.acts_on_a_sync_end_at_the_clock = acts_on_a_sync_end_at_the_clock(cpc);
+    gate_array_tick(&cpc->gate_array, late ? cpc->crtc_hsync_a_character_ago : hsync,
+                    late ? cpc->crtc_vsync_a_character_ago : vsync);
+    cpc->crtc_hsync_a_character_ago = hsync;
+    cpc->crtc_vsync_a_character_ago = vsync;
+    gate_array_video(&cpc->gate_array, (cpc->crtc_pins & CRTC_DISPTMG) != 0,
+                     (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cpc->character_held);
+    cpc->character_held_from = colour_write_reaches_sample(cpc);
+    cpc->character_held_csync = gate_array_csync(&cpc->gate_array);
+    cpc->a_character_is_held = true;
+    monitor_receive(&cpc->monitor, cpc->character_held, cpc->character_held_from,
+                    cpc->character_held_csync);
     /* The controller counts in microseconds, which is the character
        clock, and turns the drives. */
     if (cpc->disc_interface) {
@@ -301,10 +521,9 @@ uint64_t cpc_tick(cpc_t *cpc) {
   uint64_t before = cpc->pins;
   uint64_t pins = z80_tick(&cpc->cpu, bus);
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
-    /* Interrupt acknowledge: the Gate Array drops INT and kills R52's bit
-       5; the data bus floats, &FF by convention (in mode 1 the byte is
-       ignored; the Compendium ch. 27.5 finds it undetermined on hardware). */
-    gate_array_interrupt_acknowledged(&cpc->gate_array);
+    /* Interrupt acknowledge: the data bus floats, &FF by convention (in
+       mode 1 the byte is ignored; the Compendium ch. 27.5 finds it
+       undetermined on hardware). */
     pins = z80_set_data(pins, 0xFF);
   } else if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
     uint16_t address = z80_address(pins);
@@ -316,9 +535,51 @@ uint64_t cpc_tick(cpc_t *cpc) {
     if ((before & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
       io_write(cpc, z80_address(pins), z80_data(pins));
     }
+    if (cpc->crtc_write_awaits_the_clock && gate_array_character_clock(&cpc->gate_array)) {
+      cpc->crtc_write_awaits_the_clock = false;
+      if ((before & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
+        crtc_bus(cpc, z80_address(pins), z80_data(pins));
+      } else {
+        land_a_held_crtc_write(cpc, z80_address(pins), z80_data(pins));
+      }
+    }
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
     bool first_tick = (before & (Z80_IORQ | Z80_RD)) != (Z80_IORQ | Z80_RD);
     pins = z80_set_data(pins, io_read(cpc, z80_address(pins), first_tick));
+  }
+  /* A write whose cycle ended before any clock met it is never taken. The Gate
+     Array's WAIT stretches every I/O cycle across one, so only a processor
+     reset under it ends one early — a snapshot loaded mid-instruction — and
+     the write it leaves waiting must not be handed to whatever the next I/O
+     cycle addresses. */
+  if ((pins & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR)) {
+    cpc->crtc_write_awaits_the_clock = false;
+  }
+  /* The Gate Array reads the character's two bytes after the processor's
+     access on this cycle, the one READY lets every memory cycle finish on:
+     "the RAM reading by the GATE ARRAY/ASIC for data modified by the Z80A
+     is the same for all CPC's" (Compendium ch. 8), and an LD (HL),r begun
+     at C0vs 00 changes the bytes of C0vs 01 (ch. 8.1). A write is made
+     here where its WR first falls, which is this cycle for one no wait
+     stretched, as LD (HL),r's is, and an earlier one for one that waited,
+     as LD (nn),HL's does; read before the processor, the first would go
+     unseen for a microsecond. Shakerland's photographs of Shaker's A (1)
+     show it seen, on every type. The video hardware reads the base 64K and
+     nothing else: no ROM, no banked RAM, whatever the CPU is looking at
+     ("The Gate Array", MMR). */
+  if (gate_array_character_clock(&cpc->gate_array)) {
+    uint16_t address = cpc_video_address(cpc);
+    gate_array_fetch(&cpc->gate_array, cpc->ram[address], cpc->ram[address | 1]);
+  }
+  /* The Gate Array hears the acknowledge where M1 ends, and drops INT and
+     kills R52's bit 5 there: "the end of the M1 signal during an interrupt
+     occurs after the TWait cycles of the Z80A" (Compendium ch. 27.7.1).
+     Heard where IORQ begins instead, it reaches that chapter's race early,
+     and Shaker's B (R) prints #C4 for every instruction it times, where
+     silicon gives #CC for all but five. */
+  if ((before & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ) &&
+      (pins & (Z80_M1 | Z80_IORQ)) != (Z80_M1 | Z80_IORQ)) {
+    gate_array_interrupt_acknowledged(&cpc->gate_array);
   }
   cpc->pins = pins;
   return pins;

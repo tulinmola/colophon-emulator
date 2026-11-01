@@ -12,31 +12,38 @@
  *
  * It is also the machine's clock: from 16MHz it makes the CPU's 4MHz and
  * the character clock's 1MHz, and it holds the CPU off the RAM for three
- * cycles in four so the video fetch always wins. That hold is the READY
- * signal, wired to the Z80's WAIT.
+ * cycles in four, leaving it the fourth, on which the video fetch follows
+ * its access. That hold is the READY signal, wired to the Z80's WAIT.
  *
  * Implemented: the registers, the interrupt generator, the byte-to-pixel
  * serialiser, the composite sync and READY. Not yet: the 40010's habit of
- * starting mode 2 one pixel early, which waits for Shaker.
+ * starting mode 2 one pixel early, which waits for Shaker and which the type 4
+ * ASIC shares (ch. 9.1), a colour written in that mode changing a pixel sooner
+ * with it on that chip (ch. 9.2.2); and where inside the character a new mode
+ * begins, a few pixels in (ch. 9.3.4.1), a mode being taken here a whole
+ * character at a time.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
  *
  * Sources:
- * - "The Amstrad CPC CRTC Compendium" v1.10 (Longshot / Logon System),
- *   https://shaker.logonsystem.eu/ACCC1.10-EN.pdf ch. 27 — the interrupt
+ * - "The Amstrad CPC CRTC Compendium" v1.11 (Longshot / Logon System),
+ *   https://shaker.logonsystem.eu/ACCC1.11-EN.pdf ch. 27 — the interrupt
  *   generator measured on hardware: the R52 counter and its name, the INT
  *   line maintained until acknowledged, bit 5 killed at acknowledge, and
- *   the rule two HSYNCs after VSYNC: an interrupt only if bit 5 is set.
+ *   the rule two HSYNCs after VSYNC: an interrupt only if bit 5 is set,
+ *   and the microsecond an interrupt waits after the end of the HSYNC
+ *   that asked for it (ch. 27.6.1; ch. 27.6.2's diagrams put it R3+1
+ *   after C0 reaches R2 for every width they draw, and ch. 27.6.5's a
+ *   microsecond later where the sync reaches the chip a character late).
  *   Where "The Gate Array" states that rule inverted, the Compendium is
  *   the one whose reading matches the mechanism's purpose, and the one
  *   tested on silicon.
  * - "The Gate Array" (Grim),
  *   https://www.grimware.org/doku.php/documentations/devices/gatearray —
- *   the command dispatch on data bits 7-6, the PENR/INKR/RMR layouts, mode
- *   changes taking effect after the next HSYNC, the byte-to-pixel tables
- *   for the four modes, and the palette as measured on the outputs of a
- *   real 40010.
+ *   the command dispatch on data bits 7-6, the PENR/INKR/RMR layouts, the
+ *   byte-to-pixel tables for the four modes, and the palette as measured on
+ *   the outputs of a real 40010.
  * - The Compendium ch. 16.2.2 and 16.2.3 for the composite sync: the H06
  *   and V26 counters this file names, the four-microsecond C-HSYNC that
  *   begins two characters after the CRTC's, the four-line C-VSYNC that
@@ -44,6 +51,10 @@
  *   and the XNOR that inverts the line pulses during a frame sync.
  * - The Compendium ch. 7.1 — the Gate Array displays a character one
  *   microsecond after the CRTC hands over its address.
+ * - The Compendium ch. 9.3 — where a mode write is taken: ch. 9.3.1's
+ *   HSYNC-GA period, capped at six microseconds and needing two, and ch.
+ *   9.3.2 and 9.3.3, which draw an OUT against R2=46, R3=14 a microsecond
+ *   at a time.
  * - "Interrupts on the CPC/CPC+ and KC Compact" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/ints.html — RMR bit 4 clears the
  *   pending request along with the counter.
@@ -63,13 +74,26 @@
    Gate Array drives on R, G and B while the beam is blanked. */
 #define GATE_ARRAY_BLACK 20
 
+/* What a sample is drawn from when the beam is blanked: no colour register,
+   so no colour written to one reaches it. */
+#define GATE_ARRAY_UNLIT 17
+
+/* What an HSYNC end is to the interrupt generator: one step of R52, or the
+   check the frame makes two HSYNCs after its VSYNC began (ch. 27.3.2). */
+typedef enum {
+  GATE_ARRAY_NO_HSYNC_END = 0,
+  GATE_ARRAY_R52_STEP,
+  GATE_ARRAY_FRAME_CHECK,
+} gate_array_hsync_end_t;
+
 typedef struct {
   uint8_t pen;      /* the selected colour register: pens 0-15, 16 the border */
   uint8_t inks[17]; /* 5-bit hardware colour codes; [16] is the border */
 
-  uint8_t mode;           /* the video mode in force */
-  uint8_t mode_pending;   /* RMR bits 1-0 as last written; a mode change takes
-                             effect after the next HSYNC ("The Gate Array") */
+  uint8_t mode;           /* the video mode in force, 0 to 3 */
+  uint8_t mode_pending;   /* RMR bits 1-0 as last written, taken where the
+                             HSYNC-GA period of the next line sync of two
+                             characters or more ends (gate_array.c) */
   bool lower_rom_enabled; /* RMR bits 2 and 3: a cleared bit enables; these
                              store the enabled state directly */
   bool upper_rom_enabled;
@@ -79,6 +103,16 @@ typedef struct {
      maintained until acknowledged (ch. 27.3.1). */
   uint8_t r52;
   bool interrupt_request;
+  /* What an HSYNC end does to the interrupt generator is decided when it
+     ends and done a character and a quarter later: "an interrupt always
+     starts 1 µsec after the end of the HSYNC regardless of the CRTC"
+     (Compendium ch. 27.6.1). */
+  gate_array_hsync_end_t hsync_end_last_character; /* carried to the next */
+  gate_array_hsync_end_t hsync_end_to_act_on;      /* done on its quarter 1 */
+  bool interrupt_raised_this_microsecond;          /* by that, until the next character clock */
+  /* Whether an end is acted on at the character clock that hands it over
+     instead, a quarter sooner; set by a board for the chip it is (cpc.c). */
+  bool acts_on_a_sync_end_at_the_clock;
   uint8_t hsyncs_until_vsync_check; /* the two-HSYNC delay after a VSYNC
                                        starts (ch. 27.3.2); 0 = not armed */
   bool hsync_previous;
@@ -99,7 +133,12 @@ typedef struct {
      hands over its address (ch. 7.1), so what it draws now is what was
      fetched last time. */
   uint8_t latched_bytes[2];
-  bool latched_display;
+  bool latched_display[2];
+  /* A colour written in the microsecond a character is displayed reaches it
+     part of the way in (Compendium ch. 9.2.2): what each sample of the last
+     character drawn was drawn from, a pen, 16 for the border or
+     GATE_ARRAY_UNLIT for the blanked beam. */
+  uint8_t drawn_from[GATE_ARRAY_SAMPLES_PER_CHARACTER];
 
   /* Where the machine stands in the four CPU cycles that make a character.
      The real chip runs a sequencer over sixteen 16MHz ticks; counting the
@@ -109,7 +148,9 @@ typedef struct {
 
 /* Power-on. Both ROM enables come up enabled — the reset vector is fetched
  * through the lower ROM, so the silicon can reset no other way; the rest is
- * zeroed by convention. */
+ * zeroed by convention. It also builds the byte-to-pens table the serialiser
+ * paints from, which no chip has of its own, so one that has not been
+ * through here paints pen 0 and no other. */
 void gate_array_init(gate_array_t *gate_array);
 
 /* One command byte, as written to the chip's port. Dispatch is on bits 7-6;
@@ -117,7 +158,8 @@ void gate_array_init(gate_array_t *gate_array);
  * 11 pattern is the PAL's MMR, not ours, and is ignored. */
 void gate_array_write(gate_array_t *gate_array, uint8_t data);
 
-/* One character clock: watch the syncs, run the interrupt counter. */
+/* One character clock: watch the syncs, and act on the end of one handed
+ * over here where the chip is set to act at the clock. */
 void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync);
 
 /* The INT line, held from the moment the counter raises it until the CPU
@@ -129,7 +171,9 @@ static inline bool gate_array_interrupt(const gate_array_t *gate_array) {
 
 /* The CPU has acknowledged the interrupt: the request drops and bit 5 of
  * R52 dies, so the next interrupt comes no closer than 32 lines — or 20,
- * if the counter had already passed 32 (ch. 27.7.1). */
+ * if the counter had already passed 32 (ch. 27.7.1). Called on the cycle
+ * the acknowledge's M1 ends, after that cycle's gate_array_advance_phase;
+ * a request raised in that same microsecond is left standing. */
 void gate_array_interrupt_acknowledged(gate_array_t *gate_array);
 
 /* The composite sync on its way to the monitor, asserted when active. It is
@@ -140,7 +184,9 @@ static inline bool gate_array_csync(const gate_array_t *gate_array) {
   return gate_array->sig_hsync != gate_array->sig_vsync;
 }
 
-/* Move on by one of the CPU's four cycles. */
+/* Move on by one of the CPU's four cycles, counting an HSYNC end for the
+ * interrupt generator on the second of them, where the chip is not set to
+ * count it at the clock. */
 void gate_array_advance_phase(gate_array_t *gate_array);
 
 /* Whether a character clock falls on the cycle just reached — the moment
@@ -153,9 +199,10 @@ static inline bool gate_array_character_clock(const gate_array_t *gate_array) {
  * on the fourth. This is what rounds every machine cycle up to a whole
  * microsecond and costs the CPU a quarter of its nominal speed.
  *
- * The chip knows nothing about which cycle the CPU is in: it "continually
- * generates 3 Tw followed by a no-Tw cycle" (Compendium ch. 4.4.4), and the
- * CPU meets that pattern wherever its own sampling happens to fall. An
+ * The chip knows nothing about which cycle the CPU is in: its designers'
+ * trick "has been to continually generate 3 Tw followed by a 'no Tw'
+ * cycle" (Compendium ch. 4.4.4), and the CPU meets that pattern wherever
+ * its own sampling happens to fall. An
  * instruction whose T-states do not divide by four leaves the next one to
  * be stretched at its opcode fetch, which is how everything ends up
  * "linearized" onto the microsecond. */
@@ -163,12 +210,28 @@ static inline bool gate_array_ready(const gate_array_t *gate_array) {
   return gate_array->cpu_phase != 0;
 }
 
-/* Serialise one character. The two bytes are those the machine has just
- * fetched at the CRTC's address, and `display` the CRTC's display enable;
- * both are held a microsecond before they reach the screen, so this writes
- * out the pair handed over last time. */
-void gate_array_video(gate_array_t *gate_array, bool display, uint8_t byte0, uint8_t byte1,
+/* Serialise one character. The two flags are the CRTC's display enable as
+ * each of the character's two bytes finds it; flags and bytes are held a
+ * microsecond before they reach the screen, so this writes out the set
+ * handed over last time and keeps the flags. The bytes follow in
+ * gate_array_fetch. */
+void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool display_second_byte,
                       uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]);
+
+/* The display enable fell after the character's flags were handed over, a
+ * write having shut it inside the character (crtc.h): both of its bytes are
+ * drawn as border. */
+void gate_array_shut_the_display(gate_array_t *gate_array);
+
+/* The samples of the character drawn last, from the one named onwards, drawn
+ * again in the colours in force now: the board names the sample a colour
+ * written since the character was drawn reaches it from (cpc.c). */
+void gate_array_redraw_with_colours_since(const gate_array_t *gate_array, uint8_t from,
+                                          uint8_t samples[GATE_ARRAY_SAMPLES_PER_CHARACTER]);
+
+/* The two bytes read at the address the CRTC handed over with the flags,
+ * held with them for the next gate_array_video. */
+void gate_array_fetch(gate_array_t *gate_array, uint8_t byte0, uint8_t byte1);
 
 /* What the Gate Array's three-state RGB logic puts on the cable for a
  * hardware colour code, as 0xRRGGBB. */

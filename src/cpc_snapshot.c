@@ -146,14 +146,30 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
   cpc->mmr = (uint8_t)(0xC0 | (bytes[AT_RAM_CONFIGURATION] & 0x3F));
   cpc->upper_rom_number = bytes[AT_UPPER_ROM];
 
-  /* Through the chip's own bus, so its writable-bit masks apply and a
-     snapshot cannot install a value no 6845 could hold. Selecting each
-     register in turn clobbers the selection, so that goes back last. */
+  /* Through the chip's own bus, so its writable-bit masks apply and a snapshot
+     cannot install a value no 6845 could hold, but on a copy whose registers
+     alone are taken back: a restore is no write a program made on a character,
+     and a write there moves the chip. R3 lets a type 0's second sync through;
+     R4 or R9 make a type 2's last line of the line it stands on; R1 leaves the
+     video pointer or borders a character already drawn; R0 moves a type 0's C4
+     and, with R4, R5 or R9, sets off a type 1's RFD; R6 moves a type 1's
+     border; R7 counts as written in a sync; R8 moves a type 1's C9 and begins a
+     type 2's frame again; R12 and R13 reach a type 2's offset load as a late
+     write. Selecting each register in turn clobbers the selection, so that goes
+     back last, and a type 2's line head compares C9 with R9 as restored. Nor is
+     any of this a line's end: a chip loaded with one still kept would go back
+     to the line end the machine before it kept, its counters and all. */
+  crtc_t written = cpc->crtc;
   for (int index = 0; index < 18; index++) {
-    crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, (uint8_t)index));
-    crtc_access(&cpc->crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, bytes[AT_CRTC_REGISTERS + index]));
+    crtc_access(&written, CRTC_CS | crtc_set_data(0, (uint8_t)index));
+    crtc_access(&written, CRTC_CS | CRTC_RS | crtc_set_data(0, bytes[AT_CRTC_REGISTERS + index]));
   }
-  crtc_access(&cpc->crtc, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
+  crtc_access(&written, CRTC_CS | crtc_set_data(0, bytes[AT_SELECTED_CRTC_REGISTER]));
+  memcpy(cpc->crtc.registers, written.registers, sizeof cpc->crtc.registers);
+  cpc->crtc.address_register = written.address_register;
+  cpc->crtc.r9_at_the_line_head = cpc->crtc.registers[9];
+  cpc->crtc.a_line_end_is_kept = false;
+  cpc->crtc.the_line_end_before_is_kept = false;
 
   /* The control word first, because setting it clears the output latches.
      The format stores inputs for A and B, outputs for C. */
