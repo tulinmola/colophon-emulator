@@ -33,8 +33,10 @@ ALL_CORES_C = $(SHARED_C) $(CPC_OWN_C) $(SPECTRUM_OWN_C)
 
 PNG_C = cli/png.c
 WAV_C = cli/wav.c
-RESAMPLER_C = cli/resampler.c
 CLI_C = cli/main.c
+
+# What every host compiles and the machine never sees.
+RESAMPLER_C = lib/resampler.c
 
 Z80_TEST_C = test/z80_test.c
 CRTC_TEST_C = test/crtc_test.c
@@ -66,11 +68,11 @@ Z80_EXERCISER_C = test/z80_exerciser_test.c
 
 # Every target depends on every header: the build compiles straight from
 # sources, with nothing finer to hang a dependency on.
-HEADERS = $(wildcard src/*.h) $(wildcard cli/*.h) $(wildcard test/*.h)
+HEADERS = $(wildcard src/*.h) $(wildcard lib/*.h) $(wildcard cli/*.h) $(wildcard test/*.h)
 
 # Taken by wildcard so a file cannot be added and left out of the formatter
 # or the linter.
-SOURCES = $(wildcard src/*.c) $(wildcard cli/*.c) $(wildcard test/*.c)
+SOURCES = $(wildcard src/*.c) $(wildcard lib/*.c) $(wildcard cli/*.c) $(wildcard test/*.c)
 
 SINGLE_STEP_DATA = test/data/SingleStepTests/z80/v1
 EXERCISER_DATA = test/data/ZEXALL
@@ -86,7 +88,7 @@ all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(
 # that does lives in cli/.
 $(BUILD)/emulator: $(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C) $(HEADERS)
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Icli $(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C) -lm -o $@
+	$(CC) $(CFLAGS) -Isrc -Ilib -Icli $(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C) -lm -o $@
 
 $(BUILD)/z80_test: $(Z80_C) $(Z80_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
@@ -186,7 +188,7 @@ $(BUILD)/wav_test: $(WAV_C) $(WAV_TEST_C) $(HEADERS)
 
 $(BUILD)/resampler_test: $(RESAMPLER_C) $(RESAMPLER_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Icli -Itest $(RESAMPLER_C) $(RESAMPLER_TEST_C) -lm -o $@
+	$(CC) $(CFLAGS) -Ilib -Itest $(RESAMPLER_C) $(RESAMPLER_TEST_C) -lm -o $@
 
 $(BUILD)/z80_single_step_test: $(Z80_C) $(Z80_SINGLE_STEP_C) $(HEADERS)
 	@mkdir -p $(BUILD)
@@ -292,7 +294,7 @@ format-check:
 	$(CLANG_FORMAT) --dry-run --Werror $(SOURCES) $(HEADERS)
 
 lint:
-	$(CLANG_TIDY) $(SOURCES) -- $(CFLAGS) -Isrc -Icli -Itest
+	$(CLANG_TIDY) $(SOURCES) -- $(CFLAGS) -Isrc -Ilib -Icli -Itest
 
 clean:
 	rm -rf $(BUILD)

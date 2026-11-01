@@ -3,6 +3,7 @@
  */
 #include <math.h>
 #include <stdbool.h>
+#include <string.h>
 
 #include "resampler.h"
 
@@ -97,6 +98,16 @@ void resampler_init(resampler_t *resampler, int channels, double ratio) {
                                                         : channels;
   make_kernel(resampler);
   resampler_set_ratio(resampler, ratio);
+  resampler_restart(resampler);
+}
+
+void resampler_restart(resampler_t *resampler) {
+  resampler->emitted = 0;
+  resampler->dropped = 0;
+  memset(resampler->level, 0, sizeof resampler->level);
+  memset(resampler->running, 0, sizeof resampler->running);
+  memset(resampler->steps, 0, sizeof resampler->steps);
+  memset(resampler->residuals, 0, sizeof resampler->residuals);
   /* Time starts half a window in, so that a level changed at once has
      samples before it to lay its residual on. */
   resampler->position = (uint64_t)RESAMPLER_HALF_WIDTH << FRACTION_BITS;

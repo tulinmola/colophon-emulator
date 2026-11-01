@@ -215,6 +215,36 @@ static void a_new_ratio_carries_the_level_on(void) {
   }
 }
 
+/* A restart forgets what was heard before it, and what the host nudged the
+   ratio to stays nudged: from there it gives what a new resampler at that
+   ratio gives, sample for sample. */
+static void a_restarted_resampler_gives_what_a_new_one_gives(void) {
+  resampler_init(&resampler, 2, 0.4);
+  resampler_change(&resampler, 0, 900);
+  resampler_change(&resampler, 1, -300);
+  resampler_run(&resampler, 333, samples, 1000);
+  resampler_change(&resampler, 0, 100);
+  resampler_set_ratio(&resampler, 0.5);
+  resampler_run(&resampler, 2000, samples, 10);
+  resampler_restart(&resampler);
+  resampler_init(&fresh, 2, 0.5);
+  TEST_EQUAL(resampler.dropped, 0);
+  resampler_start_at(&resampler, 0, 6359);
+  resampler_start_at(&fresh, 0, 6359);
+  size_t written = 0, written_fresh = 0;
+  bool high = false;
+  for (int run = 0; run < 200; run++) {
+    high = !high;
+    resampler_change(&resampler, 1, high ? 1000 : 0);
+    resampler_change(&fresh, 1, high ? 1000 : 0);
+    written += resampler_run(&resampler, 9, samples + 2 * written, 20);
+    written_fresh += resampler_run(&fresh, 9, fresh_samples + 2 * written_fresh, 20);
+  }
+  TEST_EQUAL(written, written_fresh);
+  TEST_CHECK(written > 600);
+  TEST_CHECK(memcmp(samples, fresh_samples, written * 2 * sizeof samples[0]) == 0);
+}
+
 int main(void) {
   TEST_RUN(a_level_held_comes_out_exactly);
   TEST_RUN(a_step_is_centred_on_its_instant);
@@ -226,5 +256,6 @@ int main(void) {
   TEST_RUN(time_runs_on_past_a_day);
   TEST_RUN(samples_with_no_room_are_counted_not_written);
   TEST_RUN(a_new_ratio_carries_the_level_on);
+  TEST_RUN(a_restarted_resampler_gives_what_a_new_one_gives);
   return TEST_REPORT("resampler");
 }

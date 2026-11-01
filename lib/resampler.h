@@ -71,9 +71,16 @@ typedef struct {
  * unless resampler_start_at says otherwise. */
 void resampler_init(resampler_t *resampler, int channels, double ratio);
 
+/* Time, every level and every sample owed back to where resampler_init
+ * leaves them, keeping the channels, the ratio and the kernel: a host that
+ * starts its sound afresh, after a pause or a seek, cannot wait the
+ * milliseconds the kernel takes to make. */
+void resampler_restart(resampler_t *resampler);
+
 /* A channel's level as it stood before the first sample, so that a machine
  * picked up already sounding does not begin with a step up from 0. Only
- * before resampler_change and resampler_run. */
+ * before resampler_change and resampler_run, since resampler_init or
+ * resampler_restart. */
 void resampler_start_at(resampler_t *resampler, int channel, int32_t level);
 
 /* A new ratio from now on, for a host keeping its sound card fed. */
