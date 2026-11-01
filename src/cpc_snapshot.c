@@ -177,11 +177,14 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
   /* Through the chip's own bus too, so its writable-bit masks apply and the
      address goes back last, through the chip select. The low four bits go
      first, so that a chip saved unselected keeps the number it was saved
-     with. */
+     with. The generators, which the format does not hold, start from
+     reset, whatever the machine held before. */
+  ay38910_init(&cpc->psg);
   for (int index = 0; index < 16; index++) {
     ay38910_access(&cpc->psg, AY38910_SELECT, (uint8_t)index);
     ay38910_access(&cpc->psg, AY38910_WRITE, bytes[AT_PSG_REGISTERS + index]);
   }
+  ay38910_settle_envelope(&cpc->psg);
   uint8_t psg_address = bytes[AT_SELECTED_PSG_REGISTER];
   ay38910_access(&cpc->psg, AY38910_SELECT, psg_address & 0x0F);
   ay38910_access(&cpc->psg, AY38910_SELECT, psg_address);

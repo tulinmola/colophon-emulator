@@ -16,10 +16,12 @@
 #include "cpc_snapshot.h"
 #include "dsk.h"
 #include "png.h"
+#include "resampler.h"
 #include "spectrum.h"
 #include "spectrum_snapshot.h"
 #include "tape.h"
 #include "tzx.h"
+#include "wav.h"
 
 /* The 6128's boot screen stops changing at frame 42, measured by counting
    the text's pixels frame by frame; the other two settle sooner. Twice that
@@ -154,11 +156,13 @@ typedef struct {
   const char *rom_directory;
   const char *screenshot_path;
   const char *writes_path;
-  const char *snapshot_path;  /* one to load, for `run` */
-  const char *tape_path;      /* one to put in the deck */
-  const char *save_path;      /* one to write when the frames are done */
-  const char *disc_paths[2];  /* images for drives A and B */
-  const char *save_disc_path; /* where drive A's disc goes when done */
+  const char *sound_path;       /* the socket heard, at SOUND_RATE */
+  const char *sound_steps_path; /* the socket at each of the chip's steps */
+  const char *snapshot_path;    /* one to load, for `run` */
+  const char *tape_path;        /* one to put in the deck */
+  const char *save_path;        /* one to write when the frames are done */
+  const char *disc_paths[2];    /* images for drives A and B */
+  const char *save_disc_path;   /* where drive A's disc goes when done */
   const char *text;
   long frames;
   long frames_after; /* to run once the typing is done */
@@ -186,6 +190,9 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --sixty-hz          wire the refresh link for 60Hz\n");
   fprintf(out, "  --screenshot PATH   write the screen here as a PNG\n");
   fprintf(out, "  --writes PATH       write a map of memory writes here as a PNG\n");
+  fprintf(out, "  --sound PATH        write the stereo socket here as a 48kHz WAV\n");
+  fprintf(out, "  --sound-steps PATH  and here as it stands at each step of the sound\n");
+  fprintf(out, "                        chip, 125kHz; both in tenths of a millivolt\n");
   fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
   fprintf(out, "                      each machine writes its own; the two share a name\n");
   fprintf(out, "  --tape PATH         put this TZX, CDT or TAP image in the deck\n");
@@ -194,7 +201,8 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --disc-b PATH       and this one in drive B\n");
   fprintf(out, "  --save-disc PATH    write drive A's disc here when done\n");
   fprintf(out, "\n");
-  fprintf(out, "  a CPC alone does --writes, --disc, --disc-b, --save-disc and --sixty-hz.\n\n");
+  fprintf(out, "  a CPC alone does --writes, --sound, --sound-steps, --disc, --disc-b,\n");
+  fprintf(out, "  --save-disc and --sixty-hz.\n\n");
   fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
   fprintf(out, "  --no-double         one image line per raster line, squashed\n");
 }
@@ -242,6 +250,10 @@ static bool parse_options(int argc, char **argv, int from, options_t *options) {
       options->screenshot_path = value;
     } else if (strcmp(argument, "--writes") == 0) {
       options->writes_path = value;
+    } else if (strcmp(argument, "--sound") == 0) {
+      options->sound_path = value;
+    } else if (strcmp(argument, "--sound-steps") == 0) {
+      options->sound_steps_path = value;
     } else if (strcmp(argument, "--type") == 0) {
       options->text = value;
     } else if (strcmp(argument, "--save") == 0) {
@@ -524,9 +536,133 @@ static void cpc_record_displayed(const cpc_t *cpc) {
   pending_display = (cpc->crtc_pins & CRTC_DISPTMG) != 0;
 }
 
+/* The socket heard: its levels go to the resampler as they change, timed
+   to the tick, and come out at SOUND_RATE; and as it stands at each of the
+   sound chip's steps, unfiltered. The machine is told nothing: the chip's
+   outputs are fields, read after every tick. */
+#define SOUND_RATE 48000
+#define SOUND_TICKS_A_RUN 4096
+typedef struct {
+  bool hearing;
+  bool stepping;
+  wav_t heard;
+  wav_t steps;
+  resampler_t resampler;
+  uint16_t left;
+  uint16_t right;
+  uint32_t ticks_unrun;
+  /* The first samples are the filter's run-in, before the machine's time
+     begins, and are not written. */
+  uint32_t run_in;
+  size_t steps_held;
+  int16_t step_frames[2 * 512];
+} cpc_sound_t;
+static cpc_sound_t *cpc_sound; /* NULL when nobody asked */
+
+static int16_t sample_of(float value) {
+  if (value >= 32767.0f) {
+    return INT16_MAX;
+  }
+  if (value <= -32768.0f) {
+    return INT16_MIN;
+  }
+  return (int16_t)(value < 0.0f ? value - 0.5f : value + 0.5f);
+}
+
+static void cpc_sound_run(cpc_sound_t *sound, uint32_t ticks) {
+  float heard[2 * (SOUND_TICKS_A_RUN * SOUND_RATE / (CPC_TICKS_PER_MILLISECOND * 1000) + 2)];
+  int16_t frames[sizeof heard / sizeof heard[0]];
+  size_t count = resampler_run(&sound->resampler, ticks, heard, sizeof heard / sizeof heard[0] / 2);
+  size_t skip = count < sound->run_in ? count : sound->run_in;
+  sound->run_in -= (uint32_t)skip;
+  for (size_t index = 2 * skip; index < 2 * count; index++) {
+    frames[index - 2 * skip] = sample_of(heard[index]);
+  }
+  wav_write(&sound->heard, frames, count - skip);
+}
+
+static void cpc_record_sound(const cpc_t *cpc) {
+  cpc_sound_t *sound = cpc_sound;
+  uint16_t left = 0;
+  uint16_t right = 0;
+  cpc_sound_socket(cpc, &left, &right);
+  if (sound->hearing) {
+    if (left != sound->left || right != sound->right) {
+      cpc_sound_run(sound, sound->ticks_unrun);
+      sound->ticks_unrun = 0;
+      resampler_change(&sound->resampler, 0, left);
+      resampler_change(&sound->resampler, 1, right);
+    }
+    if (++sound->ticks_unrun == SOUND_TICKS_A_RUN) {
+      cpc_sound_run(sound, sound->ticks_unrun);
+      sound->ticks_unrun = 0;
+    }
+  }
+  sound->left = left;
+  sound->right = right;
+  if (sound->stepping && cpc->psg.divider == AY38910_PHASE_COMPARE &&
+      gate_array_character_clock(&cpc->gate_array)) {
+    sound->step_frames[2 * sound->steps_held] = (int16_t)left;
+    sound->step_frames[2 * sound->steps_held + 1] = (int16_t)right;
+    if (++sound->steps_held == sizeof sound->step_frames / sizeof sound->step_frames[0] / 2) {
+      wav_write(&sound->steps, sound->step_frames, sound->steps_held);
+      sound->steps_held = 0;
+    }
+  }
+}
+
+static cpc_sound_t *cpc_sound_open(const options_t *options, const cpc_t *cpc) {
+  cpc_sound_t *sound = calloc(1, sizeof *sound);
+  if (sound == NULL) {
+    fprintf(stderr, "cannot hold the sound\n");
+    return NULL;
+  }
+  sound->hearing = options->sound_path != NULL;
+  sound->stepping = options->sound_steps_path != NULL;
+  bool heard_open = sound->hearing && wav_open(&sound->heard, options->sound_path, SOUND_RATE, 2);
+  if ((sound->hearing && !heard_open) ||
+      (sound->stepping &&
+       !wav_open(&sound->steps, options->sound_steps_path, CPC_SOUND_STEPS_PER_SECOND, 2))) {
+    if (heard_open) {
+      wav_close(&sound->heard);
+      remove(options->sound_path);
+    }
+    free(sound);
+    return NULL;
+  }
+  resampler_init(&sound->resampler, 2, (double)SOUND_RATE / (CPC_TICKS_PER_MILLISECOND * 1000.0));
+  sound->run_in = RESAMPLER_LATENCY;
+  /* A machine picked up from a snapshot may be sounding already. */
+  cpc_sound_socket(cpc, &sound->left, &sound->right);
+  resampler_start_at(&sound->resampler, 0, sound->left);
+  resampler_start_at(&sound->resampler, 1, sound->right);
+  return sound;
+}
+
+/* The last samples are finished by running on as long as the filter lags. */
+static bool cpc_sound_close(cpc_sound_t *sound) {
+  bool ok = true;
+  if (sound->hearing) {
+    cpc_sound_run(sound, sound->ticks_unrun);
+    uint32_t lag =
+        (RESAMPLER_LATENCY * CPC_TICKS_PER_MILLISECOND * 1000 + SOUND_RATE - 1) / SOUND_RATE;
+    cpc_sound_run(sound, lag);
+    ok = wav_close(&sound->heard) && ok;
+  }
+  if (sound->stepping) {
+    wav_write(&sound->steps, sound->step_frames, sound->steps_held);
+    ok = wav_close(&sound->steps) && ok;
+  }
+  free(sound);
+  return ok;
+}
+
 static void cpc_run_frames(cpc_t *cpc, long frames) {
   for (long tick = 0; tick < frames * CPC_TICKS_PER_STANDARD_FRAME; tick++) {
     uint64_t pins = cpc_tick(cpc);
+    if (cpc_sound != NULL) {
+      cpc_record_sound(cpc);
+    }
     if (cpc_writes == NULL) {
       continue;
     }
@@ -673,6 +809,8 @@ static bool spectrum_refuses(const options_t *options) {
     const char *what;
   } unsupported[] = {
       {options->writes_path != NULL, "--writes"},
+      {options->sound_path != NULL, "--sound"},
+      {options->sound_steps_path != NULL, "--sound-steps"},
       {options->disc_paths[0] != NULL || options->disc_paths[1] != NULL, "--disc"},
       {options->save_disc_path != NULL, "--save-disc"},
       {!options->fifty_hz, "--sixty-hz"},
@@ -920,6 +1058,12 @@ static int run_cpc(const options_t *options) {
       free(contents);
     }
   }
+  if (status == 0 && (options->sound_path != NULL || options->sound_steps_path != NULL)) {
+    cpc_sound = cpc_sound_open(options, cpc);
+    if (cpc_sound == NULL) {
+      status = 1;
+    }
+  }
   if (status == 0) {
     cpc_run_frames(cpc, options->frames);
   }
@@ -928,6 +1072,12 @@ static int run_cpc(const options_t *options) {
   }
   if (status == 0) {
     cpc_run_frames(cpc, options->frames_after);
+  }
+  if (cpc_sound != NULL) {
+    if (!cpc_sound_close(cpc_sound)) {
+      status = 1;
+    }
+    cpc_sound = NULL;
   }
   if (status == 0 && options->save_path != NULL) {
     cpc_finish_instruction(cpc);

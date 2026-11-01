@@ -530,6 +530,53 @@ static void amsdos_reports_a_missing_disc(void) {
   expect_screen_contains("Retry, Ignore or Cancel?");
 }
 
+/* The 6128's User Instructions give 142 as the tone period of
+   "international a" by "PERIOD = ROUND(62500/FREQUENCY)" (Chapter 1 Page
+   68 and Chapter 7 Page 26,
+   https://archive.org/details/amstrad-cpc-6128-user-manual), where
+   SOFT 968 gives "Tone period = 125 000 / Frequency", an octave higher
+   (§7.2, https://archive.org/details/SOFT968TheAmstrad6128FirmwareManual).
+   The emulated board settles it, from the 1MHz its diagram names and the
+   chip's division by 16, though no recording of a real CPC was found: the
+   firmware writes the period, each half of A's wave lasts 142 * 16 / 2
+   microseconds, 4544 ticks, and a whole wave 440.14Hz. It reaches the socket's
+   left side alone, A's by cpcwiki, with B and C silent. */
+static void sound_1_142_plays_the_6128_manuals_international_a(void) {
+  if (!power_on("cpc6128.rom", 0x20000, true, true)) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  type_text("SOUND 1,142,100,15\n");
+  long waited = 0;
+  uint8_t level = cpc.psg.output[0];
+  while (cpc.psg.output[0] == level && waited < 50 * CPC_TICKS_PER_STANDARD_FRAME) {
+    cpc_tick(&cpc);
+    waited++;
+  }
+  TEST_CHECK(cpc.psg.output[0] != level);
+  level = cpc.psg.output[0];
+  bool left_heard = false;
+  bool right_silent = true;
+  long since = 0;
+  for (int edges = 0; edges < 200 && since < 10000;) {
+    cpc_tick(&cpc);
+    since++;
+    uint16_t left = 0;
+    uint16_t right = 0;
+    cpc_sound_socket(&cpc, &left, &right);
+    left_heard = left_heard || left != 0;
+    right_silent = right_silent && right == 0;
+    if (cpc.psg.output[0] != level) {
+      level = cpc.psg.output[0];
+      TEST_EQUAL(since, 4544);
+      since = 0;
+      edges++;
+    }
+  }
+  TEST_CHECK(left_heard);
+  TEST_CHECK(right_silent);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -549,5 +596,6 @@ int main(int argc, char **argv) {
   TEST_RUN(a_shaker_module_runs_off_the_disc);
   TEST_RUN(amsdos_saves_a_file_onto_the_disc);
   TEST_RUN(amsdos_reports_a_missing_disc);
+  TEST_RUN(sound_1_142_plays_the_6128_manuals_international_a);
   return TEST_REPORT("cpc firmware");
 }

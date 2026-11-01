@@ -559,10 +559,10 @@ static void a_psg_address_above_fifteen_writes_no_register(void) {
    30: the chip is left unselected and drives nothing, and port A, an input,
    reads the &FF its pins go to (ppi.h). Real machines agree, by the notes
    beside two tests Kevin Thacker's ACID psg.asm leaves disabled
-   (https://github.com/floooh/emu-info/tree/master/tests/cpc/acid/psg):
-   CPCs with CRTC types 1 and 2 "got ff" from addresses &F0 to &FF, the only
-   ones that test tries, and a Plus reads "rest ff" from every address past
-   15; a KC Compact reads something else. */
+   (https://github.com/floooh/emu-info/tree/93d132f/tests/cpc/acid/psg):
+   CPCs with CRTC types 1 and 2 ("on type 1, expected c0-ff got ff", "on
+   type 2: got ff") from addresses &F0 to &FF, the only ones that test tries, and a Plus reads "rest
+   ff" from every address past 15; a KC Compact reads something else. */
 static void an_unselected_psg_reads_high_through_the_8255(void) {
   power_on(sizeof ram);
   keyboard_press(&cpc.keyboard, CPC_KEY(6, 3));

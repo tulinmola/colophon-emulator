@@ -1,0 +1,72 @@
+# trial 0: envelope period 3, R13 written at clock 37 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 17
+write 13 0     # restart, shape 0
+wait 208
+# trial 1: envelope period 3, R13 written at clock 38 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 18
+write 13 0     # restart, shape 0
+wait 208
+# trial 2: envelope period 3, R13 written at clock 39 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 19
+write 13 0     # restart, shape 0
+wait 208
+# trial 3: envelope period 3, R13 written at clock 40 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 20
+write 13 0     # restart, shape 0
+wait 208
+# trial 4: envelope period 3, R13 written at clock 41 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 21
+write 13 0     # restart, shape 0
+wait 208
+# trial 5: envelope period 3, R13 written at clock 42 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 22
+write 13 0     # restart, shape 0
+wait 208
+# trial 6: envelope period 3, R13 written at clock 43 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 23
+write 13 0     # restart, shape 0
+wait 208
+# trial 7: envelope period 3, R13 written at clock 44 of the trial
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F
+write 8 0x10
+write 11 3
+write 12 0
+wait 24
+write 13 0     # restart, shape 0
+wait 208

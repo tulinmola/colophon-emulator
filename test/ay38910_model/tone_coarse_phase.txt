@@ -1,0 +1,268 @@
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 67
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 67
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 45
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 45
+write 0 3
+wait 200
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 68
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 68
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 46
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 46
+write 0 3
+wait 200
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 69
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 69
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 47
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 47
+write 0 3
+wait 200
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 70
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 70
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 48
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 48
+write 0 3
+wait 200
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 71
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 71
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 49
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 49
+write 0 3
+wait 200
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 72
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 72
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 50
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 50
+write 0 3
+wait 200
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 73
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 73
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 51
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 51
+write 0 3
+wait 200
+reset 16
+write 7 0x3F
+write 7 61
+write 9 15
+write 2 5
+write 3 1
+wait 74
+write 3 0
+wait 200
+reset 16
+write 7 0x3F
+write 7 59
+write 10 15
+write 4 5
+write 5 1
+wait 74
+write 5 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 52
+write 0 0
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+write 0 4
+wait 52
+write 0 3
+wait 200
+reset 16
+write 7 0x3E
+write 8 15
+wait 1
+write 0 0
+wait 100
+reset 16
+write 7 0x3E
+write 8 15
+write 0 0
+write 0 1
+wait 100

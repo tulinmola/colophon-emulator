@@ -1,0 +1,7 @@
+reset 16
+write 7 0x07
+write 8 15
+write 9 14
+write 10 13
+write 6 3
+wait 100000

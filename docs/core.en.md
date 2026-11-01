@@ -4,7 +4,7 @@ description: The interface a host builds on — the tick, the pin masks, the buf
 order: 4
 ---
 
-The core is a machine, not an application. It has no `main`, it never asks the operating system for anything, and it cannot print. What it offers a host is a step function and a set of plain structures, and everything else — files, windows, sound, time — belongs to whoever is calling.
+The core is a machine, not an application. It has no `main`, it never asks the operating system for anything, and it cannot print. What it offers a host is a step function and a set of plain structures, and everything else — files, windows, the sound card, time — belongs to whoever is calling.
 
 Two rules produce all of that, and they are worth stating before anything else.
 
@@ -85,6 +85,8 @@ A few functions exist anyway, because each encodes something a host would otherw
 `cpc_video_address` applies the board's rewiring of the 6845's address lines — which is what scatters a character row across eight blocks two kilobytes apart — to the pins the chip put out on its last character clock. It takes the machine and not the chip, and that is not an accident: by the time a caller holds the pins, the chip's counters have already moved past the values that went out on the wires, so a function reading the counters would name an address the machine never fetched from.
 
 `z80_reading_operand` says whether the memory read on the bus takes one of the instruction's bytes after its opcode or a byte of data, which the pins cannot: both drive MREQ and RD without M1. A host watching what a program reads asks it, and keeps an instruction's operands out.
+
+`cpc_sound_socket` turns the sound chip's three levels into voltages, by a measurement of one output into about a CPC's load, applies the board's resistors to them and gives the stereo socket's two sides in tenths of a millivolt. The chip's outputs are levels from 0 to 15, as its pins are switched; what a level comes to in volts depends on what the pin drives, and that is the board's.
 
 A host that sets the registers behind the memory map from outside — restoring a snapshot, say — owes the machine a `cpc_remap` afterwards.
 

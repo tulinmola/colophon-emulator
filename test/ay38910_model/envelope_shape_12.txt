@@ -1,0 +1,7 @@
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3F   # clock 16: ch_a = R8, here the envelope
+write 8 0x10   # clock 17
+write 11 1     # clock 18: envelope period 1
+write 12 0     # clock 19
+write 13 12     # clock 20: shape 12, restart
+wait 1100

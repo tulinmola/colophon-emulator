@@ -229,4 +229,16 @@ uint16_t cpc_video_address(const cpc_t *cpc);
 uint8_t cpc_peek(const cpc_t *cpc, uint16_t address);
 void cpc_poke(cpc_t *cpc, uint16_t address, uint8_t value);
 
+/* The sound chip's steps a second: its 1MHz clock over eight. */
+#define CPC_SOUND_STEPS_PER_SECOND 125000
+
+/* The stereo socket's two sides, in tenths of a millivolt, as a listener
+ * that draws no current would find them. Each side is two of the sound
+ * chip's outputs, A with B on one and C with B on the other, B through the
+ * larger resistor; the socket has no capacitor and no filter, so a side
+ * carries the outputs' DC as they do. cpcwiki puts A on the left ("PSG",
+ * https://www.cpcwiki.eu/index.php/PSG), and no Amstrad document names the
+ * sides. The speaker's path, filtered and amplified, is not modelled. */
+void cpc_sound_socket(const cpc_t *cpc, uint16_t *left, uint16_t *right);
+
 #endif

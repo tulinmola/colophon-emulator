@@ -1,0 +1,64 @@
+# trial 0: period 100, then period 2 written 40 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 24
+write 0 2      # clock 43
+wait 40
+# trial 1: period 100, then period 2 written 41 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 25
+write 0 2      # clock 44
+wait 40
+# trial 2: period 100, then period 2 written 42 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 26
+write 0 2      # clock 45
+wait 40
+# trial 3: period 100, then period 2 written 43 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 27
+write 0 2      # clock 46
+wait 40
+# trial 4: period 100, then period 2 written 44 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 28
+write 0 2      # clock 47
+wait 40
+# trial 5: period 100, then period 2 written 45 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 29
+write 0 2      # clock 48
+wait 40
+# trial 6: period 100, then period 2 written 46 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 30
+write 0 2      # clock 49
+wait 40
+# trial 7: period 100, then period 2 written 47 clocks after the R0=100 write
+reset 16  # _rst low in clocks 0-15, released at +250 ns in clock 16
+write 7 0x3E   # clock 16 of the trial
+write 8 15     # clock 17
+write 0 100    # clock 18
+wait 31
+write 0 2      # clock 50
+wait 40

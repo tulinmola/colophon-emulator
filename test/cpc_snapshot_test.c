@@ -218,6 +218,66 @@ static void the_crtc_keeps_only_the_bits_it_has(void) {
   TEST_EQUAL(restored.crtc.address_register, 9);
 }
 
+/* The format holds the sound chip's registers and not its generators. A
+   load starts them as reset does, whatever the machine held, so that two
+   machines restored from one snapshot sound alike; and a single decay that
+   had ended long before the snapshot is not heard again. */
+static void a_snapshot_starts_the_sound_afresh_and_lets_an_ended_envelope_rest(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  static const uint8_t writes[][2] = {{7, 0x3F}, {8, 0x10}, {11, 1}, {12, 0}, {13, 0x00}};
+  for (size_t index = 0; index < sizeof writes / sizeof writes[0]; index++) {
+    ay38910_access(&cpc.psg, AY38910_SELECT, writes[index][0]);
+    ay38910_access(&cpc.psg, AY38910_WRITE, writes[index][1]);
+  }
+  run(&cpc, 4L * 16 * 16 * 2);
+  TEST_EQUAL(cpc.psg.output[0], 0);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+
+  power_on(&restored, other_ram, sizeof other_ram);
+  run(&restored, 12345);
+  restored.psg.tone_counter[1] = 777;
+  restored.psg.noise_register = 0x1234;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(restored.psg.output[0], 0);
+  TEST_EQUAL(restored.psg.divider, 0);
+  TEST_EQUAL(restored.psg.tone_counter[1], 0);
+  TEST_EQUAL(restored.psg.noise_register, 0);
+  for (int clock = 0; clock < 1000; clock++) {
+    ay38910_tick(&restored.psg);
+    TEST_EQUAL(restored.psg.output[0], 0);
+  }
+}
+
+/* Each shape that ends or holds comes back from a snapshot at the level it
+   rested at and stays there; one that repeats moves again. */
+static void a_resting_envelope_rests_after_a_snapshot(void) {
+  static const uint8_t shapes[] = {0x00, 0x04, 0x09, 0x0B, 0x0D, 0x0F, 0x0A};
+  for (size_t index = 0; index < sizeof shapes / sizeof shapes[0]; index++) {
+    load_a_running_program();
+    power_on(&cpc, ram, sizeof ram);
+    const uint8_t writes[][2] = {{7, 0x3F}, {8, 0x10}, {11, 1}, {12, 0}, {13, shapes[index]}};
+    for (size_t write = 0; write < sizeof writes / sizeof writes[0]; write++) {
+      ay38910_access(&cpc.psg, AY38910_SELECT, writes[write][0]);
+      ay38910_access(&cpc.psg, AY38910_WRITE, writes[write][1]);
+    }
+    run(&cpc, 4L * 16 * 16 * 3);
+    uint8_t rested = cpc.psg.output[0];
+    const char *problem = NULL;
+    TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+    power_on(&restored, other_ram, sizeof other_ram);
+    TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+    bool repeats = shapes[index] == 0x0A;
+    bool moved = false;
+    for (int clock = 0; clock < 1000; clock++) {
+      ay38910_tick(&restored.psg);
+      moved = moved || restored.psg.output[0] != rested;
+    }
+    TEST_CHECK(moved == repeats);
+  }
+}
+
 /* The PSG's registers go in through its own bus as the 6845's do, so its
    writable-bit masks apply here too. */
 static void the_psg_keeps_only_the_bits_it_has(void) {
@@ -405,6 +465,8 @@ int main(void) {
   TEST_RUN(machines_restored_from_one_snapshot_agree);
   TEST_RUN(the_crtc_keeps_only_the_bits_it_has);
   TEST_RUN(the_psg_keeps_only_the_bits_it_has);
+  TEST_RUN(a_snapshot_starts_the_sound_afresh_and_lets_an_ended_envelope_rest);
+  TEST_RUN(a_resting_envelope_rests_after_a_snapshot);
   TEST_RUN(an_unselected_psg_survives_the_round_trip);
   TEST_RUN(a_psg_address_above_fifteen_loads_unselected);
   TEST_RUN(a_psg_left_unselected_mid_select_stays_so);

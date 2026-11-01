@@ -67,9 +67,21 @@ Not modelled: keyboard clash. On hardware, three keys held at the corners of a r
 
 The 8255 implements mode 0 — plain input and output — which is the only mode any program on these machines selects. A port turned to input presents &FF to whatever is wired to it, which is not a detail: it is what the device on the other side reads while the processor is reading, and getting it wrong stays invisible until something depends on it.
 
-The AY-3-8912 keeps its registers and its one port, and **makes no sound**. The tone channels, the noise generator, the mixer and the envelope are stored and not sounded. The keyboard is read through the chip regardless, which is why typing at the prompt works with no audio anywhere in the machine.
+The AY-3-8912 sounds. Its three tone channels, its noise and its envelope run from the board's sound clock, a microsecond a cycle and eight cycles a step, and each channel's level reaches the stereo socket, A with B on one side and C with B on the other, joined as the board's resistors join them. `SOUND 1,142` plays 440Hz there, the 6128 manual's international A, an octave below what the firmware manual's formula gives. The keyboard is read through the same chip.
 
-An address above 15 selects nothing. The chip takes the top four bits of an address as its own select, and an address that fails it leaves the chip deaf to writes and silent on reads until one passes, as the silicon does; a reset leaves it so too. A program reading it then gets &FF, what an 8255 port turned to input presents when nothing drives it, and Kevin Thacker's hardware tests note &FF there from CPCs, at the addresses they tried, and from a Plus at every one; a KC Compact gives something else.
+Five things are not known or not modelled, and what the sound rests on in their place is said here.
+
+**The levels become voltages by one measurement.** An output's voltage depends on what it drives, and the one published measurement with its loads stated is of an AY-3-8910 into 983Ω, the nearest of them to a CPC's; that column is used. How the three outputs pull on one another through the board, a few tens of millivolts, is left out, and the socket is taken as a listener that draws no current would find it.
+
+**The speaker is not heard.** Its path filters, amplifies and has a volume control, and none of that is modelled; what a host plays is the socket.
+
+**Where nothing measured the chip, it follows the die.** A period of 0, a period written below the count, and a write to register 13 while the envelope runs all do what the chip's reconstruction from photographs of its die does, which no published measurement of an AY checks.
+
+**The sound clock's phase is a guess.** The board names the net and its rate and not its phase against the processor's clock; here it is the character clock. Nothing a program reads depends on it.
+
+**A snapshot carries no generator.** The format holds the registers and not where the counters stand, so a machine resumed from one starts its tones and its noise afresh, as from reset, whatever it held before; an envelope whose shape ends or holds is put where it rests, as one started long before would be, and one that repeats starts its cycle again.
+
+An address above 15 selects nothing. The chip takes the top four bits of an address as its own select, and an address that fails it leaves the chip deaf to writes and silent on reads until one passes, as the silicon does; a reset leaves it so too. A program reading it then gets &FF, the lines between the two chips standing high with neither driving them, and Kevin Thacker's hardware tests note &FF there from CPCs, at the addresses they tried, and from a Plus at every one; a KC Compact gives something else.
 
 ### The cassette
 

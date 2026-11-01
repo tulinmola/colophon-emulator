@@ -1,0 +1,336 @@
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 37
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 37
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 37
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 37
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 37
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 37
+write 6 7
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 38
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 38
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 38
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 38
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 38
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 38
+write 6 7
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 39
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 39
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 39
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 39
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 39
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 39
+write 6 7
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 40
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 40
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 40
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 40
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 40
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 40
+write 6 7
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 41
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 41
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 41
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 41
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 41
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 41
+write 6 7
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 42
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 42
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 42
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 42
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 42
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 42
+write 6 7
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 43
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 43
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 43
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 43
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 43
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 43
+write 6 7
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 44
+write 6 0
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 44
+write 6 1
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 44
+write 6 4
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 44
+write 6 5
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 44
+write 6 6
+wait 400
+reset 16
+write 7 0x37
+write 8 15
+write 6 31
+wait 44
+write 6 7
+wait 400
