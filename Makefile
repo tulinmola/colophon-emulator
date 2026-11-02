@@ -51,9 +51,10 @@ ULA_TEST_C = test/ula_test.c
 FLOPPY_TEST_C = test/floppy_test.c
 DRIVE_TEST_C = test/drive_test.c
 UPD765_TEST_C = test/upd765_test.c
-PNG_TEST_C = test/png_test.c
+PNG_TEST_C = test/png_test.c test/png_read.c
 WAV_TEST_C = test/wav_test.c
 RESAMPLER_TEST_C = test/resampler_test.c
+COMMAND_LINE_TEST_C = test/command_line_test.c test/png_read.c
 CPC_TEST_C = test/cpc_test.c
 CPC_SNAPSHOT_TEST_C = test/cpc_snapshot_test.c
 CPC_TIMING_TEST_C = test/cpc_timing_test.c
@@ -119,7 +120,7 @@ endif
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test $(BUILD)/shaker_test $(BUILD)/demo_test $(BUILD)/bench
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test $(BUILD)/command_line_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test $(BUILD)/shaker_test $(BUILD)/demo_test $(BUILD)/bench
 
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
@@ -231,6 +232,12 @@ $(BUILD)/png_test: $(PNG_C) $(PNG_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Icli -Itest $(PNG_C) $(PNG_TEST_C) -o $@
 
+# Links no machine: it runs the command line's own binary, which the fast tier
+# builds for it.
+$(BUILD)/command_line_test: $(COMMAND_LINE_TEST_C) $(HEADERS)
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -Itest $(COMMAND_LINE_TEST_C) -o $@
+
 $(BUILD)/wav_test: $(WAV_C) $(WAV_TEST_C) $(HEADERS)
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -Icli -Itest $(WAV_C) $(WAV_TEST_C) -o $@
@@ -248,7 +255,7 @@ $(BUILD)/z80_exerciser_test: $(Z80_C) $(Z80_EXERCISER_C) $(HEADERS)
 	$(CC) $(CFLAGS) -Isrc -Itest $(Z80_C) $(Z80_EXERCISER_C) -o $@
 
 # The fast tier: hermetic, no network, runs on every change.
-test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test
+test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test $(BUILD)/emulator $(BUILD)/command_line_test
 	@$(BUILD)/z80_test
 	@$(BUILD)/crtc_test
 	@$(BUILD)/gate_array_test
@@ -272,6 +279,8 @@ test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_tes
 	@$(BUILD)/png_test
 	@$(BUILD)/wav_test
 	@$(BUILD)/resampler_test
+	@mkdir -p $(BUILD)/command_line
+	@$(BUILD)/command_line_test $(BUILD)/emulator $(BUILD)/command_line
 
 # Every source the build names, against every source there is. The build's
 # lists are hand-written and the formatter's are a wildcard, so without this a
@@ -280,7 +289,7 @@ BUILT_C = $(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C) \
           $(Z80_TEST_C) $(CRTC_TEST_C) $(GATE_ARRAY_TEST_C) $(MONITOR_TEST_C) $(PPI_TEST_C) \
           $(AY38910_TEST_C) $(KEYBOARD_TEST_C) $(TAPE_TEST_C) $(TZX_TEST_C) $(ULA_TEST_C) \
           $(FLOPPY_TEST_C) $(DRIVE_TEST_C) $(UPD765_TEST_C) $(PNG_TEST_C) $(WAV_TEST_C) \
-          $(RESAMPLER_TEST_C) $(CPC_TEST_C) \
+          $(RESAMPLER_TEST_C) $(COMMAND_LINE_TEST_C) $(CPC_TEST_C) \
           $(CPC_SNAPSHOT_TEST_C) $(CPC_TIMING_TEST_C) $(CPC_FIRMWARE_TEST_C) \
           $(SPECTRUM_TEST_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(SPECTRUM_TIMING_TEST_C) \
           $(SPECTRUM_INTERRUPT_TEST_C) \

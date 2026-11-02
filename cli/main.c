@@ -68,13 +68,6 @@ typedef struct {
   const char *rom_file;
   uint32_t ram_size;
   bool disc_interface; /* built in; a 464 gets one plugged in with a disc */
-  /* Amstrad fitted whichever part it had bought, and ch. 4.2's third note
-     says it "cannot be excluded even at present, that some series of CPC's
-     may be equipped with different CRTC models", so this is a choice about
-     a unit rather than a fact about the model. Type 0 is the one the chip
-     implements as itself, the other four being type 0 but for thirteen
-     exceptions (crtc.h), so it is the one offered. A CPC's alone. */
-  uint8_t crtc_type;
   const char *description;
 
   /* The raster this machine's monitor paints, the window a picture is cut
@@ -119,7 +112,6 @@ static const machine_t machines[] = {
      .rom_file = "cpc6128.rom",
      .ram_size = 0x20000,
      .disc_interface = true,
-     .crtc_type = 0,
      .description = "Amstrad CPC 6128, 128K, BASIC 1.1",
      CPC_RASTER},
     {.kind = MACHINE_CPC,
@@ -127,7 +119,6 @@ static const machine_t machines[] = {
      .rom_file = "cpc664.rom",
      .ram_size = 0x10000,
      .disc_interface = true,
-     .crtc_type = 0,
      .description = "Amstrad CPC 664, 64K, BASIC 1.1",
      CPC_RASTER},
     {.kind = MACHINE_CPC,
@@ -135,7 +126,6 @@ static const machine_t machines[] = {
      .rom_file = "cpc464.rom",
      .ram_size = 0x10000,
      .disc_interface = false,
-     .crtc_type = 0,
      .description = "Amstrad CPC 464, 64K, BASIC 1.0",
      CPC_RASTER},
     {.kind = MACHINE_SPECTRUM,
@@ -174,6 +164,9 @@ typedef struct {
   const char *disc_paths[2];    /* images for drives A and B */
   const char *save_disc_path;   /* where drive A's disc goes when done */
   const char *text;
+  /* As given, and judged once the machine is known: a Spectrum refuses any
+     value, a good one or not. */
+  const char *crtc_type;
   long frames;
   long frames_after; /* to run once the typing is done */
   bool full_raster;
@@ -192,6 +185,7 @@ static void print_usage(FILE *out) {
     fprintf(out, "                        %-10s %s\n", machines[index].name,
             machines[index].description);
   }
+  fprintf(out, "  --crtc-type N       which CRTC a CPC is built with, 0 to 4 (default 0)\n");
   fprintf(out, "  --roms DIRECTORY    where the ROM images are (default roms)\n");
   fprintf(out, "  --frames N          frames to run before typing (each machine its own)\n");
   fprintf(out, "  --type TEXT         type this once the machine has booted\n");
@@ -213,8 +207,8 @@ static void print_usage(FILE *out) {
   fprintf(out, "  --disc-b PATH       and this one in drive B\n");
   fprintf(out, "  --save-disc PATH    write drive A's disc here when done\n");
   fprintf(out, "\n");
-  fprintf(out, "  a CPC alone does --writes, --disc, --disc-b, --save-disc and\n");
-  fprintf(out, "  --sixty-hz.\n\n");
+  fprintf(out, "  a CPC alone does --crtc-type, --writes, --disc, --disc-b,\n");
+  fprintf(out, "  --save-disc and --sixty-hz.\n\n");
   fprintf(out, "  --full-raster       the whole beam path, sync and blanking and all\n");
   fprintf(out, "  --no-double         one image line per raster line, squashed\n");
 }
@@ -256,6 +250,8 @@ static bool parse_options(int argc, char **argv, int from, options_t *options) {
         fprintf(stderr, "no machine is called %s\n", value);
         return false;
       }
+    } else if (strcmp(argument, "--crtc-type") == 0) {
+      options->crtc_type = value;
     } else if (strcmp(argument, "--roms") == 0) {
       options->rom_directory = value;
     } else if (strcmp(argument, "--screenshot") == 0) {
@@ -871,9 +867,26 @@ static bool spectrum_type_text(spectrum_t *spectrum, const char *text) {
   return true;
 }
 
-/* A Spectrum has no disc and no links to solder, so the options
+/* A Spectrum has no CRTC, no disc and no links to solder, so the options
    that reach those are refused rather than quietly ignored. */
 static bool spectrum_refuses(const options_t *options) {
+  if (options->crtc_type != NULL) {
+    fprintf(stderr, "%s has no CRTC; --crtc-type is for ", options->machine->name);
+    size_t cpcs = 0;
+    for (size_t index = 0; index < machine_count; index++) {
+      cpcs += machines[index].kind == MACHINE_CPC;
+    }
+    size_t named = 0;
+    for (size_t index = 0; index < machine_count; index++) {
+      if (machines[index].kind == MACHINE_CPC) {
+        named++;
+        const char *before = named == 1 ? "" : named == cpcs ? " and " : ", ";
+        fprintf(stderr, "%s%s", before, machines[index].name);
+      }
+    }
+    fprintf(stderr, "\n");
+    return true;
+  }
   const struct {
     bool given;
     const char *what;
@@ -1025,9 +1038,34 @@ static int run_spectrum(const options_t *options) {
   return status;
 }
 
+/* Which CRTC a CPC is built with. Amstrad fitted whichever part it had
+   bought, and the Compendium's ch. 4.2 says in its third note that it
+   "cannot be excluded even at present, that some series of CPC's may be
+   equipped with different CRTC models", so this is a choice about a unit
+   rather than a fact about the model. Type 0 is the one the chip implements
+   as itself, the other four being type 0 but for thirteen exceptions
+   (crtc.h), so it is the default. Returns false having reported a value
+   that names none of the five. */
+static bool crtc_type_chosen(const char *given, uint8_t *type) {
+  if (given == NULL) {
+    *type = 0;
+    return true;
+  }
+  if (given[0] < '0' || given[0] > '4' || given[1] != '\0') {
+    fprintf(stderr, "--crtc-type wants a CRTC type from 0 to 4, not %s\n", given);
+    return false;
+  }
+  *type = (uint8_t)(given[0] - '0');
+  return true;
+}
+
 /* One machine per kind, each with its own run: they share the options, the
    rendering and the file handling, and nothing else. */
 static int run_cpc(const options_t *options) {
+  uint8_t crtc_type = 0;
+  if (!crtc_type_chosen(options->crtc_type, &crtc_type)) {
+    return 1;
+  }
   if (options->save_disc_path != NULL && options->disc_paths[0] == NULL) {
     fprintf(stderr, "--save-disc needs a disc in drive A to write\n");
     return 1;
@@ -1065,7 +1103,7 @@ static int run_cpc(const options_t *options) {
   }
 
   /* The operating system fills the lower 16K, BASIC the upper as ROM 0. */
-  cpc_init(cpc, ram, options->machine->ram_size, rom, options->machine->crtc_type);
+  cpc_init(cpc, ram, options->machine->ram_size, rom, crtc_type);
   cpc_set_upper_rom(cpc, 0, rom + 0x4000);
   if (disc_interface) {
     cpc_fit_disc_interface(cpc, true);
@@ -1226,6 +1264,7 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
       .screenshot_path = NULL,
       .writes_path = NULL,
       .text = NULL,
+      .crtc_type = NULL,
       .snapshot_path = NULL,
       .save_path = NULL,
       .disc_paths = {NULL, NULL},

@@ -24,6 +24,7 @@ build/emulator boot --machine cpc6128 --screenshot ready.png
 build/emulator boot --machine cpc464 --type 'PRINT 2+2\n' --screenshot sum.png
 build/emulator boot --machine cpc6128 --type 'MODE 0\n' --save state.sna
 build/emulator run state.sna --machine cpc6128 --type 'BORDER 6\n' --screenshot resumed.png
+build/emulator run state.sna --machine cpc6128 --crtc-type 1 --screenshot as-type-1.png
 build/emulator boot --machine cpc6128 --full-raster --screenshot raster.png
 build/emulator boot --machine cpc6128 --type 'PRINT 2+2\n' --writes heat.png
 build/emulator boot --machine cpc6128 --disc shaker27.dsk --type 'CAT\n' --wait 150 --screenshot catalogue.png
@@ -40,6 +41,7 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 | Option | Effect |
 | --- | --- |
 | `--machine NAME` | Which machine to build: `cpc6128`, `cpc664`, `cpc464` or `spectrum48`. Required. |
+| `--crtc-type N` | A CPC's. Which of the five CRTCs to build it with, 0 to 4. The default is 0, the one type that behaves as itself here; the other four are type 0 with the exceptions [the machine](machine.en.md) sets out. A snapshot given to `run` goes into a machine of the type given here, or a type 0 without it, whatever it was taken on. |
 | `--roms DIRECTORY` | Where the ROM images are. The default is `roms`. |
 | `--frames N` | Frames to run before typing. The default is each machine's own: 78 on a CPC, 128 on a Spectrum. |
 | `--type TEXT` | Type this once the machine has booted. Keys are held down, not characters injected, so what arrives is whatever the firmware makes of the keypress — on a Spectrum, where forty keys carry two hundred meanings, `p` at the start of a line is the PRINT keyword and not a letter. |
