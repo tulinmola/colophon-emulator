@@ -25,8 +25,8 @@
  * at the bottom where a monitor would lose vertical hold and roll.
  *
  * Sources:
- * - "The Amstrad CPC CRTC Compendium" v1.10 (Longshot / Logon System),
- *   https://shaker.logonsystem.eu/ACCC1.10-EN.pdf ch. 16.2 — the composite
+ * - "The Amstrad CPC CRTC Compendium" v1.11 (Longshot / Logon System),
+ *   https://shaker.logonsystem.eu/ACCC1.11-EN.pdf ch. 16.2 — the composite
  *   sync a CTM monitor is given, and ch. 16.2.4 for the measured threshold
  *   below which a monitor can no longer anchor the image vertically.
  * - "The CRTC" (Grim),

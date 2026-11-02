@@ -2,6 +2,8 @@
  * monitor.c — the beam, and the circuit that separates the two syncs.
  */
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "monitor.h"
 
@@ -41,11 +43,28 @@ void monitor_receive(monitor_t *monitor, const uint8_t *samples, uint8_t count, 
     /* A line's sync has ended, and only now is its width known. The beam is
        placed as if the line had been timed from the pulse's middle, which is
        what carries a shortened pulse into a picture shifted right by half of
-       what was taken off (Compendium ch. 14.3). A pulse too long for a line
+       what was taken off (Compendium ch. 14.4). A pulse too long for a line
        is the frame's, and the beam is left where it stands. */
     monitor->beam_x = (uint16_t)(monitor->line_sync_centre + monitor->sync_held / 2);
   }
   monitor->sync = sync;
+
+  /* A run outside a sync moves the beam along one row: nothing here moves
+     it down, so the row is the same for every sample, and the samples that
+     land on the raster are the ones before its width. The whole-run step
+     stands for the walk while the sum stays inside the counter; a run that
+     would carry it past its last value is left to the walk, which brings
+     the beam round to the raster's left where this cannot. */
+  if (!sync && (uint32_t)monitor->beam_x + count <= UINT16_MAX) {
+    if (monitor->beam_y < monitor->height && monitor->beam_x < monitor->width) {
+      uint16_t room = (uint16_t)(monitor->width - monitor->beam_x);
+      uint8_t painted = count < room ? count : (uint8_t)room;
+      memcpy(&monitor->framebuffer[(size_t)monitor->beam_y * monitor->width + monitor->beam_x],
+             samples, painted);
+    }
+    monitor->beam_x = (uint16_t)(monitor->beam_x + count);
+    return;
+  }
 
   for (uint8_t index = 0; index < count; index++) {
     if (sync) {

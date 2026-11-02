@@ -13,8 +13,9 @@
  * What version 1 cannot carry is the CRTC's internal counters, so a machine
  * resumed from one restarts its frame rather than continuing mid-raster.
  * Version 3 has room for them at offsets &A9 and &AB, along with the CRTC
- * type, the drive's motor and head — worth reading the day we can act on
- * them. Nor can any version carry where the sound chip's generators stand:
+ * type, the drive's motor and head, and none of it is read: a machine is
+ * built with its CRTC type, and the rest is worth reading the day we can act
+ * on it. Nor can any version carry where the sound chip's generators stand:
  * a load starts them as reset does, and an envelope whose shape ends or
  * holds is put where it rests.
  *
