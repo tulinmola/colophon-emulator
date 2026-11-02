@@ -17,11 +17,12 @@
  *
  * Implemented: the registers, the interrupt generator, the byte-to-pixel
  * serialiser, the composite sync and READY. Not yet: the 40010's habit of
- * starting mode 2 one pixel early, which waits for Shaker and which the type 4
- * ASIC shares (ch. 9.1), a colour written in that mode changing a pixel sooner
- * with it on that chip (ch. 9.2.2); and where inside the character a new mode
- * begins, a few pixels in (ch. 9.3.4.1), a mode being taken here a whole
- * character at a time.
+ * starting mode 2 one pixel early, which the type 4 ASIC shares (ch. 9.1), a
+ * colour written in that mode changing a pixel sooner with it on that chip
+ * (ch. 9.2.2) — Shaker's E (5) draws those edges in a picture and nothing
+ * grades them; and where inside the character a new mode begins, a few
+ * pixels in (ch. 9.3.4.1), a mode being taken here a whole character at a
+ * time.
  *
  * Technical information sourced from the "Amstrad CPC CRTC Compendium" by
  * Longshot (CC BY-NC-ND).
@@ -149,8 +150,8 @@ typedef struct {
 /* Power-on. Both ROM enables come up enabled — the reset vector is fetched
  * through the lower ROM, so the silicon can reset no other way; the rest is
  * zeroed by convention. It also builds the byte-to-pens table the serialiser
- * paints from, which no chip has of its own, so one that has not been
- * through here paints pen 0 and no other. */
+ * paints from, which no chip has of its own: the program has one, and every
+ * chip paints pen 0 and no other until some chip has been through here. */
 void gate_array_init(gate_array_t *gate_array);
 
 /* One command byte, as written to the chip's port. Dispatch is on bits 7-6;

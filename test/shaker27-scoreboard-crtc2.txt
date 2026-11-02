@@ -1,10 +1,10 @@
 What Longshot's Shaker 2.7 said about this machine, built as a type 2
 CRTC, module by module and in the order each module's own menu prints.
 
-Built as, and nearly no more: the chip answers a program asking what it
+Built as, and only in part: the chip answers a program asking what it
 is, and of its own timing keeps only what the head of crtc.h names. The
-rest is a type 0's, and most of what is wrong below is that, and is the
-work rather than a fault.
+rest is a type 0's, which is most often why a group below draws what
+silicon does not, and is the work rather than a fault.
 
 70 groups run, 16 left to another CRTC type.
 9 of them printed self-graded lines, 94 in all: 94 agree with Longshot's
@@ -113,7 +113,7 @@ B (O)       CRTC 1-A OR 1-B?                                                    
 B (RETURN)  R5 STORIES                                                                       recorded, ungraded, 3 pages
 B (F0)      BOUNGA!                                                                          recorded, ungraded
 B (CAPS)    RVNI LTD                                                                         recorded, ungraded, 3 pages
-B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 8 pages, cut off at the cap
+B (P)       ANALYZER / FORCED STAB CRTC 0 R0=0  (4 CONF)                                     recorded, ungraded, 14 pages, cut off at the cap
 B (R)       INTERRUPT DELAY FROM R2 (18 CALC)                                                20 graded, 0 wrong, 6 pages
       FROM LAST INTER:#14F6 usec >> NEXT INTER:#0504 usec (Exp:#0504)
       FROM LAST INTER:#14F7 usec >> NEXT INTER:#0503 usec (Exp:#0503)

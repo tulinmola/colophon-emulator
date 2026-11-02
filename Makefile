@@ -105,11 +105,12 @@ BENCH_FRAMES ?=
 # which is what the record holds.
 DEMO_FRAMES ?=
 
-# Which CRTC the machine is built with, which decides both what Shaker runs
-# and the record it is set against. Only type 0 behaves as itself here;
-# CRTC=N builds a machine a program names a type N and runs the groups that
-# belong to one. The chip answers to all five, and each has a record under
-# each of Shaker's versions.
+# Which CRTC the machine is built with, which decides what Shaker runs and the
+# record each tier is set against. Only type 0 behaves as itself here; CRTC=N
+# builds a machine a program names a type N and runs the groups that belong to
+# one. Every type has a Shaker record under each version, and types 0 and 1
+# have a demo record; test-demos on any other type plays the whole demo and
+# then fails, finding no record to set it against.
 CRTC ?= 0
 ifeq ($(filter $(CRTC),0 1 2 3 4),)
 $(error CRTC=$(CRTC) names no CRTC; the types are 0 to 4)
@@ -363,28 +364,22 @@ test-exerciser: $(BUILD)/z80_exerciser_test
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexdoc.com $(EXERCISER_GROUPS)
 	@$(BUILD)/z80_exerciser_test $(EXERCISER_DATA)/zexall.com $(EXERCISER_GROUPS)
 
-# Every record the reader keeps, whatever the command line asked for — each
-# version on each CRTC, 2.7 on type 0 by the prerequisite below and the rest
-# by the loops: the point of the tier is every record, and a version, a type
-# or a module named here would silently grade one of them twice or none of it.
-# And the whole demo, for the same reason: a tier that compares a part of a
-# run against a record of a whole one compares nothing at all. Only two types
-# have a demo record, so only those two are played. A variable given on the
-# command line reaches every make below this one whatever this one overrides,
-# so each is named again where the loops call them.
-test-all: override CRTC := 0
-test-all: override SHAKER := 27
-test-all: override MODULE :=
-test-all: override GROUP :=
-test-all: override DEMO_FRAMES :=
-test-all: test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser
-	@for type in 1 2 3 4; do \
-		$(MAKE) --no-print-directory test-shaker SHAKER=27 CRTC=$$type MODULE= GROUP= || exit 1; \
+# Every record the tiers keep, whatever the command line asked for — each
+# version on each CRTC, and the whole demo on both types that have a record of
+# it — run from the loops below rather than as prerequisites, because make
+# runs a target once, and one already named on the command line would stand
+# for its record with whatever values that command line gave it. A variable
+# given there reaches every make below this one, so each is named again where
+# the loops call them.
+test-all: test test-sanitized test-firmware test-single-step test-exerciser
+	@for version in 27 26; do \
+		for type in 0 1 2 3 4; do \
+			$(MAKE) --no-print-directory test-shaker SHAKER=$$version CRTC=$$type MODULE= GROUP= || exit 1; \
+		done; \
 	done
-	@for type in 0 1 2 3 4; do \
-		$(MAKE) --no-print-directory test-shaker SHAKER=26 CRTC=$$type MODULE= GROUP= || exit 1; \
+	@for type in 0 1; do \
+		$(MAKE) --no-print-directory test-demos CRTC=$$type DEMO_FRAMES= || exit 1; \
 	done
-	@$(MAKE) --no-print-directory test-demos CRTC=1 DEMO_FRAMES=
 
 format:
 	$(CLANG_FORMAT) -i $(SOURCES) $(HEADERS)

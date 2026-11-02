@@ -99,15 +99,14 @@
    byte over on the same beat, so a threshold near either would end the
    watch in the middle of the test — and a group cut off says nothing about
    being cut off, which is why the standing records it separately. The
-   longest quiet yet is 2.6's module C (P) on a type 0, which draws nothing
-   new for 375 frames on the way to the line it grades itself on; the watch
-   waits 500, which cost a quarter to two fifths more time than 300 when
-   measured on all ten records and moved no other graded line.
+   longest quiet known is 2.6's module C (P) on a type 0, which draws
+   nothing new for 375 frames on the way to the line it grades itself on;
+   the watch waits 500.
 
    The cap is for the pages that never stop, which are the ones drawing
    something that moves. Module B's status-register check is quieter than
    any of those: it waits past two hundred frames before its first screen,
-   and a threshold that suited the groups a type 0 runs cut it off.
+   and a threshold that suits the groups a type 0 runs would cut it off.
 
    A group of several pages shows one and waits for the space bar ("PRESS
    SPACE BAR", the modules say), and most of what the suite grades itself on
@@ -230,6 +229,8 @@ static floppy_t saved_disc;
 
 static char screen[ROWS][COLUMNS + 1];
 static char previous_screen[ROWS][COLUMNS + 1];
+static char saved_screen[ROWS][COLUMNS + 1];
+static char saved_previous_screen[ROWS][COLUMNS + 1];
 /* The menu as it stood before a key was pressed. A group that never put
    anything else on the screen either did nothing or was watched too briefly
    to catch it, and the standing has to be able to say so: without it, a
@@ -314,7 +315,12 @@ static bool load_file(const char *directory, const char *file, uint8_t *into, si
     return false;
   }
   size_t read = fread(into, 1, capacity, handle);
+  const bool more = read == capacity && fgetc(handle) != EOF;
   fclose(handle);
+  if (length != NULL && more) {
+    TEST_FAIL("%s holds more than the %zu bytes there is room for", path, capacity);
+    return false;
+  }
   if (length != NULL) {
     *length = read;
   } else if (read != capacity) {
@@ -427,10 +433,14 @@ static bool power_on(void) {
   return true;
 }
 
+/* The screens read go with the machine, so that a group run after another
+   in the same process starts from the menu, as a forked one does. */
 static void save_machine(void) {
   saved_cpc = cpc;
   saved_disc = disc;
   memcpy(saved_ram, ram, sizeof ram);
+  memcpy(saved_screen, screen, sizeof screen);
+  memcpy(saved_previous_screen, previous_screen, sizeof previous_screen);
 }
 
 /* The framebuffer is not restored: every sample is read over a picture
@@ -440,6 +450,8 @@ static void restore_machine(void) {
   cpc = saved_cpc;
   disc = saved_disc;
   memcpy(ram, saved_ram, sizeof ram);
+  memcpy(screen, saved_screen, sizeof screen);
+  memcpy(previous_screen, saved_previous_screen, sizeof previous_screen);
 }
 
 /* The colour standing behind the text: whatever most of the display area
@@ -828,6 +840,7 @@ static bool key_at(const char *line, size_t *length) {
 
 static void add_group(const char *key, size_t key_length, const char *label, size_t label_length) {
   if (group_count == MAX_GROUPS) {
+    TEST_FAIL("a menu offers more than the %d groups there is room for", MAX_GROUPS);
     return;
   }
   group *entry = &groups[group_count];
@@ -856,14 +869,14 @@ static void add_group(const char *key, size_t key_length, const char *label, siz
    the next key rather than at the end of the line. */
 static void read_menu(void) {
   group_count = 0;
-  for (int row = 0; row < ROWS && group_count < MAX_GROUPS; row++) {
+  for (int row = 0; row < ROWS; row++) {
     size_t key_length = 0;
     if (!key_at(screen[row], &key_length)) {
       continue;
     }
     const char *line = screen[row];
     size_t at = 0;
-    while (line[at] != '\0' && group_count < MAX_GROUPS) {
+    while (line[at] != '\0') {
       if (!key_at(line + at, &key_length)) {
         at++;
         continue;
@@ -930,8 +943,8 @@ static bool keep_rasters;
 
    A rendering seen and not yet read: "(#40 0/16 or #44)" and "(C2/C2 or
    C5/C5 or C2/C5)" in module D's (I), where several answers are allowed and
-   one of them is a pair. Both stand right today, so reading them would add
-   a denominator and no knowledge, and misreading them would cost both. */
+   one of them is a pair. Both stand right, so reading them would add a
+   denominator and no knowledge, and misreading them would cost both. */
 #define MAX_VERDICTS 192
 typedef struct {
   char text[COLUMNS + 1];
@@ -1025,12 +1038,12 @@ static bool matches_ignoring_case(const char *at, const char *lowercase, size_t 
 
    Module B's (R) is a two-column table whose rows carry two tests each, and
    a row of it grades the test whose value stands nearest the bracket while
-   the other goes unread. That costs nothing today, because only a failing
-   test names a value for silicon there and no row holds two of those; what
-   takes its forty-eight tests down to the five recorded is Shaker's silence
-   on the ones that pass. The word WRONG is looked for in the whole line
-   though, so a row that ever carried both a bracket and another column's
-   failure would condemn the test it graded. No such row is printed. */
+   the other goes unread. That costs nothing while no row holds two failing
+   tests, because only a failing test names a value for silicon there; one
+   that passes names none and is not read at all. The word WRONG is looked
+   for in the whole line though, so a row that ever carried both a bracket
+   and another column's failure would condemn the test it graded. No such
+   row is printed. */
 static bool names_the_expected_value(const char *opening, const char *closing) {
   for (const char *at = opening; at + 3 < closing; at++) {
     if (!matches_ignoring_case(at, "exp", 3)) {
@@ -1576,11 +1589,11 @@ static int collect_verdicts(int percentage_named) {
   }
 
   /* Two of a group's tests can agree in the same words, and the record owes
-     both a line — module E's (6) prints eleven and two of them read the
-     same the day the machine gets them right. So a line counts as held not
-     when the record holds one like it, but when it holds as many as this
-     screen shows down to here. Shaker writes its verdicts downward, so that
-     count is an identity where the text alone is not.
+     both a line — module E's (6) grades three of its tests in the same words
+     when the machine gets them right. So a line counts as held not when the
+     record holds one like it, but when it holds as many as this screen shows
+     down to here. Shaker writes its verdicts downward, so that count is an
+     identity where the text alone is not.
 
      It is an identity only where the whole screen stands behind it. A group
      that redraws its list from the top leaves the tail of the last pass
@@ -1592,14 +1605,14 @@ static int collect_verdicts(int percentage_named) {
 
      A whole read is a filter and not a proof: a tear whose seam fell on a
      row boundary, or one a module had blanked rather than left dirty, would
-     leave every glyph readable and be believed. And the filter costs
-     something today. Module E's (6) prints its second identical verdict on
-     partly-read screens too, where it is refused, and is recorded only
-     because the group settles on a screen read whole; a group whose screen
-     carries an unreadable band for as long as it runs could never record a
-     duplicate at all. The splice this wants in the end — each screen's run
-     of verdicts laid on the record at its longest overlap with the record's
-     tail — is deferred, not answered. */
+     leave every glyph readable and be believed. And the filter has a cost.
+     Module E's (6) prints its second identical verdict on partly-read
+     screens too, where it is refused, and is recorded only because the
+     group settles on a screen read whole; a group whose screen carries an
+     unreadable band for as long as it runs could never record a duplicate
+     at all. The reader does not lay each screen's run of verdicts on the
+     record at its longest overlap with the record's tail, which would lift
+     that cost. */
   for (int index = 0; index < standing_count; index++) {
     memcpy(verdicts_standing[index], standing[index].text, sizeof verdicts_standing[index]);
   }
@@ -2066,7 +2079,7 @@ static void run_group(const char *module, const group *entry, FILE *report,
 
 /* What one group's run hands back to its module: its section of the
    report, its lines of the record, and its tallies. A section longer than
-   the room here is cut short and says so; the longest yet, a group of many
+   the room here is cut short and says so; the longest, a group of many
    pages keeping every screen it may, is some 290K: module B's (5). */
 #define MAX_GROUP_REPORT 524288
 #define MAX_GROUP_SCOREBOARD 32768
@@ -2318,7 +2331,7 @@ static void module_e_is_recorded(void) {
 }
 
 /* A group's line, so that a difference can be reported under the group it
-   belongs to rather than by a line number alone: eleven verdicts under one
+   belongs to rather than by a line number alone: the verdicts under one
    group all look alike out of context. */
 static bool is_a_group_line(const char *line) {
   return line[0] >= 'A' && line[0] <= 'E' && line[1] == ' ' && line[2] == '(';
@@ -2337,18 +2350,17 @@ static void show_screen(const char *const *rows, int count) {
 }
 
 /* Two of a group's tests can agree word for word — module E's (6) prints
-   eleven verdicts and its #007F twice — and a screen read whole is the
-   warrant for recording both. A screen read in part is not: a group that
-   redraws its list leaves the tail of the last pass above the head of the
-   next, and a frame caught in between shows a test twice with unread rows
-   in the gap, as module D's (R) does. Such a frame may still bring a line
-   the record has never held, which is how a group's later tests are
-   gathered at all.
+   its #007F twice — and a screen read whole is the warrant for recording
+   both. A screen read in part is not: a group that redraws its list leaves
+   the tail of the last pass above the head of the next, and a frame caught
+   in between shows a test twice with unread rows in the gap, as module D's
+   (R) does. Such a frame may still bring a line the record has never held,
+   which is how a group's later tests are gathered at all.
 
    The rows below are E (6)'s own, and the gap is what an unread row reads
    as. The percentages are handed in rather than measured, so that the line
-   between the two readings can be walked: 93 is what the frame carrying
-   the phantom read, and 100 what the frame warranting the repeat read. */
+   between the two readings can be walked: 55 and 99 stand for frames read
+   in part, 100 for one read whole. */
 static void a_screen_read_in_part_cannot_repeat_a_verdict(void) {
   static const char *const settled[] = {
       ">>>>>> DELAY TO VSYNC:#007F (EXP:#007F)",
@@ -2926,9 +2938,8 @@ static void the_verdict_reader_knows_its_renderings(void) {
    states silicon's value for each type in one bracket and gates whole
    groups by the type named at the head of a label, so a reader that follows
    the type the machine was built as is what lets a second type be graded at
-   all. A machine built as a type 1 reads the clauses that speak for one;
-   the readings for a 2, a 3 and a 4 say how they will be read when a
-   machine can be built as those. */
+   all. A machine built as a type 1 reads the clauses that speak for one,
+   and so for a 2, a 3 and a 4. */
 typedef struct {
   const char *line;
   uint8_t type;
@@ -3280,6 +3291,10 @@ int main(int argc, char **argv) {
     scoreboard_on_record = argv[4];
   }
   if (argc > 5 && argv[5][0] != '\0') {
+    if (argv[5][1] != '\0' || argv[5][0] < 'A' || argv[5][0] > 'E') {
+      printf("shaker: %s names no module; the modules are A to E\n", argv[5]);
+      return 1;
+    }
     only_module = argv[5];
   }
   if (argc > 6 && argv[6][0] != '\0') {
@@ -3345,10 +3360,10 @@ int main(int argc, char **argv) {
           version[0], version[1], crtc_type);
   fprintf(file, "CRTC, module by module and in the order each module's own menu prints.\n\n");
   if (crtc_type != 0) {
-    fprintf(file, "Built as, and nearly no more: the chip answers a program asking what it\n");
+    fprintf(file, "Built as, and only in part: the chip answers a program asking what it\n");
     fprintf(file, "is, and of its own timing keeps only what the head of crtc.h names. The\n");
-    fprintf(file, "rest is a type 0's, and most of what is wrong below is that, and is the\n");
-    fprintf(file, "work rather than a fault.\n\n");
+    fprintf(file, "rest is a type 0's, which is most often why a group below draws what\n");
+    fprintf(file, "silicon does not, and is the work rather than a fault.\n\n");
   }
   fprintf(file, "%d groups run, %d left to another CRTC type.\n", total_groups_run,
           total_groups_skipped);

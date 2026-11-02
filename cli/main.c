@@ -542,8 +542,8 @@ static void cpc_record_displayed(const cpc_t *cpc) {
     uint32_t start = (uint32_t)beam_y * CPC_FRAMEBUFFER_WIDTH + beam_x - sent;
     for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER; sample++) {
       /* Two bytes make sixteen samples, eight each, whatever the mode — and
-         the border can have one of them without the other, which is a half
-         a byte never painted and must not be claimed for one. */
+         the border can have one of them without the other, which leaves that
+         byte painted from no address, and it must not be claimed for one. */
       uint8_t half = sample < 8 ? 0 : 1;
       if (!pending_display[half]) {
         continue;

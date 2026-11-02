@@ -203,10 +203,12 @@ typedef struct {
  * set out at the head of crtc.h, and the board adds three things where the
  * chip is one of the two ASICs: the microsecond it holds an OUT's write for,
  * both syncs a character late, and the interrupt raised a quarter of a
- * microsecond sooner after them. The lower ROM is readable at &0000 — it must
- * be, or no first instruction could ever be fetched. Upper ROM enabled and
- * configuration 0 are conventions: the firmware writes both registers before
- * anything could observe their reset state. */
+ * microsecond sooner after them; and a fourth on a type 3 alone, a colour
+ * written to the Gate Array showing half a byte sooner (cpc.c, ch. 9.2.2).
+ * The lower ROM is readable at &0000 — it must be, or no first instruction
+ * could ever be fetched. Upper ROM enabled and configuration 0 are
+ * conventions: the firmware writes both registers before anything could
+ * observe their reset state. */
 void cpc_init(cpc_t *cpc, uint8_t *ram, uint32_t ram_size, const uint8_t *lower_rom,
               uint8_t crtc_type);
 

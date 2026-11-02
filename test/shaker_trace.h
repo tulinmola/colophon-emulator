@@ -11,12 +11,13 @@
  *
  * Off unless SHAKER_TRACE names where to write. Each module runs in a child
  * of its own and each gets a file of its own,
- * SHAKER_TRACE-<module>-crtc<type>.txt, so the two types can be traced side
- * by side; a module that traces nothing leaves no file.
+ * SHAKER_TRACE-<module>-crtc<type>.txt, so the types can be traced side by
+ * side; a module that traces nothing leaves no file.
  *
  * Frames are counted as the report counts them: frame N of a group is the
- * N frames run since its key was let go, so a line of frame N had happened
- * by the screen the report names frame N. The frames of the key press itself
+ * N frames run since its key press ended, which runs on after the key is let
+ * go for as long as the key was held, so a line of frame N had happened by
+ * the screen the report names frame N. The frames of the key press itself
  * are numbered at and below zero, and what runs before a module's first group
  * is numbered from the module's start.
  *
@@ -47,8 +48,8 @@
  *                                 microseconds and the drive's polling would
  *                                 bury everything else
  */
-#ifndef SHAKER_TRACE_H
-#define SHAKER_TRACE_H
+#ifndef COLOPHON_SHAKER_TRACE_H
+#define COLOPHON_SHAKER_TRACE_H
 
 #include <stdint.h>
 

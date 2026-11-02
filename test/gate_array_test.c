@@ -592,8 +592,8 @@ static void every_byte_paints_what_the_structure_says(void) {
 /* RMR keeps two bits of the mode, so a wider value can only come from
    outside the chip: a host writing the field, or a snapshot read into it.
    The serialiser indexes four rows by it and must read no further, and every
-   value wider than the two bits answers as mode 3 did before there was a
-   table to index. */
+   value wider than the two bits answers as mode 3, the last row, where the
+   decoder's own default case sends it. */
 static void a_mode_wider_than_rmr_keeps_paints_as_mode_3(void) {
   gate_array_init(&gate_array);
   inks_differ_from_their_pens();

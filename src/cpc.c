@@ -202,11 +202,12 @@ static void land_a_held_crtc_write(cpc_t *cpc, uint16_t address, uint8_t data) {
    R3=5 page, a sync five microseconds long, and B (I)'s R3=1 page as these draw
    them. R3's VSYNC width comes over with it, counted a line sooner where the
    write is held to a line's end during a VSYNC, which nothing grades. Every
-   other register keeps the microsecond ch. 4.4.4 gives these two:
-   handing every held write over ahead of the tick puts six of Shaker's E (4)
-   lines wrong on both ASIC records. Only a write whose instruction is still
-   under way is handed over, a processor restarted under one having left nothing
-   to hand. */
+   other register keeps the microsecond ch. 4.4.4 gives these two: Shaker's E
+   (4), which prints a reading only where the machine differs, prints none on
+   either 2.7 ASIC record by it, and six of its readings on both if every held
+   write is handed over ahead of the tick. Only a write whose
+   instruction is still under way is handed over, a processor restarted under
+   one having left nothing to hand. */
 static void hand_over_a_held_write(cpc_t *cpc) {
   uint16_t address = z80_address(cpc->pins);
   bool to_the_data_port = (address & 0x4000) == 0 && (address & 0x0300) == 0x0100;
@@ -347,9 +348,13 @@ static uint8_t io_read(cpc_t *cpc, uint16_t address, bool first_tick) {
        The two read ports write nothing, so what goes in is only what comes
        back where the chip declines to drive: a bus at rest, which is what a
        real machine reads there — "my CPC CRTC 2 always returns 255 ... my
-       CPC CRTC 0 randomly returns 255 or 127" (ch. 21.3.2). */
+       CPC CRTC 0 randomly returns 255 or 127" (ch. 21.3.2). A write port is
+       written once, where RD falls, however long the cycle is held. */
     uint8_t floating = (address & 0x0200) ? 0xFF : (uint8_t)(address >> 8);
-    data = crtc_data(crtc_bus(cpc, address, floating));
+    data = floating;
+    if ((address & 0x0200) != 0 || first_tick) {
+      data = crtc_data(crtc_bus(cpc, address, floating));
+    }
   }
   if ((address & 0x0800) == 0) {
     present_port_b(cpc);
@@ -431,10 +436,11 @@ uint16_t cpc_video_address(const cpc_t *cpc) {
 void cpc_insert_tape(cpc_t *cpc, tape_t *tape) { cpc->tape = tape; }
 
 uint64_t cpc_tick(cpc_t *cpc) {
-  /* Pointed here rather than once at power-on: a host may copy a whole
-     machine and copy it back — the test suites do — and a pointer into the
-     copy it came from would outlive the copying. */
-  crtc_give_line_end_rooms(&cpc->crtc, cpc->crtc_line_end_rooms);
+  /* Pointed again on every tick, not only at power-on: a host may copy a
+     whole machine and copy it back — the test suites do — and a pointer into
+     the copy it came from would outlive the copying. The rooms are copied
+     with the machine, so a line end they keep is still kept. */
+  cpc->crtc.line_end_rooms = cpc->crtc_line_end_rooms;
   gate_array_advance_phase(&cpc->gate_array);
   /* The motor line is held, not sampled: the board turns the reel for as
      long as the bit is set, whether or not the processor is looking at the

@@ -6,9 +6,10 @@
  * frame, so that a change to the emulator that moves any of it moves a
  * line of a file a human reads before keeping. What the record is worth is
  * the comparison that was made when it was accepted: the frames were set
- * against a capture of the same demo running on a real CPC, part by part.
- * The capture is nobody's to redistribute and is not here; the record it
- * accepted is.
+ * against a capture of the same demo running on a real CPC, part by part,
+ * and against another emulator's run of it at two samples a second over the
+ * whole demo. The capture is nobody's to redistribute and is not here; the
+ * record it accepted is.
  *
  * A frame is taken at the monitor's retrace and nowhere else. The beam
  * paints the raster over a whole frame's worth of ticks, so a framebuffer
@@ -30,6 +31,8 @@
  *   than from anyone's notes: its extended DSK header records two sides, and
  *   the demo stops with "WRONG DISK FOR YOUR CONFIGURATION" in the machine's
  *   built-in drive, which has one head. Drive B has two.
+ * - CPCEC (Cesar Nicolas-Gonzalez), http://cngsoft.no-ip.org/cpcec.htm — the
+ *   other emulator whose run of the demo the record was set beside.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,10 +51,10 @@
 #define DISC_IMAGE "batman-forever.dsk"
 #define COMMAND "|b:run\"disc"
 
-/* The boot takes 78 frames to reach the prompt, as the firmware tier has
-   it; a key must be held long enough for the fifty-times-a-second scan to
-   see it. The demo's startup screen asks for a key, and 500 frames is well
-   past the moment it appears. */
+/* The boot screen stops changing at frame 42, and 78 waits well past it, as
+   the firmware tier does; a key must be held long enough for the
+   fifty-times-a-second scan to see it. The demo's startup screen asks for a
+   key, and 500 frames is well past the moment it appears. */
 #define FRAMES_TO_PROMPT 78
 #define FRAMES_KEY_HELD 5
 /* Not a frame the record keeps: the press runs the machine on while the key

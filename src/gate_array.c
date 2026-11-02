@@ -265,8 +265,9 @@ static uint8_t decode_pens(uint8_t mode, uint8_t byte, uint8_t pens[8]) {
 
 /* The pens of every byte in every mode, each pixel already repeated to its
    width. Every init fills it from the decoder above, which stays the one
-   account of how a byte is read and writes the same bytes every time; a
-   chip that has not been through init paints from an empty table. */
+   account of how a byte is read and writes the same bytes every time. The
+   table is the program's rather than a chip's: empty until the first init,
+   and the same for every chip after it. */
 static uint8_t pens_of_byte[4][256][GATE_ARRAY_SAMPLES_PER_CHARACTER / 2];
 
 static void fill_pens_of_byte(void) {

@@ -57,9 +57,9 @@ static void run_ticks(long count) {
 }
 
 /* Append a select-and-write pair for one CRTC register. */
-static size_t append_crtc_write(uint8_t *program, size_t length, uint8_t reg, uint8_t value) {
-  program[length++] = 0x01; /* LD BC,&BC00+reg */
-  program[length++] = reg;
+static size_t append_crtc_write(uint8_t *program, size_t length, uint8_t number, uint8_t value) {
+  program[length++] = 0x01; /* LD BC,&BC00+number */
+  program[length++] = number;
   program[length++] = 0xBC;
   program[length++] = 0xED; /* OUT (C),C */
   program[length++] = 0x49;
@@ -277,14 +277,14 @@ static void the_crtc_learns_the_firmware_table(void) {
   static const uint8_t table[16] = {63, 40, 46, 0x8E, 38, 0, 25, 30, 0, 7, 0, 0, 48, 0x00, 0xC0, 0};
   uint8_t program[161];
   size_t length = 0;
-  for (int reg = 15; reg >= 0; reg--) {
-    length = append_crtc_write(program, length, (uint8_t)reg, table[reg]);
+  for (int number = 15; number >= 0; number--) {
+    length = append_crtc_write(program, length, (uint8_t)number, table[number]);
   }
   program[length++] = 0x76; /* HALT */
   rom_program(program, length);
   TEST_CHECK(run_to_halt());
-  for (int reg = 0; reg < 14; reg++) {
-    TEST_EQUAL(cpc.crtc.registers[reg], table[reg]);
+  for (int number = 0; number < 14; number++) {
+    TEST_EQUAL(cpc.crtc.registers[number], table[number]);
   }
   /* R14 is six bits wide: the firmware's &C0 falls off the ends. */
   TEST_EQUAL(cpc.crtc.registers[14], 0);
@@ -411,8 +411,8 @@ static void the_interrupt_falls_a_character_after_the_hsync(void) {
        instruction and never acknowledges what the Gate Array raises. */
     TEST_CHECK(run_to_halt());
     static const uint8_t frame[][2] = {{0, 63}, {1, 40}, {4, 38}, {6, 25}, {7, 30}, {9, 7}};
-    for (size_t reg = 0; reg < sizeof frame / sizeof frame[0]; reg++) {
-      write_crtc(frame[reg][0], frame[reg][1]);
+    for (size_t entry = 0; entry < sizeof frame / sizeof frame[0]; entry++) {
+      write_crtc(frame[entry][0], frame[entry][1]);
     }
     write_crtc(2, hsync_at);
     write_crtc(3, widths[index].r3);
@@ -1217,9 +1217,9 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
    machine may point at the machine it was copied from: such a pointer
    outlives the copying, and two machines sharing one place to keep a line's
    end would take each other's ends back. The CRTC's is the one field of that
-   shape, and the check with teeth is that it names the copy's own buffer
-   from the copy's first tick — from any quarter of a microsecond a first
-   tick can fall on, since a host may write a register before the character
+   shape, and the checks with teeth are that it names the copy's own buffer,
+   still keeping what the original kept, from the copy's first tick — from any quarter of a
+   microsecond a first tick can fall on, since a host may write a register before the character
    clock next comes round. The frame that follows only says the copy runs and
    the original stands still, which a stale pointer would not by itself
    disturb. */
@@ -1240,8 +1240,16 @@ static void a_copied_machine_runs_as_the_one_it_was_copied_from(void) {
   for (int tick = 0; tick < 4 * 64 * 8; tick++) {
     cpc_tick(&cpc);
   }
+  /* Copied on the clock that took a line's end, so that the copy has an end
+     to keep: its rooms came with it, and so does what they hold. */
+  for (int tick = 0; tick < 4 * 64 && !cpc.crtc.a_line_end_is_kept; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(cpc.crtc.a_line_end_is_kept);
   copy = cpc;
   cpc_t left_behind = cpc;
+  cpc_tick(&copy);
+  TEST_CHECK(copy.crtc.a_line_end_is_kept);
   /* The copy's own place to keep a line's end is its own from its first
      tick, and from every quarter of a microsecond a first tick can fall on:
      a machine that reached into the one it was copied from would take a

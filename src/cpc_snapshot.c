@@ -103,8 +103,11 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
   }
 
   /* The CPU resumes between instructions: everything mid-flight in its
-     micro-program is cleared, then the registers are laid in. */
+     micro-program is cleared, then the registers are laid in. The bus goes
+     to rest with it, so that no cycle of the machine loaded over, an
+     acknowledge among them, ends on this one's first tick. */
   z80_init(&cpc->cpu);
+  cpc->pins = 0;
   cpc->cpu.f = bytes[AT_F];
   cpc->cpu.a = bytes[AT_A];
   cpc->cpu.c = bytes[AT_C];

@@ -325,6 +325,27 @@ static void a_restore_moves_no_row(void) {
   TEST_CHECK(!restored.crtc.frame_begins_again);
 }
 
+/* A restore restarts the processor between instructions, so the cycle the
+   machine loaded over stood in is no cycle of the loaded one: a machine
+   stopped inside an interrupt acknowledge, a request up, hands the load no
+   acknowledge to finish on its first tick — which would drop the request and
+   clear R52's bit 5 for an interrupt the loaded machine never took. */
+static void a_restore_finishes_no_acknowledge_of_the_machine_loaded_over(void) {
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  run(&cpc, 1000);
+  const char *problem = NULL;
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  power_on(&restored, other_ram, sizeof other_ram);
+  restored.pins = Z80_M1 | Z80_IORQ;
+  restored.gate_array.interrupt_request = true;
+  restored.gate_array.r52 = 0x25;
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  cpc_tick(&restored);
+  TEST_CHECK(restored.gate_array.interrupt_request);
+  TEST_CHECK((restored.gate_array.r52 & 0x20) != 0);
+}
+
 /* A CRTC write the board holds for the next character clock belongs to the
    instruction that made it, and a restore restarts the processor: an ASIC
    machine stopped inside an OUT to R0, on the quarter before the clock the
@@ -615,6 +636,7 @@ int main(void) {
   TEST_RUN(a_restore_writes_nothing_a_type_1_acts_on);
   TEST_RUN(a_restore_moves_no_row);
   TEST_RUN(a_restore_leaves_a_held_write_behind);
+  TEST_RUN(a_restore_finishes_no_acknowledge_of_the_machine_loaded_over);
   TEST_RUN(the_psg_keeps_only_the_bits_it_has);
   TEST_RUN(a_snapshot_starts_the_sound_afresh_and_lets_an_ended_envelope_rest);
   TEST_RUN(a_resting_envelope_rests_after_a_snapshot);

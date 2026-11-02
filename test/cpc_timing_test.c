@@ -513,66 +513,6 @@ static void a_mode_written_by_an_out_is_taken_where_ch9_draws_it(void) {
   }
 }
 
-/* Ch. 13.6.2's chronogram, walked. It takes a line of R0=#3F, writes #7F
-   across its last characters a microsecond at a time, and draws C0's own
-   sequence for each placement: where the update is "ok (just in time)" the
-   line runs on, "3b 3c 3d 3e 3f 40 41 42", and where it is "not considered
-   (too late)" it wraps, "3b 3c 3d 3e 3f 0 1 2". The line is read off C0 for
-   that reason and not off any register.
-
-   Two instructions are drawn against each other, and the prose beside the
-   diagram sets their distance: "in principle, the OUT(C),R8 instruction must
-   start 2 µseconds later than the OUTI instruction to obtain the same
-   result", the one taking its I/O on its 3rd microsecond and the other on
-   its 5th (ch. 13.3, note 3). A type 1 keeps one placement more than that,
-   because there "the comparison of C0 with R0 takes place after the
-   assignment of R0 with the new value in some cases", and ch. 13.7.1 calls
-   the reason "an internal processing phase shift between this CRTC and
-   CRTCs 0 and 2".
-
-   So the two windows are compared with each other rather than with any
-   absolute lead, which is what the chapter states and what survives a
-   change of instruction lengths. What comes out is not the chapter's two
-   microseconds, though, and the reason is worth having in one place: the
-   chip offers a window in which a write can still cancel a line's ending,
-   the board reports a write finishing on the character clock, and behind a
-   Gate Array only the OUTI's entry lands on that clock — the OUT's falls a
-   quarter later. So there the OUT is never rescued where the OUTI is, and
-   the two stand one microsecond apart on the types that keep one character
-   of window and level on the type that keeps two. Which instruction reaches the
-   window is a Z80 and Gate Array fact; the window itself is the chip's.
-
-   What still holds of the chapter is the distance between the
-   instructions' own entries, the OUT's on its 3rd microsecond, its 4th
-   behind an ASIC, and the OUTI's on its 5th, which the test above this one
-   pins where they fall.
-   And the relation ch. 13.6 is really about survives whole: a type 1's
-   OUTI reaches one placement beyond every other chip's, which is the
-   difference the two cross-type assertions below measure.
-
-   The walk watches three characters past the wrap rather than stopping at
-   it. A rescue from the character the ending was decided on shows up as C0
-   stepping from #3F to #40 on the wrap's own tick; a rescue from the
-   character after it, which a type 1 alone takes, only shows up a
-   microsecond later, and a walk that stopped at the wrap could not see it
-   at all. This one could not, for as long as it existed, and reported a
-   type 1's window as one character wide while the chip gave it two.
-
-   Types 3 and 4 are walked against ch. 13.6.3, whose chronogram takes both
-   instructions' writes on the line's last character: an OUT started at #3C,
-   its write on its 4th microsecond, and an OUTI at #3B, on its 5th. The OUT
-   comes out as drawn, a microsecond earlier than ch. 13.6.1 draws a type 0's:
-   its write, held to the next character clock, lands inside the microsecond
-   after it and past the take-back window (cpc.c). The OUTI keeps the
-   placement it has on a type 0, the window's microsecond more than either
-   chapter draws, so the two stand level there where the chapter has them a
-   microsecond apart.
-
-   The leads are counted in microseconds from the start of the code under
-   test and straddle the end of a 64-character line, which falls within
-   them: a placement below the window is too early for the walk to mean
-   anything, so the edge found is checked to be inside it and not at its
-   floor. */
 /* The fact the walk below rests on, checked directly rather than inferred
    from the difference it produces: an OUTI's entry to the CRTC falls on the
    quarter the board calls the character clock and an OUT (C),r's does not.
@@ -622,6 +562,49 @@ static void an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic
   }
 }
 
+/* Ch. 13.6.2's chronogram, walked. It takes a line of R0=#3F, writes #7F
+   across its last characters a microsecond at a time, and draws C0's own
+   sequence for each placement: where the update is "ok (just in time)" the
+   line runs on, "3b 3c 3d 3e 3f 40 41 42", and where it is "not considered
+   (too late)" it wraps, "3b 3c 3d 3e 3f 0 1 2". The line is read off C0 for
+   that reason and not off any register.
+
+   Two instructions are drawn against each other, and the prose beside the
+   diagram sets their distance: "in principle, the OUT(C),R8 instruction must
+   start 2 µseconds later than the OUTI instruction to obtain the same
+   result", the one taking its I/O on its 3rd microsecond and the other on
+   its 5th (ch. 13.3, note 3). A type 1 keeps one placement more than that,
+   because there "the comparison of C0 with R0 takes place after the
+   assignment of R0 with the new value in some cases", and ch. 13.7.1 calls
+   the reason "an internal processing phase shift between this CRTC and
+   CRTCs 0 and 2".
+
+   So the two windows are compared with each other rather than with any
+   absolute lead, which is what the chapter states and what survives a
+   change of instruction lengths.
+
+   The walk watches three characters past the wrap rather than stopping at
+   it. A rescue from the character the ending was decided on shows up as C0
+   stepping from #3F to #40 on the wrap's own tick; a rescue from the
+   character after it, which a type 1 alone takes, only shows up a
+   microsecond later, and a walk that stopped at the wrap could not see it
+   at all.
+
+   Types 3 and 4 are walked against ch. 13.6.3, whose chronogram takes both
+   instructions' writes on the line's last character: an OUT started at #3C,
+   its write on its 4th microsecond, and an OUTI at #3B, on its 5th. The OUT
+   comes out as drawn, a microsecond earlier than ch. 13.6.1 draws a type 0's:
+   its write, held to the next character clock, lands inside the microsecond
+   after it and past the take-back window (cpc.c). The OUTI keeps the
+   placement it has on a type 0, the window's microsecond more than either
+   chapter draws, so the two stand level there where the chapter has them a
+   microsecond apart.
+
+   The leads are counted in microseconds from the start of the code under
+   test and straddle the end of a 64-character line, which falls within
+   them: a placement below the window is too early for the walk to mean
+   anything, so the edge found is checked to be inside it and not at its
+   floor. */
 static const int earliest_placement = 54;
 static const int latest_placement = 70;
 
@@ -695,13 +678,14 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
     /* One microsecond, not the chapter's two: the chip offers the window and
        the Z80 decides which instruction reaches it, the OUTI's entry landing
        on the character clock the board reports and the OUT's a quarter
-       later, so behind a Gate Array the OUT is never rescued where the OUTI
-       is. The distance between the instructions' own entries is untouched
-       and the test above this one pins it. Behind an ASIC the two stand
-       level: the OUT's write lands inside the microsecond after the clock
-       that takes it, past the window (cpc.c), and the OUTI's keeps the
-       window, which gives it a microsecond more than ch. 13.6.3 draws as it
-       does on every type. */
+       later, so behind a Gate Array the two stand a microsecond apart where
+       the window is one character wide, and level on a type 1, whose window
+       is two. The distance between the instructions' own entries is
+       untouched, and an_io_cycle_falls_where_its_instruction_puts_it pins
+       it. Behind an ASIC the two stand level: the OUT's write lands inside
+       the microsecond after the clock that takes it, past the window
+       (cpc.c), and the OUTI's keeps the window, which gives it a microsecond
+       more than ch. 13.6.3 draws as it does on every type. */
     TEST_EQUAL(edges[0] - edges[1], type == 0 || type == 2 ? 1 : 0);
     out_edge[index] = edges[0];
     outi_edge[index] = edges[1];
@@ -722,6 +706,53 @@ static void an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest(void) {
   TEST_EQUAL(outi_edge[4], outi_edge[0]);
   TEST_EQUAL(out_edge[3], out_edge[0] - 1);
   TEST_EQUAL(out_edge[4], out_edge[3]);
+}
+
+/* The CRTC is wired to neither RD nor WR, so "if a read instruction is used
+   on a write register of the CRTC, then a data is sent to the CRTC" (ch.
+   4.4.2), and an IN's I/O cycle asserts IORQ where an OUT's does (Zilog
+   UM0080). What an IN puts on the data bus the chapter leaves to the board,
+   and here an IN A,(C) reaching the data port hands the CRTC the upper
+   address lines, B, as OUT (C),B hands it B, and once, however long the Gate
+   Array holds the cycle: behind a Gate Array the CRTC's pins come out the
+   same from either at every placement across two lines' ends. That it writes
+   B, and that the two land together, is ours. Behind an ASIC an OUT's write is held
+   for the clock and an IN's is not (cpc.c). */
+static void an_in_writes_a_crtc_register_once_where_an_out_would(void) {
+  /* Each with A14 and A9 low and A8 high: the CRTC's data write port. */
+  static const uint8_t widths[] = {0x01, 0x05, 0x2D, 0x31, 0x39, 0x3D};
+  static const uint8_t second_opcodes[2] = {0x78, 0x41}; /* IN A,(C) and OUT (C),B */
+  for (uint8_t type = 0; type <= 2; type++) {
+    int differing = 0;
+    for (size_t index = 0; index < sizeof widths; index++) {
+      for (int lead = 0; lead < 128; lead++) {
+        uint64_t streams[2];
+        for (int which = 0; which < 2; which++) {
+          memset(ram, 0, sizeof ram);
+          memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of it */
+          cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
+          crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0));
+          crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, 0x3F));
+          crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 0)); /* R0 stays selected */
+          lower_rom[UNDER_TEST + lead] = 0xED;
+          lower_rom[UNDER_TEST + lead + 1] = second_opcodes[which];
+          cpc.cpu.pc = UNDER_TEST;
+          cpc.cpu.b = widths[index];
+          cpc.cpu.c = 0xFF;
+          uint64_t stream = 14695981039346656037ULL;
+          for (int tick = 0; tick < 4 * (lead + 3 * 64); tick++) {
+            cpc_tick(&cpc);
+            stream = (stream ^ cpc.crtc_pins) * 1099511628211ULL;
+          }
+          streams[which] = stream;
+        }
+        if (streams[0] != streams[1]) {
+          differing++;
+        }
+      }
+    }
+    TEST_EQUAL(differing, 0);
+  }
 }
 
 /* Ch. 13.6.3's "Previous R0=0" row beside ch. 13.6.1's: an OUT writing R0 on
@@ -842,9 +873,9 @@ static void an_out_writing_r1_onto_its_own_character_borders_it(void) {
       memset(ram, 0, sizeof ram);
       memset(lower_rom, 0, sizeof lower_rom); /* NOPs in front of it */
       cpc_init(&cpc, ram, sizeof ram, lower_rom, type);
-      for (size_t reg = 0; reg < sizeof values; reg++) {
-        crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, (uint8_t)reg));
-        crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, values[reg]));
+      for (size_t number = 0; number < sizeof values; number++) {
+        crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, (uint8_t)number));
+        crtc_access(&cpc.crtc, CRTC_CS | CRTC_RS | crtc_set_data(0, values[number]));
       }
       crtc_access(&cpc.crtc, CRTC_CS | crtc_set_data(0, 1)); /* R1 stays selected */
       lower_rom[UNDER_TEST + lead] = 0xED;
@@ -1153,6 +1184,7 @@ int main(void) {
   TEST_RUN(a_mode_written_by_an_out_is_taken_where_ch9_draws_it);
   TEST_RUN(an_outi_enters_on_the_character_clock_and_an_out_only_behind_an_asic);
   TEST_RUN(an_outi_keeps_a_type_1_a_microsecond_longer_than_the_rest);
+  TEST_RUN(an_in_writes_a_crtc_register_once_where_an_out_would);
   TEST_RUN(an_asic_takes_an_out_widening_r0_from_nothing_a_microsecond_late);
   TEST_RUN(an_out_lowering_r0_onto_its_own_character_ends_the_line_there);
   TEST_RUN(an_out_writing_r1_onto_its_own_character_borders_it);

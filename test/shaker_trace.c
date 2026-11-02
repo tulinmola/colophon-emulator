@@ -94,7 +94,7 @@ void shaker_trace_begin(const char *module, uint8_t crtc_type) {
 }
 
 /* A frame as the report numbers it: the key press at and below zero, and
-   frame N once N frames have run since the key was let go. */
+   frame N once N frames have run since the key press ended. */
 static long frame(void) {
   long quotient = ticks_into_the_group / CPC_TICKS_PER_STANDARD_FRAME;
   if (ticks_into_the_group < 0 && ticks_into_the_group % CPC_TICKS_PER_STANDARD_FRAME != 0) {
@@ -167,8 +167,8 @@ static void trace_the_processor(const cpc_t *cpc, uint64_t pins) {
   }
   uint16_t address = z80_address(pins);
   if (cycle_begins(pins, Z80_IORQ | Z80_WR)) {
-    /* Devices decode single address lines: the Gate Array answers A15 high
-       and A14 low, the CRTC A14 low with A9 and A8 choosing its function
+    /* Devices decode single address lines: the Gate Array answers A15 low
+       and A14 high, the CRTC A14 low with A9 and A8 choosing its function
        ("I/O port allocation", Rison & Thacker). */
     if ((address & 0xC000) == 0x4000) {
       snprintf(what, sizeof what, "Gate Array <- %02X", z80_data(pins));

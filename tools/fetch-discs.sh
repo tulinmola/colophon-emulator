@@ -17,7 +17,7 @@
 # what stands between it and the tier.
 #
 # Batman Forever is Batman Group's 2011 demo, released at the Forever party
-# and archived at scene.org for anyone to download. The demo tier plays it
+# and archived at scene.org for anyone to download. The software tier plays it
 # from end to end and sets the frames against a record; the release is
 # fetched here rather than kept in the repository, as Shaker's disc is. Its
 # one-disc release is double-sided, which is why the tier starts it from
@@ -163,7 +163,8 @@ fetch_the_demo() {
         echo "$demo_member hashes to $actual, expected $demo_hash" >&2
         return 1
     fi
-    mv "$staged" "$demo_destination"
+    # Called on the left of ||, where set -e stands down.
+    mv "$staged" "$demo_destination" || return 1
     rm -f "$archive"
 }
 

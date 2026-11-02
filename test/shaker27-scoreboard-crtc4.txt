@@ -1,10 +1,10 @@
 What Longshot's Shaker 2.7 said about this machine, built as a type 4
 CRTC, module by module and in the order each module's own menu prints.
 
-Built as, and nearly no more: the chip answers a program asking what it
+Built as, and only in part: the chip answers a program asking what it
 is, and of its own timing keeps only what the head of crtc.h names. The
-rest is a type 0's, and most of what is wrong below is that, and is the
-work rather than a fault.
+rest is a type 0's, which is most often why a group below draws what
+silicon does not, and is the work rather than a fault.
 
 63 groups run, 23 left to another CRTC type.
 8 of them printed self-graded lines, 81 in all: 81 agree with Longshot's

@@ -32,7 +32,7 @@
 #define FRAMES_KEY_HELD 5
 #define FRAME_OF_THE_KEYPRESS 501
 /* The frames a run takes at the least: the key press and the frames it is
-   held for, which the loop below plays and counts. Three minutes of demo by
+   held for, which the loop below plays and counts. 160 seconds of demo by
    default, which is long enough for the parts to vary and short enough to
    run twice while deciding something. */
 #define FRAMES_LEAST (FRAME_OF_THE_KEYPRESS + 2 * FRAMES_KEY_HELD)

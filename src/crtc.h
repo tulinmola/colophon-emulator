@@ -17,11 +17,11 @@
  * rows hold no register but "Asic CRTC Status 1" and "Asic CRTC Status 2",
  * and whose status port "is a mirror of the read port" (ch. 21.3.1). A
  * program names the chip by this and nothing else. One bit of those two bytes
- * is left standing at its idle, status 1's fifth: the chapter gives it two
+ * is left standing at its idle, bit 5 of status 1: the chapter gives it two
  * rows that cannot share an idle value and settles neither the character its
  * count begins at nor why one spans fifteen lines where a width of nothing
- * runs sixteen. One bit the table calls wired traces something: status 2's
- * fourth, "Always 1" (ch. 21.3.4.2), which Shakerland photographs Shaker's D
+ * runs sixteen. One bit the table calls wired traces something: bit 4 of
+ * status 2, "Always 1" (ch. 21.3.4.2), which Shakerland photographs Shaker's D
  * (U) reading 0 all through a frame R5 pads, and its R5 search finding R5 by
  * counting lines until the bit reads 1. Here it reads 1 on a frame nothing
  * pads and on the last character of a padding, the interlace line's included,
@@ -56,11 +56,13 @@
  * fixed at 16" whatever R3h holds (ch. 16), and a pulse either of them is
  * made to begin by a write to R7 is counted "as if the VSYNC had started
  * when C0=0" and spends a line fewer than a type 0's (ch. 16.4.2, 16.4.3),
- * where one begun on a frame's own half line keeps all sixteen (ch. 28.1.4).
- * Neither of them takes the whole line below either, which ch. 19.7.1 gives
- * "CRTC's 0, 3 and 4" alone. No line on the disc moves on the shortened
- * count or the whole line withheld: what stands behind those two is those
- * chapters' sentences and tests of our own. One more divergence of that
+ * where one begun on a frame's own half line keeps all sixteen, which is ours:
+ * ch. 28.1.4 gives sixteen lines to one that "starts when R7 was programmed
+ * before C4=R7" and says nothing of the half line. Neither of them takes the
+ * whole line below either, which ch. 19.7.1 gives "CRTC's 0, 3 and 4" alone.
+ * No line on the disc moves on the shortened count or the whole line
+ * withheld: what stands behind those two is those chapters' sentences and
+ * tests of our own. One more divergence of that
  * pulse stands beside those two, and this one the disc does grade. An equality
  * a program makes by hand at the head of a line is a blocked VSYNC here on a
  * type 0, and on the two ASICs, which keep that type's block for no reason of
@@ -98,8 +100,9 @@
  * of the VSYNC has priority over the assignment of ParityFrame", so "if
  * ParityFrame was odd, then there will be no MID-VSYNC ... although
  * ParityFrame has change to Even" (ch. 19.7.3), where the other three turn
- * the parity and read after it (ch. 19.7.2). Shaker's C (S) and the one line
- * of its C (O) at an R7 of 0 come right on both records by it. The chapter
+ * the parity and read after it (ch. 19.7.2). Shaker's C (S) and the one test
+ * of its C (O) at an R7 of 0, which speak only where the machine is wrong,
+ * are silent on both records by that order. The chapter
  * makes the comparison at the corner and only delays the start, where this
  * chip makes it where the start falls — R0/2 for a MID-VSYNC, the row's
  * second line for ch. 19.7.1's delay — so an equality made or unmade between
@@ -114,10 +117,7 @@
  * every R7 write that does not set it, a reading of ours that can move only a
  * start falling after the corner — a held one, or one at a C0 brought to 0 by
  * an R0 written under it — and that nothing grades. No line of any record moves
- * on the corner, and no graded one on the reentrancy — the group that watches
- * this pin to catch a row counter overrunning came right on both by the frame's
- * end these two take where a line ends, below, and the board's microsecond, and
- * neither touched one of its lines — and among the lines nothing grades,
+ * on the corner, and no graded one on the reentrancy; among the ungraded ones,
  * Shaker's D (R) reads by the reentrancy the endless sync its own legend gives
  * these two, "3.4:#FFFF=DEADLOCK". The eighth below reaches the line of the
  * disc that grades it on the type 1 and type 2 records by their early reading
@@ -130,7 +130,7 @@
  * and a type 1 want R9 "programmed respectively with 6 and 7" for rows of the
  * same four lines (ch. 28.1.7). Entering that mode in the middle of a row still
  * takes the doubling up a line later, as ch. 19.8.1 gives a type 0; the parity
- * ch. 19.8.2 fixes at the write is fixed there now, and the fourth
+ * ch. 19.8.2 fixes at the write is fixed there, and the fourth
  * below says how. A type 2 shares none of the third: ch. 19.4.3 and 19.5.4
  * give it an interlace of its own, in which "parity is respected whatever the
  * values of R9 and C4". Its row is not halved in the video mode as every
@@ -164,13 +164,11 @@
  * switching diagrams draws no such line; three passages of prose are taken
  * against it, and so is the disc. Ch. 19.5.4 gives a program that line to
  * "determine parity", and the routine Shaker runs to settle the parity before
- * its C (O), C (P), C (S) and C (8) reads it there and turns the parity once
- * where it is not the one wanted. Without the line the routine read the same
- * answer on either parity, so those groups were graded on whichever this chip
- * woke on; with it C (S) and all four of C (O)'s wrong lines come right, as
- * do the two C (P) then had wrong; C (8), which says its piece in a picture,
- * holds that picture still where it had rolled; and the scoreboard stands the
- * same whichever parity the chip wakes on. Ch. 19.6.3's converse is here as
+ * its C (O), C (P), C (S) and C (8) reads the parity off that line and turns
+ * it once where it is not the one wanted. C (P) grades the line, C (S) and
+ * C (O), which speak only where the machine is wrong, are silent on it, C (8)
+ * says it in a picture that stands still, and the scoreboard is the same
+ * whichever parity the chip wakes on. Ch. 19.6.3's converse is here as
  * well, in the words ch. 11.9 gives it: where "the interlace mode is disabled
  * (R8=0) while the 'Interlace' line is displayed, then the 'Last Line'
  * condition is cancelled. The current line is no longer considered as an
@@ -181,8 +179,8 @@
  * the program — is met as any frame's is. On a first line given the mode, ch.
  * 19.6.3's converse leaves the count going on as it would have, and that it
  * reaches that line at all is our reading. Shaker's C (P) gives up the mode
- * on the line a frame's end adds and grades two frames on a type 2: the one
- * that moves R4 onto C4 there comes right (#0020), and so does the one
+ * on the line a frame's end adds and grades two frames on a type 2, and this
+ * agrees with both: the one that moves R4 onto C4 there (#0020), and the one
  * that leaves C4 past R4 with R5 at 1 (#0B1C), because a type 2 pads no
  * row past R4 (below): C4 runs on round to 0, #0B1C standing to #0020 as
  * the 711 lines of that climb from the head of the line, the second of
@@ -197,28 +195,30 @@
  * than a sum, and so do types 3 and 4 by a rule of their own — bare, on the
  * write that turns the video mode on, reversed on an odd R9 where a type 1
  * reverses on an even one, and leaving their own C9 where it stands (ch.
- * 19.5.5, 19.8.4) — because an R8 write sets it outright on all three: "these
- * updates are performed on the 3rd and 4th µseconds of the OUT(C),C
- * instruction", and toggling the mode "on and off on an even C9 line,
- * regardless of the value of R9" sets the parity even, which is the only
- * means a program has of choosing a field on this type (ch. 19.5.3). The
+ * 19.5.5, 19.8.4) — because an R8 write sets it outright on all three, on
+ * types 3 and 4 "immediately when R8 goes to 3" (ch. 19.5.5). Ch. 19.5.3
+ * times a type 1's, "these updates are performed on the 3rd and 4th µseconds
+ * of the OUT(C),C instruction", and gives it a use: toggling the mode "on and
+ * off on an even C9 line, regardless of the value of R9" sets the parity
+ * even, and "it is thus possible to fix the parity quite easily on this
+ * CRTC". On that type the
  * write settles C9's low bit with it, that bit being ParityC9 and not the
  * count's own while the mode stands ("C9 = ParityC9", ch. 19.8.2), and the
  * chapter names the cost: "deactivate the IVM mode can also modify C9, and
  * modify the end condition of character C4". So a pulse landing on an odd C9
  * while the frame's parity is even puts the counter back to the line before,
- * and the frame runs a line longer than its neighbour. The disc grades the
- * divergence: Shaker's C (S) and C (O) both came right and fell silent on the
- * type 1 record, and C (3) grades nothing at all now, where six of its
- * thirteen lines were wrong. On the three records below it those two stood
- * wrong until those types were given rules of their own — the type 2 the
+ * and the frame runs a line longer than its neighbour. The disc measures the
+ * divergence: Shaker's C (S), C (O) and C (3), which speak only where the
+ * machine is wrong, are silent on the type 1 record by it, and on the records
+ * of the type 2 and the two ASICs C (S) and C (O) are silent by rules of those
+ * types' own — the type 2 the
  * first line its mode can lengthen a frame by, above, and the two ASICs the
  * order in which they read an R7 of 0, in the second. The write is
  * skipped while the doubling stands, because the C9 those rules move is ch.
  * 19.8.2's — the one counter a type 1 keeps, which is the address — and this
  * chip keeps a count and a parity instead, ch. 19.8.1's arrangement for a
  * type 0. The two are handed back to each other wherever a mode is taken up
- * or given up inside a row, which is what the thirteenth of those tests
+ * or given up inside a row, which is what C (3)'s thirteenth test, M,
  * measures: its pulse spans a line, so the doubling starts between its two
  * writes. The rules themselves are graded by the sixteen scenarios ch. 19.5.3
  * draws on its own following pages, each named for the Shaker test that
@@ -236,7 +236,7 @@
  * row: a type 0 one past R4, types 3 and 4 on R4 itself, "C4 does not increment
  * and is equal to R4" (ch. 11.1), ch. 11.2.1's third column, which Shaker's E
  * (1) grades on both. No line the disc grades moves on the C5 counter itself:
- * what stands behind that is ch. 11.2.2 and 11.2.3's own tables and a test of
+ * what stands behind that is ch. 11.2.1's and 11.2.3's tables and a test of
  * our own. A type 1 alone latches a state with the counter, "if R5>0 when C4
  * should return to 0 at the end of the frame", which an R5 taken back to 0
  * does not clear — "the state is not deactivated, C4 does not return to 0 and
@@ -254,7 +254,7 @@
  * and "whether with R5 or R9, it is impossible to overflow C9" (ch. 11.3.3) —
  * so an R5 dropped under the count ends that padding where it stands, where
  * the other three spend the counter's whole round getting back to it. The
- * disc's C (E) came right in all three of its readings on that. A line too
+ * disc's C (E) grades that in all three of its readings. A line too
  * narrow to reach the disarm gives types 1 and 2 no additional line where it
  * gives type 0 one, ch. 13.2's window being a type 0's (the eleventh
  * exception). Types 3 and 4 do decide the frame's end, and the
@@ -273,10 +273,10 @@
  * values without causing any problems for other counters" (ch. 13.5), and a
  * line of one character is a line to them as to types 1 and 2 (the eleventh
  * exception); and R5 admitting a row whose C4 has passed R4 is a type 0's
- * rule (ch. 12.2), carried over. Shaker's E (4) came right on both records on
- * the frame's end taken where the line ends, all twelve of the readings its
- * program makes on each — the record holds none of them, the group printing
- * only where it disagrees — with the microsecond the board gives these two an
+ * rule (ch. 12.2), carried over. Shaker's E (4) reads the frame's end taken
+ * where the line ends twelve times on each 2.7 record, printing a reading only
+ * where the machine differs from silicon, and prints none here by the
+ * microsecond the board gives these two an
  * OUT (cpc.c, ch. 4.4.4), the later of its two writes otherwise arriving on the
  * line's last character, where it overflows, rather than on the next line's
  * first, where silicon has it too late. The exception ch. 12.5 gives a type 3
@@ -296,16 +296,19 @@
  * with the lines counted against the registers written (ch. 11.2.4). Shaker's E
  * (1) grades the postponing and that exception, and its A (U), photographed on
  * a real type 1, reads R4 written onto C4 and moved off it on a last line's
- * last four characters as taken, on five lines this chip had wrong while it
- * kept a type 0's window. An R5 raised from 0 at C0=R0 also sets off a bug of
+ * last four characters as taken.
+ * An R5 raised from 0 at C0=R0 also sets off a bug of
  * that chip's own, the RFD (the seventh below). Every other behaviour below
  * is type 0's whatever the type is set to, and a number naming none of the five
- * is neither refused nor corrected. A type 2 asks R5 of its last line to the
+ * is neither refused nor corrected: it builds a chip that is none of them, part
+ * one type's and part another's. A type 2 asks R5 of its last line to the
  * line's end (crtc.c), and settles that line by ch. 12.4.1's rules rather than
  * a type 0's: at the line's head, with R4 and R9 as the writes made before it
  * left them, refused where the last character of the line before's HSYNC found
  * the comparison true, and to a line an HSYNC begins on or runs over at its
- * head (ch. 15.4.4, 15.6); and by an R4 or R9 write made outside the
+ * head (ch. 15.4.4, 15.6), which ends no frame under Shaker's B (P), whose
+ * search sets R2 at 0: photographed on a real type 2, it gives up with "UNABLE
+ * TO FIX", as here; and by an R4 or R9 write made outside the
  * HSYNC, while "Last Line Management" stands: the last character of an
  * HSYNC takes it away where it finds the comparison true and gives it back
  * where it finds it false, and a frame's first line waits for the second.
@@ -327,7 +330,11 @@
  * where the sync runs over, which nothing grades; and the reading there is
  * taken before a write made during that character, which is ours, the sync
  * refusing such a write besides as silicon does (crtc.c), so it reaches
- * neither. The sixth is the border R6 asks for. Where R6 is 0 a frame's first
+ * neither. A head an HSYNC begins on or runs over lifts no border on a type 2
+ * either: "during HSYNC, this C0=0 test is not performed" (ch. 15.5.2), and a
+ * line keeps the border until "a next C0=0" (ch. 15.6). Whether C0=R1 is
+ * likewise skipped the chapter leaves open, and here it borders as on every
+ * line. The sixth is the border R6 asks for. Where R6 is 0 a frame's first
  * line is a conflict on types 0 and 2 and comes out an alternation of bordered
  * and displayed bytes, cancellable until C0 meets R1 and definitive after it
  * (ch. 18.3.2); a type 1 borders outright on an R6 of 0 "without the condition
@@ -512,11 +519,13 @@
  * — a PPI read answers such a write "at the earliest 5 μsec after" where
  * ch. 16.4.1.1 has a type 0 read "6 µsec later" — and ch. 16.4.3 gives a
  * type 2 only "triggered immediately", which Shaker's B (6) settles on that
- * character. What it buys a program is ch. 16.4's last chance, "up to the last
- * µsecond preceding C4=R7", one microsecond later than the other three have
- * it: C4 has already walked onto the value being written, and they do not read
- * that equality until the character after, where the block of the second
- * exception above has already spent it. The board says which edge an access
+ * character. Ch. 16.4 gives every type its last chance, "For all CRTCs, the
+ * update of R7 with C4 can take place up to the last µsecond preceding
+ * C4=R7"; that types 1 and 2 reach a microsecond further than the other three
+ * is ours, from Shaker's B (6) "R7 LAST CHANCE 4TH uSec": C4 has already
+ * walked onto the value being written, and the other three do not read that
+ * equality until the character after, where the block of the second exception
+ * above has already spent it. The board says which edge an access
  * landed on, through a pin no chip has, and one that cannot say leaves it low,
  * which costs every type its window.
  *
@@ -547,10 +556,10 @@
  * on — and that comparison is among the lost, so the rest of the line stands
  * displayed where a chip that had been that wide all along borders it.
  * Shaker's B (6) grades the window at both its widths and neither cost: its
- * "4TH uSec ON C0=0" comes right on the type 0, type 1 and type 2 records
- * with the first character, its "5TH uSec ON C0=0" for a type 1 with the
- * second, and its "R7 LAST CHANCE 4TH uSec" on the type 1 and type 2 records
- * with the other comparison.
+ * "4TH uSec ON C0=0" grades the first character on the type 0, type 1 and
+ * type 2 records, its "5TH uSec ON C0=0" the second on a type 1, and its
+ * "R7 LAST CHANCE 4TH uSec" the other comparison on the type 1 and type 2
+ * records.
  *
  * The ninth is the display delay R8 carries in its high nibble. Ch. 19.1's
  * table marks those bits x on types 1 and 2, and ch. 19.2 gives the
@@ -617,14 +626,12 @@
  * count holds on such a line while C9 and C4 go on, A (I) photographed still
  * in the pulse at every read after R0=0 is written on the line before C4
  * meets R7, where a type 2 spends the count a line a microsecond. On the ASICs
- * six of that page's sixteen reads still differ from the photographs: at four,
+ * six of that page's sixteen reads differ from the photographs: at four,
  * silicon is in the pulse and this is not, and at two the other way round;
  * their count is spent as a type 2's here, a reading of ours the page leaves
  * unsettled. A line of one character that brings C4 and C9 home at every end
  * is a frame of one microsecond to types 1, 3 and 4, whose ParityFrame then
- * turns at every character (ch. 19.5.3, 19.5.5). Batman Forever runs no line
- * that narrow once the firmware has written R0, power-on leaving it at 0
- * until then, so its record moves with this only by the phase of its boot.
+ * turns at every character (ch. 19.5.3, 19.5.5).
  *
  * The twelfth is the byte of border at C0=R0 on a line R1 never reached,
  * which ch. 17.6.2 gives to "CRTC 0, 2" and denies the rest: "CRTC 1, 3, 4 ...
@@ -648,8 +655,10 @@
  * 0 "too late". Where VMA' is left, on a row's last line, a type 1 reads the
  * new comparison alone — "if the R1 update takes place exactly when C0=R1
  * (R1.JIT), then the condition C0=R1 is no longer true and VMA' is not updated"
- * (ch. 17.4.2) — a type 2 and the two ASICs the old one alone, "an update of R1
- * on position C0=R1 arrives too late" (ch. 17.4.3), and a type 0 both, which
+ * (ch. 17.4.2) — a type 2 the old one alone, "an update of R1 on position
+ * C0=R1 arrives too late" (ch. 17.4.3), the two ASICs the same, which is ours,
+ * that chapter being a type 2's and the photographs below the evidence, and a
+ * type 0 both, which
  * the chapters do not say. Shaker's A (O), "R1 STORIES", writes all of these,
  * and Shakerland photographs it drawing what this does on every type: its pages
  * G and H, an R1 of 0 written on C0=#3E, #3F, 0 and 1; its I, an R1 of #3F
@@ -724,10 +733,9 @@
  * once — and where that increment falls on a last line it is ch. 13.2.6's
  * worked table beginning rather than a row ending, so the adjustment outlives
  * the widening and C9 is measured against R5 for the rest of the frame
- * (ch. 13.2.1, 13.2.4, 13.2.6, 16.4.1.2). Taking that up costs Shaker's C (P)
- * its graded line at most boot phases, and the line is worth less than it
- * looks: read at three in forty on a chip altered in no way at all, and at six
- * in forty on this one, always with the same right answer. A type 0 standing
+ * (ch. 13.2.1, 13.2.4, 13.2.6, 16.4.1.2). Shaker's C (P) prints its graded
+ * line on this only at some boot phases, with the same right answer whenever
+ * it does, and is weak evidence either way. A type 0 standing
  * still so on a frame's first character enters nothing: ParityFrame does not
  * turn, R12/R13 are not loaded — "R12/R13 cannot be considered until C4 and C9
  * both go back to 0" (ch. 13.8.3) — and an R6 border thrown there stands for
@@ -764,7 +772,7 @@
  * these events, it will return to 0 once the additional line handling is
  * complete", nothing gives it to types 1, 3 and 4, and Shaker's C (P) says a
  * type 2 does not have it (above); and an adjustment already begun is past
- * both (ch. 13.2.6), which is what keeps ch. 10.3.1.2's exception alive now the
+ * both (ch. 13.2.6), which keeps ch. 10.3.1.2's exception alive while the
  * disarm asks only what ch. 13.2.5 says it asks. A line too short to reach the
  * disarm keeps what it was armed with, as ch. 11.2.2 and ch. 12.2 have it at "R0
  * < 2" — the disarm being read at C0=3, where a write made at C0=2 has landed,
@@ -794,8 +802,8 @@
  * A write to R3 there is the exception, taken, by a reading of ours, as the
  * modification whatever value it carries, ch. 15.3 not saying whether one
  * carrying the value R3l holds counts, and the sync it lets through carries the
- * old count on rather than starting from nothing, which is where a R2.JIT HSYNC
- * begins (ch. 15.3.3). That chapter's own example moves R2 as well and comes
+ * old count on rather than starting from nothing, which ch. 15.3.3 calls the
+ * start of an R2.JIT HSYNC. That chapter's own example moves R2 as well and comes
  * out right without the exception being reached at all, the new R3l carrying
  * the old sync past its ending comparison on its own. R3l updated during a
  * HSYNC is here as C3l counts it: a value C3l has yet to reach ends the sync
@@ -918,7 +926,9 @@ typedef struct crtc_t {
   uint8_t type;
 
   /* R0-R17, selected through the address register. Writes are masked to the
-     documented type-0 widths (Compendium ch. 4.3); R16/R17 ignore writes. */
+     documented type-0 widths (Compendium ch. 4.3), save that types 1 and 2
+     keep only R8's two interlace bits (ch. 4.3, 19.1); R16/R17 ignore
+     writes. */
   uint8_t registers[18];
   uint8_t address_register; /* AR, 5 bits: the register number a select names */
 
@@ -942,9 +952,11 @@ typedef struct crtc_t {
      video pointer every 4 lines" (ch. 19.4.3): the row keeps the height R9
      asks for, where the other four are programmed half of one, and it is
      this counter rather than the row that halves. Only a type 2 reads it, and
-     only the paths a type 2 takes maintain it: the other four carry the field
-     and leave it standing through their frames' additional lines, where they
-     count on C9 and this chip counts on C5. */
+     only the paths a type 2 takes maintain it, which the others share in
+     part: a type 1 counts its frames' additional lines on C5 as a type 2
+     does and carries the field on through them, zeroing it where a run it
+     holds open brings C4 round to R4, and types 0, 3 and 4, which count those
+     lines on C9, leave it standing there. */
   uint8_t c9_ivm;
   uint8_t c4; /* character row counter, 7 bits */
   /* C5, the Vertical Total Adjust Counter, 5 bits: the counter types 1 and
@@ -1105,22 +1117,21 @@ typedef struct crtc_t {
      programmed a type 0's way. Ch. 19.8.4 gives those two a type 1's
      counting in the mode, one counter that is the address, so the count
      and the parity are handed back to each other at the mode's edges for
-     them as well. Types 0 and 2 are answered by parity_c9() from R9, C4 and
-     ParityFrame, which is a type 0's counting and a type 0's for a type 2 as
-     well — that chip respects its parity "whatever the values of R9 and C4"
-     (ch. 19.5.4), and the divergence is declared at the head of this file.
+     them as well. Types 0 and 2 are answered by parity_c9(): a type 0 from
+     R9, C4 and ParityFrame, a type 2 from ParityFrame alone, that chip
+     respecting its parity "whatever the values of R9 and C4" (ch. 19.5.4).
      No line on any record reaches the two ASICs' share of
      this: what stands behind it is ch. 19.8.4's algorithm, the two frames it
      works by hand, two of the twenty-two counting cases it draws beside
      them, and tests of ours. A row of theirs whose counter is sent past its
-     limit now comes home rather than walking to 31, which is ch. 10.3.4.1's
-     "more complex" comparison and ch. 19.8.4's "C9 >= R9": the disc's A (U)
-     came right on it and two of C (O)'s three lines with it. One rule of
-     theirs is still not here — the line an interlaced frame adds leaves
-     their C4 where it is and carries no parity of its own, "C9 will always
-     be 0, even if the other lines are odd on C4=R4" (ch. 19.6.4) — and
-     nothing on either record grades it now, the group that did having
-     drawn nothing past its menu since the machine began naming itself. */
+     limit comes home rather than walking to 31, which is ch. 10.3.4.1's
+     "more complex" comparison and ch. 19.8.4's "C9 >= R9", graded by the
+     disc's A (U), and C (O) silent on it. The line an interlaced frame adds
+     holds their C4 on R4, as ch. 19.6.4 has it, but takes its C9 and parity here as any
+     additional line would, where that chapter says "the additional line
+     generated does not consider parity states as on other CRTC's. C9 will
+     always be 0, even if the other lines are odd on C4=R4"; no record
+     grades that. */
   bool parity_c9_held;
   /* What R8 answered at C0=R0, which is where ch. 11.9 asks it and a
      microsecond before the line it decides could begin. */
@@ -1151,7 +1162,10 @@ typedef struct crtc_t {
      the clock after that one as well (ch. 13.3, note 3). Two rooms, because
      on a line of one character a type 1's write reaches the end taken a
      character before the one standing: the first holds the end just taken,
-     the second the one before it. */
+     the second the one before it. A host that copies the chip together with
+     its rooms points the copy at its own by this field, which keeps what they
+     keep; crtc_give_line_end_rooms is for rooms that hold nothing of the
+     chip's. */
   struct crtc_t *line_end_rooms;
   bool a_line_end_is_kept;
   bool the_line_end_before_is_kept;
@@ -1203,10 +1217,13 @@ typedef struct crtc_t {
   bool display_r1_earlier[2];
   bool display_r6;
   /* And the same condition as the type 1 status register reports it, which
-     turns over a character earlier than the border itself is thrown: "bit 5
-     of the Status register is updated when C0=R0" (ch. 21.3.3), where the
-     border belongs to the line it is drawn on. The two are kept apart so
-     that reading the port cannot move the picture. */
+     turns over at a line's head with C9 at 0, on the tick the border is
+     thrown or lifted there, and nowhere else: an R6 written onto C4 inside a
+     line throws the border and leaves the bit. Ch. 21.3.3's sentence has the
+     bit "updated when C0=R0", a character sooner; its two diagrams have the
+     change seen first by the read that lands on C0=0, and those are
+     followed. The two are kept apart so that reading the port cannot move
+     the picture. */
   bool status_border_r6;
   /* The line ran its length. Only the C0 that returns to 0 from R0 opens the
      display again — one that got there by overflowing 255 does not (ch.
