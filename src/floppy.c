@@ -40,6 +40,15 @@ static floppy_track_t *track_at(floppy_t *floppy, uint8_t cylinder, uint8_t side
   return &floppy->tracks[cylinder][side];
 }
 
+static void grow_to_hold(floppy_t *floppy, uint8_t cylinder, uint8_t side) {
+  if (cylinder >= floppy->cylinders) {
+    floppy->cylinders = (uint8_t)(cylinder + 1);
+  }
+  if (side >= floppy->sides) {
+    floppy->sides = (uint8_t)(side + 1);
+  }
+}
+
 bool floppy_add_track(floppy_t *floppy, uint8_t cylinder, uint8_t side, uint32_t image_offset,
                       uint32_t room, uint8_t gap, uint8_t filler) {
   floppy_track_t *track = track_at(floppy, cylinder, side);
@@ -57,12 +66,7 @@ bool floppy_add_track(floppy_t *floppy, uint8_t cylinder, uint8_t side, uint32_t
   track->length = FLOPPY_BYTES_PER_REVOLUTION;
   track->image_offset = image_offset;
   track->room = room;
-  if (cylinder >= floppy->cylinders) {
-    floppy->cylinders = (uint8_t)(cylinder + 1);
-  }
-  if (side >= floppy->sides) {
-    floppy->sides = (uint8_t)(side + 1);
-  }
+  grow_to_hold(floppy, cylinder, side);
   return true;
 }
 
@@ -426,7 +430,7 @@ bool floppy_format_track(floppy_t *floppy, uint8_t cylinder, uint8_t side,
                          const uint8_t (*identities)[FLOPPY_IDENTITY_BYTES], uint8_t count,
                          uint8_t size_code, uint8_t gap, uint8_t filler) {
   floppy_track_t *track = track_at(floppy, cylinder, side);
-  if (floppy->write_protected || track == NULL || !track->formatted || count > FLOPPY_MAX_SECTORS) {
+  if (floppy->write_protected || track == NULL || count > FLOPPY_MAX_SECTORS) {
     return false;
   }
   uint32_t field_length = floppy_sector_length(size_code);
@@ -441,6 +445,7 @@ bool floppy_format_track(floppy_t *floppy, uint8_t cylinder, uint8_t side,
     track->room = (uint32_t)needed;
     floppy->image_length += (size_t)needed;
   }
+  track->formatted = true;
   track->unreadable = false;
   track->sector_count = 0;
   track->gap = gap;
@@ -463,6 +468,7 @@ bool floppy_format_track(floppy_t *floppy, uint8_t cylinder, uint8_t side,
     offset += field_length;
     track->sectors[track->sector_count++] = sector;
   }
+  grow_to_hold(floppy, cylinder, side);
   floppy_layout_track(floppy, cylinder, side);
   floppy->modified = true;
   return true;

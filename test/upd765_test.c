@@ -590,6 +590,40 @@ static void a_track_formats_from_the_index(void) {
   TEST_EQUAL(data[511], 0xE5);
 }
 
+/* Format a Track writes an entire track from the index, and the
+   datasheet sets NW only for the drive's write-protect signal. */
+static void a_track_never_formatted_takes_a_format(void) {
+  power_on();
+  begin_image(2);
+  begin_track(0);
+  add_sector(0, 0xC1, 2, 0, 0, 512, 0x11);
+  end_track();
+  image[0x34 + track_count++] = 0; /* cylinder 1 was never formatted */
+  TEST_CHECK(dsk_read(&floppy, image, image_length, &problem));
+  floppy_give_room(&floppy, sizeof image);
+  drive_insert(&drive_a, &floppy);
+  drive_a.cylinder = 1;
+  send(amsdos_specify, sizeof amsdos_specify);
+  uint8_t command[6] = {0x4D, 0x00, 0x02, 0x02, 0x52, 0xE5};
+  const uint8_t identities[8] = {1, 0, 0x41, 2, 1, 0, 0x42, 2};
+  send(command, 6);
+  uint8_t none[1];
+  TEST_EQUAL(execute(none, 0, identities, sizeof identities, NULL, 0), 8);
+  uint8_t result[7];
+  TEST_EQUAL(collect(result, sizeof result), 7);
+  TEST_EQUAL(result[0], UPD765_ST0_NORMAL);
+  TEST_EQUAL(result[1], 0);
+
+  uint8_t read[9] = {0x66, 0x00, 0x01, 0x00, 0x42, 0x02, 0x42, 0x2A, 0xFF};
+  send(read, 9);
+  uint8_t data[512] = {0};
+  TEST_EQUAL(execute(data, sizeof data, NULL, 0, NULL, 0), 512);
+  TEST_EQUAL(collect(result, sizeof result), 7);
+  TEST_EQUAL(result[1], UPD765_ST1_EN);
+  TEST_EQUAL(data[0], 0xE5);
+  TEST_EQUAL(data[511], 0xE5);
+}
+
 /* Seeks step the drive on the chip's own time, at the rate Specify set,
    and end in an interrupt that Sense Interrupt Status collects. Asked too
    soon, it has nothing to say and is an invalid command. */
@@ -1026,6 +1060,7 @@ int main(void) {
   TEST_RUN(a_write_lands_on_the_disc);
   TEST_RUN(a_protected_disc_is_not_writeable);
   TEST_RUN(a_track_formats_from_the_index);
+  TEST_RUN(a_track_never_formatted_takes_a_format);
   TEST_RUN(a_seek_steps_at_the_specified_rate);
   TEST_RUN(recalibrate_gives_up_after_77_steps);
   TEST_RUN(sense_drive_status_reads_the_lines);

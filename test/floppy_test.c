@@ -163,7 +163,7 @@ static void the_original_format_allots_every_sector_the_same_room(void) {
   TEST_EQUAL(bytes[0], 0xBB);
 }
 
-static void an_unformatted_track_takes_up_no_room(void) {
+static void build_with_an_unformatted_cylinder(void) {
   begin_image(true, 3, 1);
   begin_track(0, 0, 2);
   add_sector(0, 0, 0xC1, 2, 0, 0, 512, 0x11);
@@ -173,7 +173,10 @@ static void an_unformatted_track_takes_up_no_room(void) {
   begin_track(2, 0, 2);
   add_sector(2, 0, 0xC1, 2, 0, 0, 512, 0x33);
   end_track(true);
+}
 
+static void an_unformatted_track_takes_up_no_room(void) {
+  build_with_an_unformatted_cylinder();
   TEST_CHECK(read_it());
   TEST_CHECK(floppy_track_formatted(&floppy, 0, 0));
   TEST_CHECK(!floppy_track_formatted(&floppy, 1, 0));
@@ -1361,6 +1364,67 @@ static void a_format_may_take_room_past_the_image(void) {
   TEST_EQUAL(floppy_sector_count(&second, 1, 0), 2);
 }
 
+/* A track the image never had takes a format into room past the image,
+   when the host gave any, and comes through a write of the image. */
+static void a_track_never_formatted_takes_a_format(void) {
+  static uint8_t written[64 * 1024];
+  static floppy_t second;
+  build_with_an_unformatted_cylinder();
+  TEST_CHECK(read_it());
+  static const uint8_t identities[2][4] = {{1, 0, 0x41, 2}, {1, 0, 0x42, 2}};
+  TEST_CHECK(!floppy_format_track(&floppy, 1, 0, identities, 2, 2, 0x4E, 0xE5));
+  TEST_CHECK(!floppy_track_formatted(&floppy, 1, 0));
+  TEST_CHECK(!floppy.modified);
+  size_t before = floppy.image_length;
+  floppy_give_room(&floppy, before + 1024);
+  TEST_CHECK(floppy_format_track(&floppy, 1, 0, identities, 2, 2, 0x4E, 0xE5));
+  TEST_CHECK(floppy_track_formatted(&floppy, 1, 0));
+  TEST_EQUAL(floppy_sector_count(&floppy, 1, 0), 2);
+  const floppy_sector_t *first = floppy_sector(&floppy, 1, 0, 0);
+  TEST_CHECK(first != NULL && first->image_offset == before);
+  TEST_EQUAL(floppy_byte(&floppy, 1, 0, FLOPPY_TRACK_PREAMBLE + FLOPPY_DATA_FIELD, 0), 0xE5);
+  size_t needed = dsk_write(&floppy, written, sizeof written);
+  TEST_CHECK(dsk_read(&second, written, needed, &problem));
+  TEST_EQUAL(floppy_sector_count(&second, 1, 0), 2);
+  uint8_t bytes[512];
+  TEST_EQUAL(floppy_read(&second, 1, 0, 1, 0, 0, bytes, sizeof bytes), 512);
+  TEST_EQUAL(bytes[511], 0xE5);
+  TEST_EQUAL(floppy_read(&second, 2, 0, 0, 0, 0, bytes, sizeof bytes), 512);
+  TEST_EQUAL(bytes[0], 0x33);
+}
+
+/* A head reaches past the last cylinder or side an image holds; a track
+   formatted there, when the host gave room, makes the disc that much
+   larger, and comes through a write of the image. */
+static void a_format_past_the_disc_enlarges_it(void) {
+  static uint8_t written[64 * 1024];
+  static floppy_t second;
+  build_plain_extended();
+  TEST_CHECK(read_it());
+  static const uint8_t far_cylinder[1][4] = {{3, 0, 0x41, 2}};
+  static const uint8_t far_side[1][4] = {{0, 1, 0x41, 2}};
+  TEST_CHECK(!floppy_format_track(&floppy, 3, 0, far_cylinder, 1, 2, 0x4E, 0xE5));
+  TEST_CHECK(!floppy_format_track(&floppy, 0, 1, far_side, 1, 2, 0x4E, 0xE5));
+  TEST_EQUAL(floppy.cylinders, 2);
+  TEST_EQUAL(floppy.sides, 1);
+  floppy_give_room(&floppy, floppy.image_length + 1024);
+  TEST_CHECK(floppy_format_track(&floppy, 3, 0, far_cylinder, 1, 2, 0x4E, 0xE5));
+  TEST_CHECK(floppy_format_track(&floppy, 0, 1, far_side, 1, 2, 0x4E, 0xE5));
+  TEST_EQUAL(floppy.cylinders, 4);
+  TEST_EQUAL(floppy.sides, 2);
+  size_t needed = dsk_write(&floppy, written, sizeof written);
+  TEST_CHECK(dsk_read(&second, written, needed, &problem));
+  TEST_EQUAL(second.cylinders, 4);
+  TEST_EQUAL(second.sides, 2);
+  TEST_EQUAL(floppy_sector_count(&second, 3, 0), 1);
+  TEST_EQUAL(floppy_sector_count(&second, 0, 1), 1);
+  TEST_CHECK(!floppy_track_formatted(&second, 2, 0));
+  TEST_CHECK(!floppy_track_formatted(&second, 1, 1));
+  uint8_t bytes[512];
+  TEST_EQUAL(floppy_read(&second, 1, 0, 1, 0, 0, bytes, sizeof bytes), 512);
+  TEST_EQUAL(bytes[0], 0x21);
+}
+
 int main(void) {
   TEST_RUN(an_extended_image_reads_back_its_shape);
   TEST_RUN(the_original_format_allots_every_sector_the_same_room);
@@ -1412,5 +1476,7 @@ int main(void) {
   TEST_RUN(a_format_lays_out_the_length_it_wrote);
   TEST_RUN(nothing_behind_an_identity_reads_as_gap);
   TEST_RUN(a_format_may_take_room_past_the_image);
+  TEST_RUN(a_track_never_formatted_takes_a_format);
+  TEST_RUN(a_format_past_the_disc_enlarges_it);
   return TEST_REPORT("floppy");
 }

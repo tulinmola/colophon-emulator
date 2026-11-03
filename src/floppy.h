@@ -168,11 +168,12 @@ void floppy_give_room(floppy_t *floppy, size_t capacity);
 
 /* A reader adds a formatted track and then its sectors in the order they
  * pass under the head, then has the track laid out. A track never added is
- * unformatted. `image_offset` and `room` say where in the image the track's
- * data lives and how much of it a later format may use. All refuse rather
- * than exceed a fixed capacity or accept a sector whose readings fall
- * outside the image, or whose field is longer than a reading holds. A
- * sector added with no extent is given the one its reading implies. */
+ * unformatted until something formats it. `image_offset` and `room` say
+ * where in the image the track's data lives and how much of it a later
+ * format may use. All refuse rather than exceed a fixed capacity or accept
+ * a sector whose readings fall outside the image, or whose field is longer
+ * than a reading holds. A sector added with no extent is given the one its
+ * reading implies. */
 bool floppy_add_track(floppy_t *floppy, uint8_t cylinder, uint8_t side, uint32_t image_offset,
                       uint32_t room, uint8_t gap, uint8_t filler);
 bool floppy_add_sector(floppy_t *floppy, uint8_t cylinder, uint8_t side,
@@ -242,9 +243,12 @@ void floppy_data_written(floppy_t *floppy, uint8_t cylinder, uint8_t side, uint8
 
 /* Format a track: `count` sectors with the identities given, their data
  * fields `size_code` long whatever N each identity announces, filled with
- * `filler`, `gap` bytes apart. Refuses a write-protected disc, more sectors
- * than a track holds, or a track that fits neither the room it had nor the
- * room past the image, and then changes nothing. */
+ * `filler`, `gap` bytes apart. Refuses a write-protected disc, a cylinder
+ * or side past what the medium can hold, more sectors than a track holds,
+ * or a track that fits neither the room it had nor the room past the
+ * image, and then changes nothing. A track never formatted takes a format
+ * like any other, and a disc grows to hold one past its last cylinder or
+ * side. */
 bool floppy_format_track(floppy_t *floppy, uint8_t cylinder, uint8_t side,
                          const uint8_t (*identities)[FLOPPY_IDENTITY_BYTES], uint8_t count,
                          uint8_t size_code, uint8_t gap, uint8_t filler);
