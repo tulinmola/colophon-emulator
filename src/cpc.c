@@ -2,6 +2,7 @@
  * cpc.c — the machine wiring: memory map and I/O decode.
  */
 #include <stddef.h>
+#include <string.h>
 
 #include "cpc.h"
 
@@ -264,7 +265,7 @@ static bool syncs_follow_the_display(const cpc_t *cpc) {
    the interrupt keeps the cycle the sync's black ends in is our reading.
    Shaker's D (I), racing the interrupt against a DEC DE's last T-state, finds
    silicon's ASICs catching it where the other three types miss it, which is
-   what this gives (gate_array.c). Read on every character clock, as the type
+   what this gives (gate_array.h). Read on every character clock, as the type
    is. */
 static bool acts_on_a_sync_end_at_the_clock(const cpc_t *cpc) {
   return cpc->crtc.type == 3 || cpc->crtc.type == 4;
@@ -285,6 +286,13 @@ static bool acts_on_a_sync_end_at_the_clock(const cpc_t *cpc) {
    where this puts them; on the two ASICs they end a column or so later than
    here, which is not yet understood. */
 static uint8_t colour_write_reaches_sample(const cpc_t *cpc) { return cpc->crtc.type == 3 ? 4 : 8; }
+
+/* The redraw reads only the inks and the sources the draw fixed, so with the
+   inks as they were it would change nothing. */
+static bool an_ink_changed_since_the_character_was_drawn(const cpc_t *cpc) {
+  const uint8_t *inks = cpc->gate_array.inks;
+  return memcmp(cpc->character_held_inks, inks, sizeof cpc->character_held_inks) != 0;
+}
 
 /* Devices decode single address bits, so one access can reach several at
    once; every test in the two functions below is independent, and their
@@ -472,7 +480,9 @@ uint64_t cpc_tick(cpc_t *cpc) {
       uint8_t from = cpc->character_held_from < GATE_ARRAY_SAMPLES_PER_CHARACTER
                          ? cpc->character_held_from
                          : GATE_ARRAY_SAMPLES_PER_CHARACTER;
-      gate_array_redraw_with_colours_since(&cpc->gate_array, from, cpc->character_held);
+      if (an_ink_changed_since_the_character_was_drawn(cpc)) {
+        gate_array_redraw_with_colours_since(&cpc->gate_array, from, cpc->character_held);
+      }
       monitor_receive(&cpc->monitor, cpc->character_held + from,
                       (uint8_t)(GATE_ARRAY_SAMPLES_PER_CHARACTER - from),
                       cpc->character_held_csync);
@@ -491,6 +501,7 @@ uint64_t cpc_tick(cpc_t *cpc) {
                      (cpc->crtc_pins & CRTC_DISPTMG_SECOND_BYTE) != 0, cpc->character_held);
     cpc->character_held_from = colour_write_reaches_sample(cpc);
     cpc->character_held_csync = gate_array_csync(&cpc->gate_array);
+    memcpy(cpc->character_held_inks, cpc->gate_array.inks, sizeof cpc->character_held_inks);
     cpc->a_character_is_held = true;
     monitor_receive(&cpc->monitor, cpc->character_held, cpc->character_held_from,
                     cpc->character_held_csync);

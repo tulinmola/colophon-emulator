@@ -2,6 +2,7 @@
  * gate_array.c — the registers and the interrupt generator.
  */
 #include <stddef.h>
+#include <string.h>
 
 #include "gate_array.h"
 
@@ -99,9 +100,7 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
   gate_array->hsync_end_last_character = GATE_ARRAY_NO_HSYNC_END;
   if (gate_array->acts_on_a_sync_end_at_the_clock &&
       gate_array->hsync_end_to_act_on != GATE_ARRAY_NO_HSYNC_END) {
-    gate_array_hsync_end_t hsync_end = gate_array->hsync_end_to_act_on;
-    gate_array->hsync_end_to_act_on = GATE_ARRAY_NO_HSYNC_END;
-    act_on_hsync_end(gate_array, hsync_end);
+    gate_array_act_on_the_held_hsync_end(gate_array);
   }
 
   bool hsync_started = hsync && !gate_array->hsync_previous;
@@ -181,24 +180,10 @@ void gate_array_tick(gate_array_t *gate_array, bool hsync, bool vsync) {
   }
 }
 
-void gate_array_advance_phase(gate_array_t *gate_array) {
-  gate_array->cpu_phase = (uint8_t)((gate_array->cpu_phase + 1) & 3);
-  if (gate_array_character_clock(gate_array)) {
-    gate_array->interrupt_raised_this_microsecond = false;
-  }
-  /* On the character's second quarter, which is a NOP's T3 here. "The INT
-     signal of the Z80A is positioned at T3 level" (ch. 27.7.2), and an
-     instruction whose last T-state goes before it is not warned in time
-     and runs one more instruction first. Shaker's D (I) times a DEC DE,
-     whose last T-state falls on quarter 0, against a request raised in the
-     same microsecond, and prints the answer that misses it: #59, silicon's
-     value on CRTCs 0, 1 and 2. Types 3 and 4 give #58, the request raised a
-     quarter sooner on those two (cpc.c). */
-  if (gate_array->cpu_phase == 1 && gate_array->hsync_end_to_act_on != GATE_ARRAY_NO_HSYNC_END) {
-    gate_array_hsync_end_t hsync_end = gate_array->hsync_end_to_act_on;
-    gate_array->hsync_end_to_act_on = GATE_ARRAY_NO_HSYNC_END;
-    act_on_hsync_end(gate_array, hsync_end);
-  }
+void gate_array_act_on_the_held_hsync_end(gate_array_t *gate_array) {
+  gate_array_hsync_end_t hsync_end = gate_array->hsync_end_to_act_on;
+  gate_array->hsync_end_to_act_on = GATE_ARRAY_NO_HSYNC_END;
+  act_on_hsync_end(gate_array, hsync_end);
 }
 
 /* The acknowledge is heard where the processor's M1 ends: "the end of the M1
@@ -297,11 +282,10 @@ void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool di
     uint8_t *half_drawn_from =
         gate_array->drawn_from + (size_t)half * (GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
     if (blanked || !gate_array->latched_display[half]) {
-      uint8_t colour = blanked ? GATE_ARRAY_BLACK : gate_array->inks[16];
-      for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; sample++) {
-        half_samples[sample] = colour;
-        half_drawn_from[sample] = blanked ? GATE_ARRAY_UNLIT : 16;
-      }
+      memset(half_samples, blanked ? GATE_ARRAY_BLACK : gate_array->inks[16],
+             GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
+      memset(half_drawn_from, blanked ? GATE_ARRAY_UNLIT : 16,
+             GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
       continue;
     }
     /* The mode is a public field and a row index here: RMR keeps two bits of
@@ -309,10 +293,15 @@ void gate_array_video(gate_array_t *gate_array, bool display_first_byte, bool di
        default sent it. */
     uint8_t mode = gate_array->mode < 4 ? gate_array->mode : 3;
     const uint8_t *pens = pens_of_byte[mode][gate_array->latched_bytes[half]];
+    /* The caller's buffer might overlap the inks, for all the compiler can
+       tell, which holds it to storing each sample before it reads the next
+       one's ink. A local array cannot overlap them. */
+    uint8_t colours[GATE_ARRAY_SAMPLES_PER_CHARACTER / 2];
     for (uint8_t sample = 0; sample < GATE_ARRAY_SAMPLES_PER_CHARACTER / 2; sample++) {
-      half_samples[sample] = gate_array->inks[pens[sample]];
-      half_drawn_from[sample] = pens[sample];
+      colours[sample] = gate_array->inks[pens[sample]];
     }
+    memcpy(half_samples, colours, GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
+    memcpy(half_drawn_from, pens, GATE_ARRAY_SAMPLES_PER_CHARACTER / 2);
   }
   gate_array->latched_display[0] = display_first_byte;
   gate_array->latched_display[1] = display_second_byte;
@@ -331,11 +320,6 @@ void gate_array_redraw_with_colours_since(const gate_array_t *gate_array, uint8_
 void gate_array_shut_the_display(gate_array_t *gate_array) {
   gate_array->latched_display[0] = false;
   gate_array->latched_display[1] = false;
-}
-
-void gate_array_fetch(gate_array_t *gate_array, uint8_t byte0, uint8_t byte1) {
-  gate_array->latched_bytes[0] = byte0;
-  gate_array->latched_bytes[1] = byte1;
 }
 
 uint32_t gate_array_rgb(uint8_t colour_code) {

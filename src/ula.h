@@ -132,10 +132,12 @@ void ula_video(const ula_t *ula, uint8_t display, uint8_t attribute,
  * Gate Array's, the frame pulse is not serrated — the line pulses inside it
  * are simply absent, which is what a monitor timing itself from pulse
  * lengths has to be told to expect. */
-bool ula_csync(const ula_t *ula);
+static inline bool ula_csync(const ula_t *ula) {
+  return ula->line < ULA_VSYNC_LINES || ula->column < ULA_RETRACE_TICKS;
+}
 
 /* The interrupt line, held for the first ULA_INTERRUPT_TICKS of a frame. */
-bool ula_interrupt(const ula_t *ula);
+static inline bool ula_interrupt(const ula_t *ula) { return ula->frame_tick < ULA_INTERRUPT_TICKS; }
 
 /* T-states the chip would keep the bus from an access beginning at this
  * point in the frame; zero when it does not want the bus. Nothing else bears
@@ -153,7 +155,18 @@ uint8_t ula_contention(uint32_t frame_tick);
 void ula_write(ula_t *ula, uint8_t data);
 
 /* End this T-state and begin the next. */
-void ula_tick(ula_t *ula);
+static inline void ula_tick(ula_t *ula) {
+  if (++ula->frame_tick == ULA_TICKS_PER_FRAME) {
+    ula->frame_tick = 0;
+    ula->frame_count++;
+  }
+  if (++ula->column == ULA_TICKS_PER_LINE) {
+    ula->column = 0;
+    if (++ula->line == ULA_LINES_PER_FRAME) {
+      ula->line = 0;
+    }
+  }
+}
 
 /* The display file's address scramble, and the attribute that colours it.
  * `row` is a pixel row, 0 to 191; `column` a character column, 0 to 31. */

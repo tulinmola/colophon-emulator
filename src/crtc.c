@@ -1698,6 +1698,10 @@ static void begin_syncs(crtc_t *crtc) {
   begin_the_vsync(crtc, a_sync_is_in_progress);
 }
 
+static bool on_a_type_2s_hsyncs_last_character(const crtc_t *crtc) {
+  return crtc->type == 2 && crtc->hsync && ((crtc->c3l + 1) & 0x0F) == (crtc->registers[3] & 0x0F);
+}
+
 /* "The last character of the HSYNC is used to determine whether the current
    line must be considered as a last line for the following line ... At this
    position, if C4==R4 and C9==R9, then the 'Previous Last Line' state is
@@ -1727,7 +1731,7 @@ static void begin_syncs(crtc_t *crtc) {
    neither. */
 static void latch_the_previous_last_line(crtc_t *crtc) {
   const uint8_t *registers = crtc->registers;
-  if (crtc->type != 2 || !crtc->hsync || ((crtc->c3l + 1) & 0x0F) != (registers[3] & 0x0F)) {
+  if (!on_a_type_2s_hsyncs_last_character(crtc)) {
     return;
   }
   crtc->previous_last_line = crtc->c4 == registers[4] && crtc->c9 == registers[9];
@@ -2006,12 +2010,36 @@ static void decide_on_the_character(crtc_t *crtc) {
   throw_display_latches(crtc, stands_still_on_the_frame_head);
 }
 
+/* Whether the character meets none of the comparisons decide_on_the_character
+   makes, as most of a line's characters do. C0 past 3 is past the highest
+   constant a phase compares it with, begin_vertical_adjustment's R5 deadline;
+   the other conditions restate the phases' own, so a phase that comes to
+   compare anything else must be given its condition here. */
+static bool has_nothing_to_decide(const crtc_t *crtc) {
+  const uint8_t *registers = crtc->registers;
+  return crtc->c0 >= 4 && crtc->c0 != registers[0] && crtc->c0 != registers[1] &&
+         crtc->c0 != registers[2] && crtc->c4 != registers[6] &&
+         !(c4_stands_on_r7(crtc) && !crtc->vsync && !crtc->vsync_blocked) &&
+         !on_a_type_2s_hsyncs_last_character(crtc);
+}
+
 uint64_t crtc_tick(crtc_t *crtc) {
   crtc->offset_taken_where_c0_met_r1 = false;
   crtc->pointer_left_on_this_character = false;
   crtc->display_shut_since_the_tick = false;
   enter_character(crtc);
-  decide_on_the_character(crtc);
+  if (has_nothing_to_decide(crtc)) {
+    /* What the phases move on every character: settle_parity's frame-head
+       latch, the R7 write begin_syncs reads and throw_display_latches' R1
+       history. A phase that comes to move anything else on every character
+       must move it here too. */
+    crtc->stood_on_the_frame_head = false;
+    crtc->r7_was_written_in_the_hsync = false;
+    crtc->display_r1_earlier[1] = crtc->display_r1_earlier[0];
+    crtc->display_r1_earlier[0] = crtc->display_r1;
+  } else {
+    decide_on_the_character(crtc);
+  }
   /* Cleared after the phases rather than before them, a write being made
      between two ticks and read by the second of the two. */
   crtc->r3_written_for_this_character = false;

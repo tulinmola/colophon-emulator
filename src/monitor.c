@@ -59,8 +59,20 @@ void monitor_receive(monitor_t *monitor, const uint8_t *samples, uint8_t count, 
     if (monitor->beam_y < monitor->height && monitor->beam_x < monitor->width) {
       uint16_t room = (uint16_t)(monitor->width - monitor->beam_x);
       uint8_t painted = count < room ? count : (uint8_t)room;
-      memcpy(&monitor->framebuffer[(size_t)monitor->beam_y * monitor->width + monitor->beam_x],
-             samples, painted);
+      uint8_t *row = &monitor->framebuffer[(size_t)monitor->beam_y * monitor->width];
+      /* Two samples and eight are the runs that come most often. A copy
+         whose length the compiler knows is a few moves; one of any length is
+         a library call or a block-copy instruction, slower at these lengths. */
+      switch (painted) {
+        case 2:
+          memcpy(&row[monitor->beam_x], samples, 2);
+          break;
+        case 8:
+          memcpy(&row[monitor->beam_x], samples, 8);
+          break;
+        default:
+          memcpy(&row[monitor->beam_x], samples, painted);
+      }
     }
     monitor->beam_x = (uint16_t)(monitor->beam_x + count);
     return;

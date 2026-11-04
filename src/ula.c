@@ -100,12 +100,6 @@ void ula_video(const ula_t *ula, uint8_t display, uint8_t attribute,
   }
 }
 
-bool ula_csync(const ula_t *ula) {
-  return ula->line < ULA_VSYNC_LINES || ula->column < ULA_RETRACE_TICKS;
-}
-
-bool ula_interrupt(const ula_t *ula) { return ula->frame_tick < ULA_INTERRUPT_TICKS; }
-
 uint8_t ula_contention(uint32_t frame_tick) {
   /* Six T-states owed at the head of the slot, falling to none for the two
      the chip leaves the processor ("Contended memory"). */
@@ -136,17 +130,4 @@ uint32_t ula_rgb(uint8_t sample) {
   uint32_t green = (sample & 0x04) ? level : 0;
   uint32_t blue = (sample & 0x01) ? level : 0;
   return (red << 16) | (green << 8) | blue;
-}
-
-void ula_tick(ula_t *ula) {
-  if (++ula->frame_tick == ULA_TICKS_PER_FRAME) {
-    ula->frame_tick = 0;
-    ula->frame_count++;
-  }
-  if (++ula->column == ULA_TICKS_PER_LINE) {
-    ula->column = 0;
-    if (++ula->line == ULA_LINES_PER_FRAME) {
-      ula->line = 0;
-    }
-  }
 }

@@ -185,15 +185,36 @@ static inline bool gate_array_csync(const gate_array_t *gate_array) {
   return gate_array->sig_hsync != gate_array->sig_vsync;
 }
 
-/* Move on by one of the CPU's four cycles, counting an HSYNC end for the
- * interrupt generator on the second of them, where the chip is not set to
- * count it at the clock. */
-void gate_array_advance_phase(gate_array_t *gate_array);
-
 /* Whether a character clock falls on the cycle just reached — the moment
  * the CRTC is read and two bytes are fetched. */
 static inline bool gate_array_character_clock(const gate_array_t *gate_array) {
   return gate_array->cpu_phase == 0;
+}
+
+/* Count the HSYNC end held for the interrupt generator and let it go: what
+ * gate_array_advance_phase does on the second cycle, and gate_array_tick at
+ * the clock where the chip is set to. */
+void gate_array_act_on_the_held_hsync_end(gate_array_t *gate_array);
+
+/* Move on by one of the CPU's four cycles, counting an HSYNC end for the
+ * interrupt generator on the second of them, where the chip is not set to
+ * count it at the clock. */
+static inline void gate_array_advance_phase(gate_array_t *gate_array) {
+  gate_array->cpu_phase = (uint8_t)((gate_array->cpu_phase + 1) & 3);
+  if (gate_array_character_clock(gate_array)) {
+    gate_array->interrupt_raised_this_microsecond = false;
+  }
+  /* On the character's second quarter, which is a NOP's T3 here. "The INT
+     signal of the Z80A is positioned at T3 level" (ch. 27.7.2), and an
+     instruction whose last T-state goes before it is not warned in time
+     and runs one more instruction first. Shaker's D (I) times a DEC DE,
+     whose last T-state falls on quarter 0, against a request raised in the
+     same microsecond, and prints the answer that misses it: #59, silicon's
+     value on CRTCs 0, 1 and 2. Types 3 and 4 give #58, the request raised a
+     quarter sooner on those two (cpc.c). */
+  if (gate_array->cpu_phase == 1 && gate_array->hsync_end_to_act_on != GATE_ARRAY_NO_HSYNC_END) {
+    gate_array_act_on_the_held_hsync_end(gate_array);
+  }
 }
 
 /* READY, held on three cycles in four so that a CPU access can only finish
@@ -232,7 +253,10 @@ void gate_array_redraw_with_colours_since(const gate_array_t *gate_array, uint8_
 
 /* The two bytes read at the address the CRTC handed over with the flags,
  * held with them for the next gate_array_video. */
-void gate_array_fetch(gate_array_t *gate_array, uint8_t byte0, uint8_t byte1);
+static inline void gate_array_fetch(gate_array_t *gate_array, uint8_t byte0, uint8_t byte1) {
+  gate_array->latched_bytes[0] = byte0;
+  gate_array->latched_bytes[1] = byte1;
+}
 
 /* What the Gate Array's three-state RGB logic puts on the cable for a
  * hardware colour code, as 0xRRGGBB. */

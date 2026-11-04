@@ -147,12 +147,13 @@ typedef struct {
      (Compendium ch. 4.4.4), an OUTI's where one does. */
   bool crtc_write_awaits_the_clock;
   /* The character the Gate Array drew at the last clock, the sample from
-     which a colour written since still reaches it and that part of it is held
-     back from the monitor, and the composite sync it was drawn with
-     (Compendium ch. 9.2.2). */
+     which a colour written since still reaches it (Compendium ch. 9.2.2) and
+     that part of it is held back from the monitor, the composite sync it was
+     drawn with, and the inks it was drawn in. */
   uint8_t character_held[GATE_ARRAY_SAMPLES_PER_CHARACTER];
   uint8_t character_held_from;
   bool character_held_csync;
+  uint8_t character_held_inks[17];
   bool a_character_is_held;
   gate_array_t gate_array;
   monitor_t monitor;
