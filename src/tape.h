@@ -29,10 +29,10 @@ typedef struct {
 
 /* Where the pulses come from. Returns false when there is no next pulse —
  * because the tape has run out, or because it is marked to stop where it
- * stands. The deck cannot tell those apart and does not try: it stops, and
- * playing again asks the reader what comes next. A pulse of no T-states is
- * the same as no pulse, since a deck that timed one would never reach the
- * one behind it. */
+ * stands. The deck cannot tell those apart and does not try: it stops, lets
+ * the level fall low, and playing again asks the reader what comes next. A
+ * pulse of no T-states is the same as no pulse, since a deck that timed one
+ * would never reach the one behind it. */
 typedef bool (*tape_source)(void *reader, tape_pulse_t *pulse);
 
 typedef struct {
@@ -57,7 +57,8 @@ bool tape_playing(const tape_t *tape);
 
 void tape_tick(tape_t *tape);
 
-/* The level at the play head, low when there is no tape or it has run out. */
+/* The level at the play head, low when there is no tape or the reader has
+   had no next pulse to give. */
 bool tape_level(const tape_t *tape);
 
 #endif

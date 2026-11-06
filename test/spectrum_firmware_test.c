@@ -264,25 +264,32 @@ static void the_keyboard_types_what_is_printed_on_it(void) {
    and a whole tape is that twice over with a second of pause between. */
 #define MOST_FRAMES_TO_LOAD 700
 
-static void a_block_loads_through_the_roms_own_loader(void) {
+/* One headerless block: the flag a data block carries, sixteen bytes, and
+   the checksum the ROM will insist on, which is every byte before it
+   exclusive or'd together. Each test below wraps it differently. */
+#define BLOCK_BYTES 18
+static void fill_block(uint8_t *block) {
+  static const uint8_t bytes[BLOCK_BYTES - 1] = {0xFF, 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+                                                 'I',  'J', 'K', 'L', 'M', 'N', 'O', 'P'};
+  memcpy(block, bytes, sizeof bytes);
+  block[BLOCK_BYTES - 1] = 0;
+  for (size_t index = 0; index + 1 < BLOCK_BYTES; index++) {
+    block[BLOCK_BYTES - 1] ^= block[index];
+  }
+}
+
+/* Play an image to LD-BYTES and hold it to the block coming back whole. */
+static void the_rom_loads_the_block_from(const uint8_t *image, uint32_t length) {
   if (!power_on()) {
     return;
   }
-  /* One headerless block: the flag a data block carries, sixteen bytes, and
-     the checksum the ROM will insist on. */
-  static uint8_t image[] = {0x12, 0x00, 0xFF, 'A', 'B', 'C', 'D', 'E', 'F', 'G',
-                            'H',  'I',  'J',  'K', 'L', 'M', 'N', 'O', 'P', 0x00};
-  uint8_t checksum = 0;
-  for (size_t index = 2; index + 1 < sizeof image; index++) {
-    checksum ^= image[index];
-  }
-  image[sizeof image - 1] = checksum;
+  uint8_t block[BLOCK_BYTES];
+  fill_block(block);
 
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, (uint32_t)sizeof image, SPECTRUM_TICKS_PER_MILLISECOND,
-                TZX_SPECTRUM, &problem)) {
+  if (!tzx_open(&reader, image, length, SPECTRUM_TICKS_PER_MILLISECOND, TZX_SPECTRUM, &problem)) {
     TEST_FAIL("the tape was refused: %s", problem);
     return;
   }
@@ -313,13 +320,56 @@ static void a_block_loads_through_the_roms_own_loader(void) {
   }
   TEST_CHECK((spectrum.cpu.f & Z80_FLAG_C) != 0); /* the block arrived whole */
   for (int index = 0; index < 16; index++) {
-    uint8_t want = image[3 + index];
+    uint8_t want = block[1 + index];
     uint8_t got = spectrum_peek(&spectrum, (uint16_t)(0x9000 + index));
     if (got != want) {
       TEST_FAIL("byte %d of the block loaded as &%02X, not &%02X", index, got, want);
       return;
     }
   }
+}
+
+static void a_block_loads_through_the_roms_own_loader(void) {
+  static uint8_t image[2 + BLOCK_BYTES] = {BLOCK_BYTES, 0x00};
+  fill_block(image + 2);
+  the_rom_loads_the_block_from(image, sizeof image);
+}
+
+#define TZX_HEAD 'Z', 'X', 'T', 'a', 'p', 'e', '!', 0x1A, 1, 20
+
+/* The shape most images of Speedlock tapes give a block: its leader written
+   as a loop of short tones, and its syncs and data as blocks of their own.
+   Ten passes of 322 pulses make a leader of 3220, the ROM's own length for
+   data near enough. Played once it would be over inside the second LD-BYTES
+   waits, after the first edge it hears, before it starts counting a leader. */
+static void a_leader_written_as_a_loop_loads_through_the_roms_own_loader(void) {
+  static uint8_t image[] = {
+      TZX_HEAD,    0x24, 0x0A, 0x00,             /* loop, ten passes */
+      0x12,        0x78, 0x08, 0x42, 0x01,       /* a tone of 322 pulses of 2168 */
+      0x25,                                      /* loop end */
+      0x13,        0x02, 0x9B, 0x02, 0xDF, 0x02, /* two syncs, 667 and 735 */
+      0x14,        0x57, 0x03, 0xAE, 0x06,       /* pure data: bits of 855 and 1710 */
+      0x08,        0xE8, 0x03,                   /* every bit of the last byte, a second's pause */
+      BLOCK_BYTES, 0x00, 0x00,                   /* the block's length */
+      0,           0,    0,    0,    0,    0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  };
+  fill_block(image + sizeof image - BLOCK_BYTES);
+  the_rom_loads_the_block_from(image, sizeof image);
+}
+
+/* A block asking for no pause and then a stop, which is how some images of
+   Speedlock 4 tapes end their parts. With a data block's 3223 pilot pulses,
+   two syncs and an even number of bit pulses, the last pulse is low, and the
+   edge that ends it is the last bit's second: the reader has to give it
+   before the stop, or LD-BYTES waits for it in vain. */
+static void a_block_ending_low_before_a_stop_loads_through_the_roms_own_loader(void) {
+  static uint8_t image[] = {
+      TZX_HEAD, 0x10, 0x00, 0x00, BLOCK_BYTES, 0x00, /* a standard block, no pause */
+      0,        0,    0,    0,    0,           0,    0, 0,    0,    0,    0,
+      0,        0,    0,    0,    0,           0,    0, 0x20, 0x00, 0x00, /* and a stop */
+  };
+  fill_block(image + 10 + 5);
+  the_rom_loads_the_block_from(image, sizeof image);
 }
 
 /* The whole path a person takes: type LOAD "" at the prompt, press PLAY,
@@ -453,6 +503,8 @@ int main(int argc, char **argv) {
   TEST_RUN(basic_does_arithmetic_it_is_typed);
   TEST_RUN(the_keyboard_types_what_is_printed_on_it);
   TEST_RUN(a_block_loads_through_the_roms_own_loader);
+  TEST_RUN(a_leader_written_as_a_loop_loads_through_the_roms_own_loader);
+  TEST_RUN(a_block_ending_low_before_a_stop_loads_through_the_roms_own_loader);
   TEST_RUN(a_program_loads_off_a_tape_and_runs);
   TEST_RUN(beep_1_0_plays_middle_c);
   return TEST_REPORT("spectrum firmware");

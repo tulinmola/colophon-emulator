@@ -10,7 +10,14 @@
  *   https://worldofspectrum.net/TZXformat.html — the signature, each block's
  *   layout, and the standard ROM timings tabulated in block ID 11: pilot
  *   pulses of 2168 T-states, 8063 of them before a header and 3223 before
- *   data, syncs of 667 and 735, bits of 855 and 1710, a second of pause.
+ *   data, syncs of 667 and 735, bits of 855 and 1710, a second of pause; and
+ *   the loop blocks' own words, quoted where each is tested.
+ * - libspectrum's tape tests (Philip Kendall and others, Fuse),
+ *   https://sourceforge.net/p/fuse-emulator/libspectrum/ci/master/tree/test/
+ *   — loop.tzx, loop2.tzx and loopend.tzx, and the bugs `tape.c` there names
+ *   them for, #113 and #118. Copied byte for byte; what we kept is that the
+ *   first two play to their end, and what we changed is the third, which is
+ *   refused here.
  */
 #include <string.h>
 
@@ -68,6 +75,16 @@ static void the_pause_reads(uint32_t milliseconds) {
   TEST_CHECK(tzx_next_pulse(&reader, &silence));
   TEST_EQUAL(silence.ticks, (milliseconds - 1) * TICKS_PER_MILLISECOND);
   TEST_CHECK(!silence.level); /* and then the silence, which is low */
+}
+
+/* A tape that stops or runs out on a low pulse holds the other level for the
+   same millisecond, so that pulse has the edge that ends it, and only then
+   falls quiet. */
+static void the_last_edge_is_finished(void) {
+  tape_pulse_t edge = {0, false};
+  TEST_CHECK(tzx_next_pulse(&reader, &edge));
+  TEST_EQUAL(edge.ticks, 1 * TICKS_PER_MILLISECOND);
+  TEST_CHECK(edge.level);
 }
 
 static bool next_level(void) {
@@ -205,6 +222,7 @@ static void a_tone_is_one_length_repeated(void) {
   for (int pulse = 0; pulse < 5; pulse++) {
     TEST_EQUAL(next(), 1000);
   }
+  the_last_edge_is_finished(); /* the fifth pulse was low */
   TEST_EQUAL(next(), 0);
 }
 
@@ -214,6 +232,7 @@ static void a_sequence_gives_every_pulse_its_own_length(void) {
   TEST_EQUAL(next(), 10);
   TEST_EQUAL(next(), 20);
   TEST_EQUAL(next(), 30);
+  the_last_edge_is_finished();
   TEST_EQUAL(next(), 0);
 }
 
@@ -286,6 +305,7 @@ static void a_block_that_only_describes_is_stepped_over(void) {
                           0x12, 0xE8, 0x03, 0x01, 0x00};
   open_image(more, sizeof more);
   TEST_EQUAL(next(), 1000);
+  the_last_edge_is_finished();
   TEST_EQUAL(next(), 0);
 }
 
@@ -398,6 +418,7 @@ static void the_walk_reaches_the_end_of_the_widest_block(void) {
 
   open_image(image, at);
   TEST_EQUAL(next(), 1000); /* the tone behind two thousand silent bytes */
+  the_last_edge_is_finished();
   TEST_EQUAL(next(), 0);
 }
 
@@ -523,6 +544,7 @@ static void an_element_of_no_length_is_passed_over(void) {
   const uint8_t tone[] = {TZX_HEAD, 0x12, 0x00, 0x00, 0xFF, 0xFF, 0x12, 0xE8, 0x03, 0x01, 0x00};
   open_image(tone, sizeof tone);
   TEST_EQUAL(next(), 1000);
+  the_last_edge_is_finished();
   TEST_EQUAL(next(), 0);
 
   /* And a pilot of the same, which is counted the same way. */
@@ -591,8 +613,224 @@ static void a_stopped_tape_carries_on_when_it_is_played_again(void) {
   const uint8_t tone[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00};
   open_image(tone, sizeof tone);
   TEST_EQUAL(next(), 1000);
+  the_last_edge_is_finished();
   TEST_EQUAL(next(), 0);
   TEST_EQUAL(next(), 0);
+}
+
+/* The deck lets the line fall low when there is no next pulse, so a low last
+   pulse would never see the edge that ends it, and a loader timing edges
+   would never read its last bit. The millisecond a pause begins with is held
+   here too: "to ensure that the last edge produced is properly finished".
+   Some images of Speedlock 4 tapes — the first part of Freddy Hardest's among
+   them — end on exactly this, a block asking for no pause and then a stop. */
+static void a_stop_finishes_the_last_edge_first(void) {
+  const uint8_t low_then_stop[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00, 0x20,
+                                   0x00,     0x00, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  open_image(low_then_stop, sizeof low_then_stop);
+  TEST_CHECK(!next_level()); /* one pulse, low */
+  the_last_edge_is_finished();
+  TEST_EQUAL(next(), 0); /* and then the stop */
+  /* Played again, it starts low: "An emulator should put the 'current pulse
+     level' to 'low' when starting to play a TZX file, either from the start or
+     from a certain position". */
+  TEST_CHECK(!next_level());
+
+  /* A high last pulse is ended by the deck's own fall, and the tape stops at
+     once. */
+  const uint8_t high_then_stop[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x02, 0x00, 0x20,
+                                    0x00,     0x00, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  open_image(high_then_stop, sizeof high_then_stop);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 0);
+  TEST_EQUAL(next(), 1000);
+
+  /* An Amstrad's tape ends the same way, at its own clock. */
+  const uint8_t low_then_end[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  open_image_for(low_then_end, sizeof low_then_end, 4000, TZX_AMSTRAD);
+  TEST_EQUAL(next(), 1142);
+  TEST_EQUAL(next(), 4000);
+  TEST_EQUAL(next(), 0);
+}
+
+/* --- loops --- */
+
+/* "This block is the same as the FOR statement in BASIC", and its end will
+   "jump back to the start of the loop if it hasn't been run for the
+   specified number of times". */
+static void a_loop_plays_its_blocks_as_many_times_as_it_asks(void) {
+  const uint8_t three[] = {TZX_HEAD, 0x24, 0x03, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00, 0x13,
+                           0x01,     0xD0, 0x07, 0x25, 0x12, 0xB8, 0x0B, 0x01, 0x00};
+  open_image(three, sizeof three);
+  for (int pass = 0; pass < 3; pass++) {
+    TEST_EQUAL(next(), 1000);
+    TEST_EQUAL(next(), 2000);
+  }
+  TEST_EQUAL(next(), 3000); /* and the block behind the loop, once */
+  the_last_edge_is_finished();
+  TEST_EQUAL(next(), 0);
+
+  /* The format asks for more than one pass; one is played once. */
+  const uint8_t one[] = {TZX_HEAD, 0x24, 0x01, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00, 0x25};
+  open_image(one, sizeof one);
+  TEST_EQUAL(next(), 1000);
+  the_last_edge_is_finished();
+  TEST_EQUAL(next(), 0);
+}
+
+/* "For simplicity reasons don't nest loop blocks!", and a loop asks for a
+   "Number of repetitions (greater than 1)". A loop the format gives no
+   meaning is refused rather than given one here. */
+static void a_loop_the_format_forbids_is_refused(void) {
+  const uint8_t nested[] = {TZX_HEAD, 0x24, 0x02, 0x00, 0x24, 0x02, 0x00,
+                            0x12,     0xE8, 0x03, 0x01, 0x00, 0x25, 0x25};
+  TEST_CHECK(refused_for(nested, sizeof nested, "inside another"));
+  const uint8_t no_passes[] = {TZX_HEAD, 0x24, 0x00, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00, 0x25};
+  TEST_CHECK(refused_for(no_passes, sizeof no_passes, "no passes"));
+  const uint8_t never_ended[] = {TZX_HEAD, 0x24, 0x02, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  TEST_CHECK(refused_for(never_ended, sizeof never_ended, "never ends"));
+  const uint8_t never_begun[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00, 0x25};
+  TEST_CHECK(refused_for(never_begun, sizeof never_begun, "never began"));
+  const uint8_t cut[] = {TZX_HEAD, 0x24, 0x02};
+  TEST_CHECK(refused_for(cut, sizeof cut, "runs off the end"));
+
+  /* Two loops one after the other are two loops, not one inside the other. */
+  const uint8_t in_a_row[] = {TZX_HEAD, 0x24, 0x02, 0x00, 0x25, 0x24, 0x02, 0x00, 0x25};
+  TEST_CHECK(refusal_of(in_a_row, sizeof in_a_row) == NULL);
+
+  /* And the blocks that send the tape elsewhere are still refused. */
+  const uint8_t jump[] = {TZX_HEAD, 0x23, 0x02, 0x00};
+  TEST_CHECK(refused_for(jump, sizeof jump, "elsewhere"));
+}
+
+/* A pass that gives the deck nothing would give it nothing every time, so the
+   passes behind it are not walked. Walked, 65535 passes over a block of text
+   would spend the walk's whole bound and end the tape where it stands, with
+   the tone behind the loop never heard. */
+static void a_loop_that_gives_nothing_is_passed_over(void) {
+  const uint8_t silent[] = {TZX_HEAD, 0x24, 0xFF, 0xFF, 0x30, 0x04, 'n',  'o',
+                            't',      'e',  0x25, 0x12, 0xE8, 0x03, 0x02, 0x00};
+  open_image(silent, sizeof silent);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 0);
+
+  /* Each loop is judged on its own passes, not on the pulse in front of it:
+     counted as a pass that sounded, the first silent pass here would be walked
+     again, and a body of two thousand silent bytes walked twice is more than
+     the walk allows. */
+  static uint8_t after_a_pulse[2100];
+  static const uint8_t head[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00, 0x24, 0xFF, 0xFF};
+  const uint32_t data_length = 2000;
+  memcpy(after_a_pulse, head, sizeof head);
+  uint32_t at = sizeof head;
+  const uint8_t silent_data[] = {0x14,
+                                 0x00,
+                                 0x00,
+                                 0x00,
+                                 0x00,
+                                 0x08,
+                                 0x00,
+                                 0x00,
+                                 (uint8_t)data_length,
+                                 (uint8_t)(data_length >> 8),
+                                 0x00};
+  memcpy(after_a_pulse + at, silent_data, sizeof silent_data);
+  at += (uint32_t)sizeof silent_data;
+  memset(after_a_pulse + at, 0xA5, data_length);
+  at += data_length;
+  const uint8_t end_and_tone[] = {0x25, 0x12, 0xB8, 0x0B, 0x02, 0x00};
+  memcpy(after_a_pulse + at, end_and_tone, sizeof end_and_tone);
+  at += (uint32_t)sizeof end_and_tone;
+  open_image(after_a_pulse, at);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 3000); /* the tone behind the loop, with no stop before it */
+  TEST_EQUAL(next(), 3000);
+  the_last_edge_is_finished();
+  TEST_EQUAL(next(), 0);
+}
+
+/* A stop inside a loop stands where it is, and the loop carries on from there
+   when the tape is played again: the head has not moved. */
+static void a_stop_inside_a_loop_carries_on_inside_it(void) {
+  const uint8_t image[] = {TZX_HEAD, 0x24, 0x02, 0x00, 0x12, 0xE8, 0x03, 0x02, 0x00,
+                           0x20,     0x00, 0x00, 0x25, 0x12, 0xB8, 0x0B, 0x02, 0x00};
+  open_image(image, sizeof image);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 0); /* the first pass stops */
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 0); /* and so does the second */
+  TEST_EQUAL(next(), 3000);
+  TEST_EQUAL(next(), 3000);
+  TEST_EQUAL(next(), 0);
+
+  /* A pass that only stops has still given the deck something, and the next
+     pass stops it again. */
+  const uint8_t only_stops[] = {TZX_HEAD, 0x24, 0x02, 0x00, 0x20, 0x00, 0x00,
+                                0x25,     0x12, 0xB8, 0x0B, 0x02, 0x00};
+  open_image(only_stops, sizeof only_stops);
+  TEST_EQUAL(next(), 0);
+  TEST_EQUAL(next(), 0);
+  TEST_EQUAL(next(), 3000);
+}
+
+/* The walk's bound holds across a loop's return: from the last pulse of one
+   pass to the first of the next is the end of the pass and its start, never
+   the same block twice. Here that is two thousand silent bytes between them. */
+static void the_walk_reaches_round_a_loop_to_its_next_pulse(void) {
+  static uint8_t image[2100];
+  static const uint8_t head[] = {TZX_HEAD, 0x24, 0x02, 0x00};
+  const uint32_t data_length = 2000;
+  memcpy(image, head, sizeof head);
+  uint32_t at = sizeof head;
+  const uint8_t tone[] = {0x12, 0xE8, 0x03, 0x01, 0x00};
+  memcpy(image + at, tone, sizeof tone);
+  at += (uint32_t)sizeof tone;
+  image[at++] = 0x14;
+  image[at++] = 0x00;
+  image[at++] = 0x00; /* a zero bit cell of no length */
+  image[at++] = 0x00;
+  image[at++] = 0x00; /* and a one of the same */
+  image[at++] = 0x08;
+  image[at++] = 0x00;
+  image[at++] = 0x00; /* no pause */
+  image[at++] = (uint8_t)data_length;
+  image[at++] = (uint8_t)(data_length >> 8);
+  image[at++] = (uint8_t)(data_length >> 16);
+  memset(image + at, 0xA5, data_length);
+  at += data_length;
+  image[at++] = 0x25;
+
+  open_image(image, at);
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 1000); /* the second pass, round the silent bytes */
+  TEST_EQUAL(next(), 0);
+}
+
+/* The three loop images libspectrum keeps for the bugs its own reader once
+   had, byte for byte. Two play here as they do there; the third is a loop end
+   with no start, which libspectrum steps over and this reader refuses. */
+static void libspectrums_loop_images(void) {
+  /* loop.tzx, bug #113: a loop of two passes around nothing. */
+  const uint8_t empty[] = {TZX_HEAD, 0x24, 0x02, 0x00, 0x25};
+  open_image(empty, sizeof empty);
+  TEST_EQUAL(next(), 0);
+
+  /* loop2.tzx, bug #118: two passes of a tone of 185 pulses of 837 T-states. */
+  const uint8_t tone[] = {TZX_HEAD, 0x24, 0x02, 0x00, 0x12, 0x45, 0x03, 0xB9, 0x00, 0x25};
+  open_image(tone, sizeof tone);
+  int pulses = 0;
+  while (next() == 837 && pulses < MOST_PILOT_PULSES) {
+    pulses++;
+  }
+  TEST_EQUAL(pulses, 370);
+
+  /* loopend.tzx, bug #113. */
+  const uint8_t end_alone[] = {TZX_HEAD, 0x25};
+  TEST_CHECK(refused_for(end_alone, sizeof end_alone, "never began"));
 }
 
 /* The millisecond in front of a pause is there to finish the block's last
@@ -669,6 +907,13 @@ int main(void) {
   TEST_RUN(the_bits_in_a_last_byte_are_one_to_eight);
   TEST_RUN(an_element_of_no_length_is_passed_over);
   TEST_RUN(a_stopped_tape_carries_on_when_it_is_played_again);
+  TEST_RUN(a_stop_finishes_the_last_edge_first);
+  TEST_RUN(a_loop_plays_its_blocks_as_many_times_as_it_asks);
+  TEST_RUN(a_loop_the_format_forbids_is_refused);
+  TEST_RUN(a_loop_that_gives_nothing_is_passed_over);
+  TEST_RUN(a_stop_inside_a_loop_carries_on_inside_it);
+  TEST_RUN(the_walk_reaches_round_a_loop_to_its_next_pulse);
+  TEST_RUN(libspectrums_loop_images);
   TEST_RUN(a_pause_of_one_millisecond_is_the_edge_it_finishes);
   TEST_RUN(a_pause_on_a_low_line_is_silence_and_nothing_else);
   TEST_RUN(a_data_block_asking_for_no_pause_runs_straight_on);

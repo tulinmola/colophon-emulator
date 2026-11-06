@@ -85,6 +85,10 @@ static uint32_t block_span(const uint8_t *image, uint32_t length, uint32_t at) {
       return left < 1 ? BLOCK_CUT_SHORT : 1u + 1 + body[0];
     case 0x22:
       return 1;
+    case 0x24:
+      return left < 2 ? BLOCK_CUT_SHORT : 1 + 2;
+    case 0x25:
+      return 1;
     case 0x2A:
     case 0x2B: {
       /* Added after v1.10, so each carries its own: "ALL custom blocks that
@@ -132,12 +136,10 @@ static const char *refusal_for_block(uint8_t id) {
     case 0x19:
       return "records its data as a table of symbols, which this reader does not build";
     case 0x23:
-    case 0x24:
-    case 0x25:
     case 0x26:
     case 0x27:
     case 0x28:
-      return "sends the tape backwards or asks a question, and its blocks would be "
+      return "sends the tape elsewhere or asks a question, and its blocks would be "
              "played in the wrong order";
     default:
       return "is a block this reader does not know, and its length with it";
@@ -161,8 +163,29 @@ static bool last_byte_carries_whole_bits(const uint8_t *body, uint8_t id) {
   return data_length == 0 || (bits > 0 && bits <= 8);
 }
 
+/* The format asks for more than one pass, but the rule that plays every other
+   count plays one once, with nothing left to guess. */
+static const char *refusal_for_loop(uint8_t id, const uint8_t *body, bool *in_loop) {
+  if (id == 0x24) {
+    if (*in_loop) {
+      return "begins a loop inside another, which the format forbids";
+    }
+    if (two_bytes_at(body, 0) == 0) {
+      return "has a loop that asks for no passes";
+    }
+    *in_loop = true;
+  } else if (id == 0x25) {
+    if (!*in_loop) {
+      return "ends a loop it never began";
+    }
+    *in_loop = false;
+  }
+  return NULL;
+}
+
 static bool walk_tzx(const uint8_t *image, uint32_t length, const char **problem) {
   uint32_t at = HEADER_SIZE;
+  bool in_loop = false;
   while (at < length) {
     const uint8_t id = image[at];
     const uint32_t span = block_span(image, length, at);
@@ -179,7 +202,16 @@ static bool walk_tzx(const uint8_t *image, uint32_t length, const char **problem
       *problem = "has a data block whose last byte carries no whole number of bits";
       return false;
     }
+    const char *loop_problem = refusal_for_loop(id, body, &in_loop);
+    if (loop_problem != NULL) {
+      *problem = loop_problem;
+      return false;
+    }
     at += span;
+  }
+  if (in_loop) {
+    *problem = "begins a loop it never ends";
+    return false;
   }
   return true;
 }
@@ -315,6 +347,24 @@ static void take_up_block(tzx_t *tzx) {
         tzx->phase = tzx->machine == TZX_AMSTRAD ? PHASE_BETWEEN_BLOCKS : PHASE_STOPPED;
       }
       break;
+    case 0x24: /* the head of a loop; its first pass starts with the block behind */
+      tzx->loop_at = tzx->block_at;
+      tzx->loop_passes_left = two_bytes_at(body, 0);
+      tzx->loop_pass_reached_the_deck = false;
+      tzx->phase = PHASE_BETWEEN_BLOCKS;
+      break;
+    case 0x25:
+      /* A pass that gave the deck nothing holds no block that plays, so every
+         pass after it would give nothing too, and they are not walked: a loop
+         of 65535 passes over a block of text would otherwise spend more steps
+         than the walk below allows. */
+      tzx->loop_passes_left--;
+      if (tzx->loop_passes_left > 0 && tzx->loop_pass_reached_the_deck) {
+        tzx->block_at = tzx->loop_at;
+        tzx->loop_pass_reached_the_deck = false;
+      }
+      tzx->phase = PHASE_BETWEEN_BLOCKS;
+      break;
     case 0x2A: /* "stop the tape if in 48K mode", which an Amstrad ignores */
       tzx->phase = tzx->machine == TZX_AMSTRAD ? PHASE_BETWEEN_BLOCKS : PHASE_STOPPED;
       break;
@@ -359,15 +409,19 @@ static bool hold(tzx_t *tzx, uint32_t ticks, tape_pulse_t *pulse) {
   return true;
 }
 
-bool tzx_next_pulse(void *reader, tape_pulse_t *pulse) {
-  tzx_t *tzx = reader;
+static bool walk_to_next_pulse(tzx_t *tzx, tape_pulse_t *pulse) {
   /* Every pass that returns no pulse either moves to a phase that will or
      takes up the next block, and both are bounded by the image: a block costs
      at least a byte of it, and a byte of data at most sixteen passes, two for
      each of its bits. A pilot and a tone are counted in pulses rather than
      bytes and so are not bounded by either, which is why one of no length is
-     passed over whole rather than pulse by pulse. The count makes all of that
-     a thing the code holds to rather than an argument about it. */
+     passed over whole rather than pulse by pulse. A loop sends the walk back
+     over its blocks only after a pass that gave the deck something, and every
+     pass gives its pulses at the same blocks, so between two pulses the walk
+     covers the end of one pass and the start of the next, which never
+     overlap: no block twice.
+     The count makes all of that a thing the code holds to rather than an
+     argument about it. */
   const uint64_t most_steps = 16 * (uint64_t)tzx->image_length + 64;
   for (uint64_t step = 0; step < most_steps; step++) {
     switch (tzx->phase) {
@@ -482,16 +536,39 @@ bool tzx_next_pulse(void *reader, tape_pulse_t *pulse) {
         return true;
 
       case PHASE_STOPPED:
-        /* Stopped, not spent. A multiload marks the point between its parts,
-           and the tape stands there until it is played again — which carries
-           on from the next block, where the head is. */
-        tzx->phase = PHASE_BETWEEN_BLOCKS;
+      case PHASE_FINISHED:
+        /* The deck lets the line fall low when there is no next pulse
+           (tape.h), which swallows the edge that ends a low last pulse, and a
+           loader timing edges never reads its last bit. So the other level is
+           held first, for the millisecond a pause begins with. */
+        if (tzx->level) {
+          tzx->level = false;
+          pulse->level = true;
+          pulse->ticks = tzx->ticks_per_millisecond;
+          return true;
+        }
+        if (tzx->phase == PHASE_STOPPED) {
+          /* Stopped, not spent. A multiload marks the point between its parts,
+             and the tape stands there until it is played again — which carries
+             on from the next block, where the head is, and from a low line,
+             as the format asks of a tape played "from a certain position". */
+          tzx->phase = PHASE_BETWEEN_BLOCKS;
+          tzx->loop_pass_reached_the_deck = true;
+        }
         return false;
 
-      case PHASE_FINISHED:
       default:
         return false;
     }
   }
   return false;
+}
+
+bool tzx_next_pulse(void *reader, tape_pulse_t *pulse) {
+  tzx_t *tzx = reader;
+  const bool pulsed = walk_to_next_pulse(tzx, pulse);
+  if (pulsed) {
+    tzx->loop_pass_reached_the_deck = true;
+  }
+  return pulsed;
 }
