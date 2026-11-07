@@ -48,7 +48,7 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 | `--wait N` | Frames to run after typing, for a machine that has been given something to do. The default is 0. |
 | `--sixty-hz` | A CPC's. Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |
-| `--tape PATH` | Put this TZX, CDT or TAP image in the deck. A TAP is a Spectrum's alone: it carries that ROM's timings and nothing else, so a CPC is not handed one. A CPC turns its own motor; a Spectrum has none, so its tape starts once the typing is done. |
+| `--tape PATH` | Put this TZX, CDT or TAP image in the deck. A TAP is a Spectrum's alone: it carries that ROM's timings and nothing else, so a CPC is not handed one. A CPC turns its own motor; a Spectrum has none, so its tape starts once the typing is done. Either way the cassette's leader tape passes first, 5.7 seconds of silence (about 285 frames) less whatever the image kept of its own, which a `--wait` has to allow for. |
 | `--writes PATH` | A CPC's. Write a map of memory writes here as a PNG. |
 | `--sound PATH` | Write the sound here as a 48kHz WAV: a CPC's stereo socket, a Spectrum's speaker. |
 | `--sound-steps PATH` | Write the sound here as it stands at each step of it, unfiltered: 125kHz on a CPC, 3.5MHz on a Spectrum. |

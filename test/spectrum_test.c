@@ -614,9 +614,10 @@ static void a_tape_in_the_deck_is_what_bit_6_reads(void) {
   TEST_CHECK(run_to_halt());
   TEST_EQUAL(spectrum.cpu.a & 0x40, 0x00);
 
-  /* Run the reel on to the first edge and read again. */
+  /* Run the reel on to the first edge, past the cassette's leader (tzx.h),
+     and read again. */
   uint32_t guard = 0;
-  while (!tape_level(&tape) && guard++ < 4 * SPECTRUM_TICKS_PER_MILLISECOND) {
+  while (!tape_level(&tape) && guard++ < 20000 * SPECTRUM_TICKS_PER_MILLISECOND) {
     spectrum_tick(&spectrum);
   }
   TEST_CHECK(tape_level(&tape));

@@ -15,7 +15,25 @@
  * image; then a file it loads is compared byte for byte with that reader's
  * copy. Two routes to the same bytes, only one of them through the chip.
  *
+ * And a tape: a program written here in the format the cassette manager
+ * saves in, from the firmware manual's account of it, which the 464's
+ * firmware then has to find, check and run.
+ *
  * Needs the firmware and disc images: run `make roms` and `make discs`.
+ *
+ * Sources:
+ * - SOFT 968, Amstrad's firmware manual for the CPCs,
+ *   https://archive.org/details/SOFT968TheAmstrad6128FirmwareManual
+ *   — chapter 8: a record is a leader, a sync byte, 256-byte segments each
+ *   followed by its CRC, and a trailer of 32 one bits; the CRC is
+ *   X^16+X^12+X^5+1 begun at &FFFF, written complemented and high byte
+ *   first; a header's 64 bytes are the name, the block number, the
+ *   last-block flag, the file type, the length, the address, the first-block
+ *   flag, the logical length and the entry. CAS SET SPEED: half a zero bit
+ *   is 333 microseconds at 1000 baud, and a one bit is twice a zero.
+ * - "Tape-Image (.CDT) file format" (Kevin Thacker's cpctech),
+ *   https://cpctech.cpcwiki.de/docs/cdtcpc.html — every timing in a .cdt is
+ *   a Spectrum T-state, 3.5 to the microsecond.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +42,7 @@
 #include "cpc.h"
 #include "dsk.h"
 #include "test.h"
+#include "tzx.h"
 
 /* The display, in characters: 40 columns of 25 rows, each glyph 8 pixels
    wide — 16 samples in mode 1 — and 8 lines tall, starting at the raster
@@ -579,6 +598,126 @@ static void sound_1_142_plays_the_6128_manuals_international_a(void) {
   TEST_CHECK(right_silent);
 }
 
+/* --- a tape, saved the way the 464's cassette manager saves one --- */
+
+static uint16_t segment_crc(const uint8_t *segment) {
+  uint16_t crc = 0xFFFF;
+  for (int index = 0; index < 256; index++) {
+    crc ^= (uint16_t)(segment[index] << 8);
+    for (int bit = 0; bit < 8; bit++) {
+      crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+    }
+  }
+  return (uint16_t)~crc;
+}
+
+/* A record written into a TZX ID 11 block at 1000 baud: the leader's one
+   bits are its pilot, the zero bit that ends the leader its two syncs, and
+   the sync byte, the segments and the trailer its data. Half a zero bit is
+   333 microseconds, 1166 T-states at the format's clock. Returns the bytes
+   written. */
+static uint32_t put_record(uint8_t *out, uint8_t sync, const uint8_t *payload, uint32_t length,
+                           uint16_t leader_pulses, uint16_t pause_milliseconds) {
+  const uint16_t zero = 1166;
+  const uint16_t one = 2 * zero;
+  const uint32_t segments = (length + 255) / 256;
+  const uint32_t data_length = 1 + segments * 258 + 4;
+  const uint16_t words[] = {one, zero, zero, zero, one, leader_pulses};
+  uint32_t at = 0;
+  out[at++] = 0x11;
+  for (size_t index = 0; index < sizeof words / sizeof words[0]; index++) {
+    out[at++] = (uint8_t)words[index];
+    out[at++] = (uint8_t)(words[index] >> 8);
+  }
+  out[at++] = 8; /* every bit of the last byte */
+  out[at++] = (uint8_t)pause_milliseconds;
+  out[at++] = (uint8_t)(pause_milliseconds >> 8);
+  out[at++] = (uint8_t)data_length;
+  out[at++] = (uint8_t)(data_length >> 8);
+  out[at++] = (uint8_t)(data_length >> 16);
+  out[at++] = sync;
+  for (uint32_t segment = 0; segment < segments; segment++) {
+    uint8_t bytes[256] = {0};
+    const uint32_t from = segment * 256;
+    memcpy(bytes, payload + from, length - from < 256 ? length - from : 256);
+    memcpy(out + at, bytes, 256);
+    at += 256;
+    const uint16_t crc = segment_crc(bytes);
+    out[at++] = (uint8_t)(crc >> 8);
+    out[at++] = (uint8_t)crc;
+  }
+  memset(out + at, 0xFF, 4);
+  return at + 4;
+}
+
+/* One file of one block: 10 PRINT"TAPE OK", tokenised as Locomotive BASIC
+   keeps it (the line's length, counting its own two bytes and its end; the
+   line number; &BF for PRINT; the line's end; and a line of no length to
+   end the program), saved at &0170 where BASIC keeps its program, behind a
+   leader tone of the given number of pulses and nothing in front of it. */
+static uint32_t put_tape_ok(uint8_t *out, uint16_t leader_pulses) {
+  static const uint8_t program[] = {0x0F, 0x00, 0x0A, 0x00, 0xBF, '"',  'T',  'A', 'P',
+                                    'E',  ' ',  'O',  'K',  '"',  0x00, 0x00, 0x00};
+  uint8_t header[64] = {'T', 'A', 'P', 'E'};
+  header[16] = 1;    /* block number */
+  header[17] = 0xFF; /* the last block */
+  header[18] = 0;    /* unprotected BASIC */
+  header[19] = sizeof program;
+  header[21] = 0x70; /* &0170 */
+  header[22] = 0x01;
+  header[23] = 0xFF; /* the first block */
+  header[24] = sizeof program;
+  static const uint8_t signature[] = {'Z', 'X', 'T', 'a', 'p', 'e', '!', 0x1A, 1, 20};
+  uint32_t at = sizeof signature;
+  memcpy(out, signature, at);
+  at += put_record(out + at, 0x2C, header, sizeof header, leader_pulses, 15);
+  at += put_record(out + at, 0x16, program, sizeof program, leader_pulses, 2000);
+  return at;
+}
+
+/* A tape whose image begins at its first leader tone, with no silence in
+   front of it, the way many images of cassettes are cut. The 464 starts its
+   motor and waits two and a half seconds for it to come up to speed before
+   it listens, so a tone of two seconds at the head of the image is gone
+   before the firmware hears it — and on a real cassette is not at the head
+   of the tape, which is leader tape (tzx.h). Played as a cassette, it
+   loads, and the firmware is the judge of that: it has to find the header,
+   check every CRC and run what it loaded. */
+static void the_464_loads_a_tape_whose_image_kept_no_silence(void) {
+  if (!power_on("cpc464.rom", 0x10000, true, false)) {
+    return;
+  }
+  static uint8_t image[1024];
+  const uint32_t length = put_tape_ok(image, 3000); /* 3000 pulses of 666µs, two seconds */
+  static tape_t tape;
+  static tzx_t reader;
+  const char *problem = NULL;
+  if (!tzx_open(&reader, image, length, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem)) {
+    TEST_FAIL("the tape was refused: %s", problem);
+    return;
+  }
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
+  cpc_insert_tape(&cpc, &tape);
+
+  run_frames(FRAMES_TO_PROMPT);
+  type_text("RUN\"\n");
+  type_text(" "); /* "Press PLAY then any key:" */
+  for (int second = 0; second < 30; second++) {
+    run_frames(50);
+    read_screen();
+    for (int row = 0; row < ROWS; row++) {
+      if (strstr(screen[row], "TAPE OK") != NULL && strstr(screen[row], "\"") == NULL) {
+        cpc_insert_tape(&cpc, NULL);
+        return;
+      }
+    }
+  }
+  cpc_insert_tape(&cpc, NULL);
+  TEST_FAIL("the program never printed");
+  print_screen();
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -599,5 +738,6 @@ int main(int argc, char **argv) {
   TEST_RUN(amsdos_saves_a_file_onto_the_disc);
   TEST_RUN(amsdos_reports_a_missing_disc);
   TEST_RUN(sound_1_142_plays_the_6128_manuals_international_a);
+  TEST_RUN(the_464_loads_a_tape_whose_image_kept_no_silence);
   return TEST_REPORT("cpc firmware");
 }

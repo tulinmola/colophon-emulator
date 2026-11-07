@@ -163,6 +163,11 @@ typedef struct {
 
   /* The deck, host-owned as a disc is, and NULL when there is none. */
   tape_t *tape;
+  /* Whether its reel turns, which follows the motor line late (cpc.c), and
+     how far it has come: T-states of drive, counted up while the line is
+     high and down while it is low, between none and the whole lag. */
+  bool reel_turning;
+  uint32_t reel_momentum;
 
   /* The disc interface: built into the 664 and 6128, plugged into a 464
      as the DDI-1. Absent, its ports are nobody's and float. Drive A is the
@@ -225,9 +230,10 @@ void cpc_fit_disc_interface(cpc_t *cpc, bool fitted);
 void cpc_insert_disc(cpc_t *cpc, uint8_t drive, floppy_t *floppy);
 
 /* Put a tape in the deck, or take it out with NULL. Bit 4 of port C is the
- * motor, so the machine starts and stops the tape itself; bit 7 of port B is
- * the play head. Bit 5 of port C is what the machine writes to tape, and it
- * goes nowhere: nothing here records. */
+ * motor, so the machine starts and stops the tape itself, the reel following
+ * the line a little late and starting from rest when a tape goes in (cpc.c);
+ * bit 7 of port B is the play head. Bit 5 of port C is what the machine
+ * writes to tape, and it goes nowhere: nothing here records. */
 void cpc_insert_tape(cpc_t *cpc, tape_t *tape);
 
 /* Plug in a monitor: CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT bytes
@@ -254,6 +260,14 @@ void cpc_finish_instruction(cpc_t *cpc);
  * that sets those registers from outside — restoring a snapshot — owes the
  * machine this call afterwards. */
 void cpc_remap(cpc_t *cpc);
+
+/* Put the cassette's reel where the motor line says it has stood all along:
+ * at speed if the line is high, still if it is low. The machine moves the
+ * reel itself as the line changes, a little late (cpc.c), while a tape is
+ * in; anything that replaces the line without its history — restoring a
+ * snapshot, which has no room for the reel — owes the machine this call
+ * afterwards. */
+void cpc_settle_reel(cpc_t *cpc);
 
 /* Where the video hardware last read for a character: the board's rewiring
  * of the CRTC's address lines, applied to the pins the chip put out on the

@@ -210,6 +210,7 @@ bool cpc_snapshot_load(cpc_t *cpc, const uint8_t *bytes, size_t length, const ch
 
   memcpy(cpc->ram, bytes + CPC_SNAPSHOT_HEADER_SIZE, dump);
   cpc_remap(cpc);
+  cpc_settle_reel(cpc);
   return true;
 }
 

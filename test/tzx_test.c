@@ -28,15 +28,37 @@
 #define TICKS_PER_MILLISECOND 3500
 #define MOST_PILOT_PULSES 20000
 
+/* The cassette's leader tape, restated here rather than read from tzx.c:
+   350mm by GOST 20492-87's "(350±100) мм", less the 79mm between the
+   take-up hub's clamp and the head, at the compact cassette's 4.76cm a
+   second. */
+#define LEADER_MILLISECONDS 5700
+
 static tzx_t reader;
 
-static void open_image_for(const uint8_t *image, uint32_t length, uint32_t clock,
-                           tzx_machine machine) {
+static bool opened(const uint8_t *image, uint32_t length, uint32_t clock, tzx_machine machine) {
   const char *problem = NULL;
   if (!tzx_open(&reader, image, length, clock, machine, &problem)) {
     TEST_FAIL("refused: %s", problem);
     memset(&reader, 0, sizeof reader); /* so the rest of the test reads an empty tape */
+    return false;
   }
+  return true;
+}
+
+/* A cassette opens with its leader tape, which the reader plays before the
+   image wherever the image has not kept that much silence of its own. The
+   tests of the leader grade it; every other test steps over it, low and no
+   longer than the leader is, to the image behind. */
+static void open_image_for(const uint8_t *image, uint32_t length, uint32_t clock,
+                           tzx_machine machine) {
+  if (!opened(image, length, clock, machine)) {
+    return;
+  }
+  tape_pulse_t leader = {0, true};
+  TEST_CHECK(tzx_next_pulse(&reader, &leader));
+  TEST_CHECK(!leader.level);
+  TEST_CHECK(leader.ticks <= LEADER_MILLISECONDS * clock);
 }
 
 static void open_image(const uint8_t *image, uint32_t length) {
@@ -884,6 +906,97 @@ static void a_data_block_asking_for_no_pause_runs_straight_on(void) {
   TEST_EQUAL(next(), 1000); /* the tone behind it, with no silence between */
 }
 
+/* --- the cassette's leader tape --- */
+
+/* The pulse the reader gives first, which a test of the leader reads itself
+   rather than stepping over. */
+static tape_pulse_t first_pulse(const uint8_t *image, uint32_t length, uint32_t clock,
+                                tzx_machine machine) {
+  tape_pulse_t pulse = {0, true};
+  if (opened(image, length, clock, machine)) {
+    TEST_CHECK(tzx_next_pulse(&reader, &pulse));
+  }
+  return pulse;
+}
+
+/* A tape that opens with sound has the whole leader in front of it. Its
+   first pulse is low, as every first pulse is, and low before the first edge
+   is silence whatever the image calls it — so the leader that comes first is
+   that much shorter, and the first edge falls where the leader ends. */
+static void the_leader_passes_before_a_tape_that_opens_with_sound(void) {
+  const uint8_t image[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x03, 0x00};
+  const tape_pulse_t leader = first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  TEST_CHECK(!leader.level);
+  TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND - 1000);
+  TEST_EQUAL(next(), 1000); /* and the tone behind it, all three pulses, as written */
+  TEST_EQUAL(next(), 1000);
+  TEST_EQUAL(next(), 1000);
+}
+
+/* Silence the image kept counts against the leader: what is left of the
+   leader goes first, and the image's own silence after it as written. */
+static void an_image_that_kept_some_silence_gets_the_rest(void) {
+  const uint8_t image[] = {TZX_HEAD, 0x20, 0xE8, 0x03, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  const tape_pulse_t leader = first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  TEST_CHECK(!leader.level);
+  TEST_EQUAL(leader.ticks, (LEADER_MILLISECONDS - 1000) * TICKS_PER_MILLISECOND - 1000);
+  tape_pulse_t silence = {0, true};
+  TEST_CHECK(tzx_next_pulse(&reader, &silence));
+  TEST_CHECK(!silence.level);
+  TEST_EQUAL(silence.ticks, 1000 * TICKS_PER_MILLISECOND);
+  TEST_EQUAL(next(), 1000);
+}
+
+/* And an image that kept as much as the leader, or more, plays as it is. */
+static void an_image_that_kept_its_silence_plays_as_it_is(void) {
+  const uint32_t kept = LEADER_MILLISECONDS + 1000;
+  const uint8_t image[] = {TZX_HEAD, 0x20, (uint8_t)kept, (uint8_t)(kept >> 8), 0x12, 0xE8,
+                           0x03,     0x01, 0x00};
+  const tape_pulse_t silence =
+      first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  TEST_CHECK(!silence.level);
+  TEST_EQUAL(silence.ticks, kept * TICKS_PER_MILLISECOND);
+  TEST_EQUAL(next(), 1000);
+}
+
+/* The leader tape is a length of tape, so it lasts as long on any machine:
+   its milliseconds are the machine's, like a pause's. */
+static void the_leader_lasts_as_long_on_a_cpc(void) {
+  const uint8_t image[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  const tape_pulse_t leader = first_pulse(image, sizeof image, 4000, TZX_AMSTRAD);
+  TEST_CHECK(!leader.level);
+  TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * 4000 - 1142); /* 1000 of the format's T-states */
+  TEST_EQUAL(next(), 1142);
+}
+
+/* A .tap was a cassette too. */
+static void a_tap_has_the_leader_in_front_of_it(void) {
+  const uint8_t tap[] = {0x02, 0x00, 0x00, 0xAA};
+  const tape_pulse_t leader = first_pulse(tap, sizeof tap, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  TEST_CHECK(!leader.level);
+  TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND - 2168);
+  TEST_EQUAL(next(), 2168); /* the pilot's first pulse, whole */
+}
+
+/* The leader tape passes once, at the start of the tape. A Spectrum's tape
+   that stops before it has sounded at all still has it in front of the
+   stop, and played on it does not have it again. */
+static void the_leader_passes_once(void) {
+  const uint8_t image[] = {TZX_HEAD, 0x20, 0x00, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  const tape_pulse_t leader = first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  TEST_CHECK(!leader.level);
+  TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND);
+  TEST_EQUAL(next(), 0);    /* the stop */
+  TEST_EQUAL(next(), 1000); /* and played again, the tone, with nothing in front */
+
+  /* A tape with no sound on it at all is a leader and then its end. */
+  const uint8_t empty[] = {TZX_HEAD};
+  const tape_pulse_t only = first_pulse(empty, sizeof empty, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  TEST_CHECK(!only.level);
+  TEST_EQUAL(only.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND);
+  TEST_EQUAL(next(), 0);
+}
+
 int main(void) {
   TEST_RUN(a_tap_plays_at_the_roms_own_timings);
   TEST_RUN(the_pilot_turns_on_the_flag_bytes_top_bit);
@@ -917,5 +1030,11 @@ int main(void) {
   TEST_RUN(a_pause_of_one_millisecond_is_the_edge_it_finishes);
   TEST_RUN(a_pause_on_a_low_line_is_silence_and_nothing_else);
   TEST_RUN(a_data_block_asking_for_no_pause_runs_straight_on);
+  TEST_RUN(the_leader_passes_before_a_tape_that_opens_with_sound);
+  TEST_RUN(an_image_that_kept_some_silence_gets_the_rest);
+  TEST_RUN(an_image_that_kept_its_silence_plays_as_it_is);
+  TEST_RUN(the_leader_lasts_as_long_on_a_cpc);
+  TEST_RUN(a_tap_has_the_leader_in_front_of_it);
+  TEST_RUN(the_leader_passes_once);
   return TEST_REPORT("tzx");
 }

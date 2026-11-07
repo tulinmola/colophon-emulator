@@ -1006,9 +1006,10 @@ static int run_spectrum(const options_t *options) {
     status = 1;
   }
   /* PLAY is pressed here and not when the tape went in, because a header's
-     pilot runs for five seconds and the machine spends longer than that
-     booting and being typed at. A tape started at power-on has played its
-     pilot out before anything asks for it. */
+     pilot runs for five seconds behind the cassette's leader tape, and a
+     machine can spend longer than both booting and being typed at. A tape
+     started at power-on could play its pilot out before anything asks for
+     it. */
   if (status == 0) {
     tape_play(&tape);
   }

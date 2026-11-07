@@ -12,6 +12,7 @@
 
 #include "cpc_snapshot.h"
 #include "test.h"
+#include "tzx.h"
 
 static uint8_t ram[0x20000];
 static uint8_t other_ram[0x20000];
@@ -626,6 +627,63 @@ static void a_64k_machine_refuses_a_banked_snapshot(void) {
   TEST_EQUAL(restored.mmr, 0xC0);
 }
 
+/* The format has no room for the cassette's reel, so a machine picked up
+   from one has its reel where the motor line says it has stood all along:
+   at speed if the line is high, and running down the whole lag once it
+   falls; still if the line is low — neither climbing from nothing nor
+   carrying on from the machine it was loaded over. The reel only moves
+   while a tape is in, so both machines have one. */
+static void the_reel_stands_as_the_motor_line_says(void) {
+  static const uint8_t image[] = {'Z', 'X', 'T',  'a',  'p',  'e',  '!', 0x1A,
+                                  1,   20,  0x12, 0x50, 0xC3, 0x08, 0x00};
+  static const uint32_t reel_lag_ticks = 50 * 4000;
+  static tape_t tape;
+  static tape_t other_tape;
+  static tzx_t reader;
+  static tzx_t other_reader;
+  const char *problem = NULL;
+  load_a_running_program();
+  power_on(&cpc, ram, sizeof ram);
+  power_on(&restored, other_ram, sizeof other_ram);
+  TEST_CHECK(
+      tzx_open(&reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem));
+  TEST_CHECK(tzx_open(&other_reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD,
+                      &problem));
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
+  cpc_insert_tape(&cpc, &tape);
+  tape_init(&other_tape);
+  tape_insert(&other_tape, tzx_next_pulse, &other_reader);
+  cpc_insert_tape(&restored, &other_tape);
+
+  ppi_write(&cpc.ppi, PPI_CONTROL, 0x82); /* port C an output */
+  ppi_write(&cpc.ppi, PPI_PORT_C, 0x10);  /* the motor on */
+  run(&cpc, 100);
+  TEST_CHECK(!cpc.reel_turning); /* far short of the lag */
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(restored.reel_turning);
+  ppi_write(&restored.ppi, PPI_PORT_C, 0x00);
+  for (uint32_t tick = 0; tick < reel_lag_ticks - 1; tick++) {
+    cpc_tick(&restored);
+  }
+  TEST_CHECK(restored.reel_turning);
+  cpc_tick(&restored);
+  TEST_CHECK(!restored.reel_turning);
+
+  ppi_write(&restored.ppi, PPI_PORT_C, 0x10);
+  run(&restored, reel_lag_ticks + 100);
+  TEST_CHECK(restored.reel_turning);
+  ppi_write(&cpc.ppi, PPI_PORT_C, 0x00); /* and the motor off, loaded over it */
+  TEST_CHECK(cpc_snapshot_save(&cpc, bytes, sizeof bytes, &problem));
+  TEST_CHECK(cpc_snapshot_load(&restored, bytes, sizeof bytes, &problem));
+  TEST_CHECK(!restored.reel_turning);
+  run(&restored, 100);
+  TEST_CHECK(!restored.reel_turning);
+  cpc_insert_tape(&cpc, NULL);
+  cpc_insert_tape(&restored, NULL);
+}
+
 int main(void) {
   TEST_RUN(a_snapshot_is_refused_unless_it_is_one);
   TEST_RUN(a_machine_survives_the_round_trip);
@@ -647,5 +705,6 @@ int main(void) {
   TEST_RUN(the_memory_map_comes_back_with_it);
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
   TEST_RUN(a_64k_machine_refuses_a_banked_snapshot);
+  TEST_RUN(the_reel_stands_as_the_motor_line_says);
   return TEST_REPORT("cpc snapshot");
 }

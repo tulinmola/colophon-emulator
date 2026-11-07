@@ -84,6 +84,21 @@ static uint8_t selected_line(const cpc_t *cpc, uint8_t line) {
    nowhere; the motor is taken up in cpc_tick, where the reel is turned. */
 #define PORT_C_MOTOR 0x10
 
+/* How long the reel goes on doing what it did after the motor line changes;
+   cpc_tick says where the figure comes from. */
+#define REEL_LAG_TICKS (50 * CPC_TICKS_PER_MILLISECOND)
+
+/* PC4 drives the motor only while the upper nibble of port C is an output
+   (cpc_tick). */
+static bool motor_line_high(const cpc_t *cpc) {
+  return !cpc->ppi.port_c_upper_input && (ppi_output_of(&cpc->ppi, PPI_PORT_C) & PORT_C_MOTOR) != 0;
+}
+
+void cpc_settle_reel(cpc_t *cpc) {
+  cpc->reel_turning = motor_line_high(cpc);
+  cpc->reel_momentum = cpc->reel_turning ? REEL_LAG_TICKS : 0;
+}
+
 static void run_psg(cpc_t *cpc) {
   uint8_t port_c = ppi_output_of(&cpc->ppi, PPI_PORT_C);
   ay38910_present_port_a(&cpc->psg, selected_line(cpc, port_c & 0x0F));
@@ -441,7 +456,16 @@ uint16_t cpc_video_address(const cpc_t *cpc) {
   return (uint16_t)(((ma & 0x3000) << 2) | ((ra & 0x07) << 11) | ((ma & 0x03FF) << 1));
 }
 
-void cpc_insert_tape(cpc_t *cpc, tape_t *tape) { cpc->tape = tape; }
+/* A tape put in is played from rest. The 464's deck runs its motor only
+   while a key holds a leaf switch closed as well as the relay (CPC464 service
+   manual, cassette deck circuit diagram), so PLAY pressed under a line
+   already high starts the motor from a standstill; PLAY is taken to be down
+   from the moment the tape goes in. */
+void cpc_insert_tape(cpc_t *cpc, tape_t *tape) {
+  cpc->tape = tape;
+  cpc->reel_turning = false;
+  cpc->reel_momentum = 0;
+}
 
 uint64_t cpc_tick(cpc_t *cpc) {
   /* Pointed again on every tick, not only at power-on: a host may copy a
@@ -450,7 +474,7 @@ uint64_t cpc_tick(cpc_t *cpc) {
      with the machine, so a line end they keep is still kept. */
   cpc->crtc.line_end_rooms = cpc->crtc_line_end_rooms;
   gate_array_advance_phase(&cpc->gate_array);
-  /* The motor line is held, not sampled: the board turns the reel for as
+  /* The motor line is held, not sampled: the board drives the motor for as
      long as the bit is set, whether or not the processor is looking at the
      8255 ("8255 PPI"). It turns for no other reason: PC4 runs through R113 to
      the base of Q101, the motor transistor, and no pull-up is fitted anywhere
@@ -459,14 +483,53 @@ uint64_t cpc_tick(cpc_t *cpc) {
      reset, the transistor has no base current and the reel stands still
      (CPC464, CPC664 and CPC6128 service manuals, circuit diagrams).
 
-     PLAY is pressed here every tick the line is high rather than once, which
-     is what a motor line is. A source that stopped the tape short of its end
-     would therefore be started again on the next tick — no Amstrad block
-     stops one, and tzx.c sends both candidates to the next block instead. */
+     PLAY is pressed on every tick the reel turns rather than once, as a
+     held line would press it. A source that stopped the tape short of its
+     end would therefore be started again on the next tick — no Amstrad
+     block stops one, and tzx.c sends both candidates to the next block
+     instead.
+
+     The reel follows the line late. On a 464 the relay switches a motor
+     that drives a flywheel through a belt (CPC464 service manual: relay
+     RY301, motor 170208, flywheel 809156), and a 664 or a 6128 switches a
+     deck of its owner's through the remote socket; no source measures how
+     long any of them takes to come up to speed or to run down. Two things
+     say it is not at once. The firmware's own keyboard scan drops the line
+     twice a frame: it sets the 8255's mode to turn port A round (the 464's
+     ROM writes &92 and then &82 to &F7xx, at &085B and &087A), which clears
+     port C's latches (ppi.c), and puts the motor bit back a few
+     microseconds later; a reel that stopped each time would lose time no
+     real one loses. And Opera Soft's loaders stop the motor at the end of a
+     block and read on. Images of Goody, The Last Mission and Livingstone
+     Supongo sampled from the original cassettes and converted with CSW2CDT
+     (VincentGR's collection,
+     https://archive.org/details/amstrad-cpc-cdt-collection) load here only
+     when the reel runs on after the line falls — one of them at 40ms, all
+     three at 50ms — and those cassettes loaded on the machine. So the reel
+     follows the line 50ms late, the floor those tapes set and not a
+     measurement, and as late rising as falling, for want of a measurement
+     of either.
+
+     The lag is counted as drive, not as time since the line last changed: a
+     count rises while the line is high and falls while it is low, between
+     none and the whole lag, and the reel comes up to speed when the count is
+     full and runs down when it is empty. So a drop in the middle of a climb
+     costs it twice what the drop lasted — or, if the drop outlasts what had
+     been climbed, that much climbing and the drop besides — and the
+     firmware's drops of a few microseconds cost nothing a loader could see. */
   if (cpc->tape != NULL) {
-    const bool motor_driven =
-        !cpc->ppi.port_c_upper_input && (ppi_output_of(&cpc->ppi, PPI_PORT_C) & PORT_C_MOTOR) != 0;
-    if (motor_driven) {
+    const bool motor_driven = motor_line_high(cpc);
+    if (motor_driven && cpc->reel_momentum < REEL_LAG_TICKS) {
+      cpc->reel_momentum++;
+    } else if (!motor_driven && cpc->reel_momentum > 0) {
+      cpc->reel_momentum--;
+    }
+    if (cpc->reel_momentum == REEL_LAG_TICKS) {
+      cpc->reel_turning = true;
+    } else if (cpc->reel_momentum == 0) {
+      cpc->reel_turning = false;
+    }
+    if (cpc->reel_turning) {
       tape_play(cpc->tape);
     } else {
       tape_stop(cpc->tape);

@@ -261,8 +261,10 @@ static void the_keyboard_types_what_is_printed_on_it(void) {
 #define LD_BYTES 0x0556
 
 /* A header's pilot is 8063 pulses of 2168 T-states, which is five seconds,
-   and a whole tape is that twice over with a second of pause between. */
-#define MOST_FRAMES_TO_LOAD 700
+   and a whole tape is that twice over with a second of pause between,
+   behind the cassette's leader tape, which is not quite six (tzx.h). Twenty
+   seconds is room for all of it. */
+#define MOST_FRAMES_TO_LOAD 1000
 
 /* One headerless block: the flag a data block carries, sixteen bytes, and
    the checksum the ROM will insist on, which is every byte before it

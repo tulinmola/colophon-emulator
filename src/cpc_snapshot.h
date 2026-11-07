@@ -17,7 +17,10 @@
  * built with its CRTC type, and the rest is worth reading the day we can act
  * on it. Nor can any version carry where the sound chip's generators stand:
  * a load starts them as reset does, and an envelope whose shape ends or
- * holds is put where it rests.
+ * holds is put where it rests. Nor where the cassette's reel stands, which
+ * follows the motor line late (cpc.c): a load puts it at speed if the line
+ * is high and still if it is low, so a snapshot taken while the reel ran on
+ * after the line fell comes back with it stopped.
  *
  * One field departs from the format's notes. Note 17 asks for the PSG's
  * selected register at &5A to be 0 to 15, "For CPCEMU compatibility", but a

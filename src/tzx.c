@@ -20,6 +20,20 @@
 #define DATA_PILOT_PULSES 3223
 #define PAUSE_MILLISECONDS 1000
 
+/* The leader tape that passes the head when a rewound cassette is played,
+   before the recording can begin. GOST 20492-87 gives a cassette's leader as
+   "(350±100) мм" and the NAB cassette standard (1976) as "12 to 15 inches";
+   79mm of it has already passed the head, running from the take-up hub's
+   clamp round the corner roller (ECMA-34, 1976, Figs. 3 and 4: hubs "42,5"
+   apart, "27,9" behind the reference line, outer guides "66,6" apart; the
+   roller, which no standard places, estimated from photographs of opened
+   cassettes, among them
+   https://commons.wikimedia.org/wiki/File:Compact_cassette_-_open.png).
+   So (350 - 79)mm at 47.625mm a second, 5.7s, for the standards' nominal
+   cassette. One sold without leader tape had none, and nothing here can
+   tell which kind an image was taken from. */
+#define LEADER_MILLISECONDS 5700
+
 enum {
   PHASE_BETWEEN_BLOCKS = 0,
   PHASE_PILOT,
@@ -235,6 +249,8 @@ static bool walk_tap(const uint8_t *image, uint32_t length, const char **problem
   return true;
 }
 
+static uint32_t leader_still_wanted(const tzx_t *tzx);
+
 bool tzx_open(tzx_t *tzx, const uint8_t *image, uint32_t length, uint32_t ticks_per_millisecond,
               tzx_machine machine, const char **problem) {
   const bool has_block_ids =
@@ -254,6 +270,7 @@ bool tzx_open(tzx_t *tzx, const uint8_t *image, uint32_t length, uint32_t ticks_
   tzx->has_block_ids = has_block_ids;
   tzx->block_at = has_block_ids ? HEADER_SIZE : 0;
   tzx->phase = PHASE_BETWEEN_BLOCKS;
+  tzx->leader_ticks_left = leader_still_wanted(tzx);
   return true;
 }
 
@@ -564,11 +581,34 @@ static bool walk_to_next_pulse(tzx_t *tzx, tape_pulse_t *pulse) {
   return false;
 }
 
+/* A pulse of the image, and a mark that the loop pass it falls in reached the
+   deck. */
+static bool next_pulse_of_the_image(tzx_t *tzx, tape_pulse_t *pulse) {
+  if (!walk_to_next_pulse(tzx, pulse)) {
+    return false;
+  }
+  tzx->loop_pass_reached_the_deck = true;
+  return true;
+}
+
 bool tzx_next_pulse(void *reader, tape_pulse_t *pulse) {
   tzx_t *tzx = reader;
-  const bool pulsed = walk_to_next_pulse(tzx, pulse);
-  if (pulsed) {
-    tzx->loop_pass_reached_the_deck = true;
+  if (tzx->leader_ticks_left > 0) {
+    pulse->level = false;
+    pulse->ticks = tzx->leader_ticks_left;
+    tzx->leader_ticks_left = 0;
+    return true;
   }
-  return pulsed;
+  return next_pulse_of_the_image(tzx, pulse);
+}
+
+static uint32_t leader_still_wanted(const tzx_t *tzx) {
+  const uint32_t leader = LEADER_MILLISECONDS * tzx->ticks_per_millisecond;
+  tzx_t ahead = *tzx;
+  uint32_t silent = 0;
+  tape_pulse_t pulse = {0, false};
+  while (silent < leader && next_pulse_of_the_image(&ahead, &pulse) && !pulse.level) {
+    silent += pulse.ticks;
+  }
+  return silent < leader ? leader - silent : 0;
 }

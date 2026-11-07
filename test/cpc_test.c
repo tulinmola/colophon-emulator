@@ -1117,12 +1117,15 @@ static bool port_b_bit_7(void) { return (port_b() & 0x80) != 0; }
    handful of T-states a read costs cannot fall across an edge. */
 static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   power_on(sizeof ram);
-  /* A .tzx of one tone: eight pulses of 50000 T-states. Those are a
+  /* A .tzx of one tone: forty pulses of 50000 T-states. Those are a
      Spectrum's, as every timing in the format is, so on a 4MHz board each
      lasts 50000 * 4000 / 3500 of its own. */
   static const uint8_t image[] = {'Z', 'X', 'T',  'a',  'p',  'e',  '!', 0x1A,
-                                  1,   20,  0x12, 0x50, 0xC3, 0x08, 0x00};
+                                  1,   20,  0x12, 0x50, 0xC3, 0x28, 0x00};
   static const uint32_t pulse_ticks = 57142;
+  /* How late the reel follows the motor line: the floor images of Opera
+     Soft's cassettes set (cpc.c). */
+  static const uint32_t reel_lag_ticks = 50 * 4000;
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
@@ -1150,15 +1153,33 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   TEST_CHECK(!tape_level(&tape));
   TEST_CHECK(!port_b_bit_7());
 
-  /* Turned on, the reel runs. The tape starts low, and the pulse lasts
-     exactly as long as the format's timing scaled to this board's clock. */
+  /* Turned on, the reel runs once the line has been high 50ms longer than
+     it has been low, which is how late it follows the line either way
+     (cpc.c). A drop on the way — the firmware's keyboard scan makes one twice
+     a frame — costs the climb twice what the drop lasted and no more. The board sees the line on
+     its next tick, not the write, and counts from there. */
   set_motor(true);
-  cpc_tick(&cpc); /* the board sees the line on its next tick, not the write */
+  for (uint32_t tick = 0; tick < reel_lag_ticks / 2; tick++) {
+    cpc_tick(&cpc);
+  }
+  set_motor(false);
+  for (uint32_t tick = 0; tick < 20; tick++) {
+    cpc_tick(&cpc);
+  }
+  set_motor(true);
+  for (uint32_t tick = 0; tick < reel_lag_ticks / 2 + 20 - 1; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(!tape_playing(&tape));
+  cpc_tick(&cpc);
   TEST_CHECK(tape_playing(&tape));
 
+  /* The tape starts low, behind the cassette's leader (tzx.h); run on to the
+     first edge. The pulse after it lasts exactly as long as the format's
+     timing scaled to this board's clock. */
   uint32_t guard = 0;
-  while (!tape_level(&tape) && guard++ < 4 * pulse_ticks) {
-    cpc_tick(&cpc); /* the tape starts low; run on to the first edge */
+  while (!tape_level(&tape) && guard++ < 20000 * CPC_TICKS_PER_MILLISECOND) {
+    cpc_tick(&cpc);
   }
   TEST_CHECK(tape_level(&tape));
 
@@ -1195,15 +1216,67 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   TEST_EQUAL(high & 0x10, 0x10);       /* the 50Hz link is still there under it */
   TEST_EQUAL((high >> 1) & 0x07, CPC_MANUFACTURER_AMSTRAD);
 
-  /* Stopped mid-pulse the head stands where it was, and the pin holds what
+  /* A line that drops for less than the lag never reaches the reel: the
+     firmware drops it for microseconds twice a frame, and Opera Soft's
+     loaders stop the motor and read on. */
+  set_motor(false);
+  for (uint32_t tick = 0; tick < reel_lag_ticks - 1; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(tape_playing(&tape));
+  set_motor(true);
+  for (uint32_t tick = 0; tick < reel_lag_ticks; tick++) {
+    cpc_tick(&cpc);
+    if (!tape_playing(&tape)) {
+      TEST_FAIL("the reel stopped %u ticks after the line came back", tick);
+      break;
+    }
+  }
+
+  /* Running down is counted the same way: a reel that has run down for most
+     of the lag and is driven again for a moment has that moment's worth of
+     running down to do again, not the whole lag. */
+  set_motor(false);
+  for (uint32_t tick = 0; tick < reel_lag_ticks - 1; tick++) {
+    cpc_tick(&cpc);
+  }
+  set_motor(true);
+  for (uint32_t tick = 0; tick < 1000; tick++) {
+    cpc_tick(&cpc);
+  }
+  set_motor(false);
+  for (uint32_t tick = 0; tick < 1000; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(tape_playing(&tape));
+  cpc_tick(&cpc);
+  TEST_CHECK(!tape_playing(&tape));
+  set_motor(true);
+  for (uint32_t tick = 0; tick < reel_lag_ticks; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(tape_playing(&tape));
+
+  /* Turned off for longer, the reel runs on for the lag and then stops.
+     Stopped mid-pulse the head stands where it was, and the pin holds what
      the head holds: a program that stops the motor on a high pulse goes on
-     reading it high. */
+     reading it high. The line falls on an edge into a low pulse, so the
+     reel stops three and a half pulses on, in a high one. */
   guard = 0;
   while (!tape_level(&tape) && guard++ < 4 * pulse_ticks) {
     cpc_tick(&cpc);
   }
-  TEST_CHECK(tape_level(&tape));
+  guard = 0;
+  while (tape_level(&tape) && guard++ < 4 * pulse_ticks) {
+    cpc_tick(&cpc);
+  }
   set_motor(false);
+  for (uint32_t tick = 0; tick < reel_lag_ticks - 1; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(tape_playing(&tape));
+  cpc_tick(&cpc);
+  TEST_CHECK(!tape_playing(&tape));
   for (uint32_t tick = 0; tick < 4 * pulse_ticks; tick++) {
     cpc_tick(&cpc);
   }
@@ -1271,6 +1344,43 @@ static void a_copied_machine_runs_as_the_one_it_was_copied_from(void) {
   TEST_EQUAL(cpc.cpu.pc, left_behind.cpu.pc);
 }
 
+/* A tape put in under a running motor starts from rest: the deck's motor
+   needs a key down as well as the relay (cpc.c), so the reel climbs the
+   whole lag whatever the line did while there was no tape in. */
+static void a_tape_put_in_under_a_running_motor_starts_from_rest(void) {
+  power_on(sizeof ram);
+  static const uint8_t image[] = {'Z', 'X', 'T',  'a',  'p',  'e',  '!', 0x1A,
+                                  1,   20,  0x12, 0x50, 0xC3, 0x08, 0x00};
+  static const uint32_t reel_lag_ticks = 50 * 4000;
+  static tape_t tape;
+  static tzx_t reader;
+  const char *problem = NULL;
+  TEST_CHECK(
+      tzx_open(&reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem));
+  tape_init(&tape);
+  tape_insert(&tape, tzx_next_pulse, &reader);
+  cpc_insert_tape(&cpc, &tape);
+  set_motor(true);
+  for (uint32_t tick = 0; tick < reel_lag_ticks; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(tape_playing(&tape)); /* at speed under the first tape */
+
+  cpc_insert_tape(&cpc, NULL);
+  for (uint32_t tick = 0; tick < 1000; tick++) {
+    cpc_tick(&cpc);
+  }
+  tape_insert(&tape, tzx_next_pulse, &reader);
+  cpc_insert_tape(&cpc, &tape);
+  for (uint32_t tick = 0; tick < reel_lag_ticks - 1; tick++) {
+    cpc_tick(&cpc);
+  }
+  TEST_CHECK(!tape_playing(&tape));
+  cpc_tick(&cpc);
+  TEST_CHECK(tape_playing(&tape));
+  cpc_insert_tape(&cpc, NULL);
+}
+
 int main(void) {
   TEST_RUN(reset_shows_both_roms_and_the_base_map);
   TEST_RUN(programs_fetch_from_the_lower_rom);
@@ -1308,6 +1418,7 @@ int main(void) {
   TEST_RUN(port_b_follows_the_crtc_into_vsync);
   TEST_RUN(port_b_reads_the_chips_own_vsync_behind_an_asic);
   TEST_RUN(the_cassette_motor_turns_the_tape_and_port_b_reads_it);
+  TEST_RUN(a_tape_put_in_under_a_running_motor_starts_from_rest);
   TEST_RUN(poke_lands_beneath_the_rom);
   TEST_RUN(in_a_writes_the_crtc_register_the_accumulator_holds);
   TEST_RUN(the_disc_interface_decodes_its_two_ports);

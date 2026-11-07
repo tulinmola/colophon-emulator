@@ -48,6 +48,14 @@
  * the other level for a millisecond, as a pause begins, and meets the end of
  * the tape the same way.
  *
+ * And a tape begins before its recording does. Rewound, a cassette has clear
+ * leader tape in front of the head, which carries nothing, while an image
+ * begins at its first sound or wherever its maker cut it — many at their first
+ * edge. So the reader plays the leader tape first, as silence, less whatever
+ * silence the image kept before its first edge, and an image that kept more
+ * plays as it is. tzx.c gives the leader tape's length and where it comes
+ * from.
+ *
  * Sources:
  * - "Tape-Image (.CDT) file format" (Kevin Thacker's cpctech),
  *   https://cpctech.cpcwiki.de/docs/cdtcpc.html — the CPC's half of the
@@ -64,6 +72,15 @@
  *   of the loop if it hasn't been run for the specified number of times";
  *   "don't nest loop blocks!". A pause's millisecond "of the opposite level"
  *   is there "to ensure that the last edge produced is properly finished".
+ * - GOST 20492-87,
+ *   https://files.stroyinf.ru/Data/289/28917.pdf
+ *   and the NAB cassette standard (1976),
+ *   https://www.richardhess.com/tape/history/NAB/NAB_Cassette_Tape_Standard_1976_searchable.pdf
+ *   — a cassette's leader tape: "(350±100) мм" and "12 to 15 inches".
+ * - ECMA-34 (3rd edition, 1976),
+ *   https://ecma-international.org/wp-content/uploads/ECMA-34_3rd_edition_september_1976.pdf
+ *   — the cassette's hubs and guides, from which the leader tape's path to
+ *   the head is measured.
  * - "Emulator file formats" (World of Spectrum FAQ),
  *   https://worldofspectrum.org/faq/reference/formats.htm — a .tap is
  *   blocks, each opening with "two bytes specifying how many bytes will
@@ -119,6 +136,10 @@ typedef struct {
   uint32_t loop_at;
   uint32_t loop_passes_left;
   bool loop_pass_reached_the_deck;
+
+  /* the cassette's leader tape still to pass the head, where the image's
+     own silence before its first edge has not already covered it */
+  uint32_t leader_ticks_left;
 } tzx_t;
 
 /* Take up an image. Returns false having pointed `problem` at a sentence
