@@ -25,7 +25,11 @@ static void tick(uint32_t microseconds) {
   }
 }
 
-/* READY needs a disc, a motor, and the spin-up over. */
+/* From a disc standing at the index: a revolution of 200ms to the first
+   index pulse and two more to the third, where READY rises (drive.h). */
+#define READY_FROM_THE_INDEX (3 * 200000)
+
+/* READY needs a disc, a motor, and the disc turned twice since either. */
 static void ready_needs_a_disc_and_a_motor(void) {
   drive_init(&drive, 1);
   TEST_CHECK(!drive_ready(&drive));
@@ -33,32 +37,62 @@ static void ready_needs_a_disc_and_a_motor(void) {
   TEST_CHECK(!drive_ready(&drive));
   floppy_mount(&floppy, image, sizeof image);
   drive_insert(&drive, &floppy);
+  tick(READY_FROM_THE_INDEX);
   TEST_CHECK(drive_ready(&drive));
   drive_set_motor(&drive, false);
   TEST_CHECK(!drive_ready(&drive));
   drive_insert(&drive, NULL);
   drive_set_motor(&drive, true);
+  tick(READY_FROM_THE_INDEX);
   TEST_CHECK(!drive_ready(&drive));
 }
 
-/* A spin-up, when the host gives one, counts from MOTOR ON; the disc is
-   turning the while. */
-static void a_spin_up_delays_ready(void) {
+/* READY rises at the third index pulse after the motor comes on, and falls
+   the moment it stops, which Kevin Thacker's drive test found on a 6128. A
+   disc starting at the index meets its first pulse a whole revolution on;
+   one stopped partway round meets it after the rest of that revolution. */
+static void ready_waits_for_two_revolutions(void) {
   drive_init(&drive, 1);
   floppy_mount(&floppy, image, sizeof image);
   drive_insert(&drive, &floppy);
-  drive.spin_up = 1000;
   drive_set_motor(&drive, true);
-  TEST_CHECK(!drive_ready(&drive));
-  tick(999);
+  tick(READY_FROM_THE_INDEX - 1);
   TEST_CHECK(!drive_ready(&drive));
   tick(1);
   TEST_CHECK(drive_ready(&drive));
-  drive_set_motor(&drive, true); /* already on: no new spin-up */
+  drive_set_motor(&drive, true); /* already on: nothing to wait for again */
   TEST_CHECK(drive_ready(&drive));
+
+  tick(50000); /* a quarter of the way round: byte 1562, 16µs into it */
   drive_set_motor(&drive, false);
-  drive_set_motor(&drive, true);
   TEST_CHECK(!drive_ready(&drive));
+  tick(1000000); /* standing still */
+  drive_set_motor(&drive, true);
+  tick((6250 - 1562) * 32 - 16 + 2 * 200000 - 1);
+  TEST_CHECK(!drive_ready(&drive));
+  tick(1);
+  TEST_CHECK(drive_ready(&drive));
+
+  /* A disc put in under a turning motor is counted from its going in. */
+  drive_insert(&drive, &floppy);
+  TEST_CHECK(!drive_ready(&drive));
+  tick(READY_FROM_THE_INDEX);
+  TEST_CHECK(drive_ready(&drive));
+}
+
+/* And once up, READY stays up for as long as the disc turns: a minute of
+   it, three hundred revolutions, is more than any count of them could
+   hold without coming round again. */
+static void ready_stays_up_while_the_disc_turns(void) {
+  a_disc_in_a_turning_drive(1);
+  tick(READY_FROM_THE_INDEX);
+  for (int millisecond = 0; millisecond < 60000; millisecond++) {
+    tick(1000);
+    if (!drive_ready(&drive)) {
+      TEST_FAIL("READY fell %d ms after it rose", millisecond + 1);
+      return;
+    }
+  }
 }
 
 /* One byte every 32µs, 6250 to a revolution, the index for one microsecond
@@ -168,7 +202,8 @@ static void write_protect_is_the_discs(void) {
 
 int main(void) {
   TEST_RUN(ready_needs_a_disc_and_a_motor);
-  TEST_RUN(a_spin_up_delays_ready);
+  TEST_RUN(ready_waits_for_two_revolutions);
+  TEST_RUN(ready_stays_up_while_the_disc_turns);
   TEST_RUN(the_disc_turns_at_300_rpm);
   TEST_RUN(a_step_onto_a_shorter_track_passes_no_index);
   TEST_RUN(a_stopped_motor_stops_the_disc);

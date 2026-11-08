@@ -134,6 +134,17 @@ static void tick(uint32_t microseconds) {
 
 static uint8_t status(void) { return upd765_read(&fdc, UPD765_STATUS); }
 
+/* What AMSDOS does after starting the motor: wait. A drive is READY at the
+   third index pulse after the motor comes on or a disc goes in (drive.h),
+   and READY rises as the index passes, so the disc stands at the index when
+   this returns — where every test below begins. */
+static void wait_for_ready(const drive_t *drive) {
+  for (uint32_t waited = 0; !drive_ready(drive) && waited < 1000000; waited++) {
+    tick(1);
+  }
+  TEST_CHECK(drive_ready(drive));
+}
+
 static void power_on(void) {
   build_disc();
   TEST_CHECK(dsk_read(&floppy, image, image_length, &problem));
@@ -145,6 +156,7 @@ static void power_on(void) {
   upd765_attach(&fdc, 1, &drive_b);
   drive_set_motor(&drive_a, true);
   drive_set_motor(&drive_b, true);
+  wait_for_ready(&drive_a);
 }
 
 /* What AMSDOS does before touching the disc: let the motor's change of
@@ -602,6 +614,7 @@ static void a_track_never_formatted_takes_a_format(void) {
   TEST_CHECK(dsk_read(&floppy, image, image_length, &problem));
   floppy_give_room(&floppy, sizeof image);
   drive_insert(&drive_a, &floppy);
+  wait_for_ready(&drive_a);
   drive_a.cylinder = 1;
   send(amsdos_specify, sizeof amsdos_specify);
   uint8_t command[6] = {0x4D, 0x00, 0x02, 0x02, 0x52, 0xE5};
@@ -739,6 +752,7 @@ static void a_drive_that_is_not_ready_ends_a_command_at_once(void) {
   /* And one that stops being ready under a command ends it with the
      code for that. */
   drive_set_motor(&drive_a, true);
+  wait_for_ready(&drive_a);
   drain_interrupts();
   send(read_data_command(0xC4, 0xC4), 9);
   tick(1000);
@@ -854,6 +868,7 @@ static void multi_track_continues_on_the_other_side(void) {
   power_on();
   build_two_sided_disc();
   drive_insert(&drive_b, &two_sided);
+  wait_for_ready(&drive_b);
   send(amsdos_specify, sizeof amsdos_specify);
   uint8_t command[9] = {0xC6, 0x01, 0x00, 0x00, 0x01, 0x02, 0x02, 0x2A, 0xFF};
   send(command, 9);
@@ -1026,6 +1041,7 @@ static void a_sector_across_the_index_reads_whole(void) {
   image_length += sizeof offsets;
   TEST_CHECK(dsk_read(&floppy, image, image_length, &problem));
   drive_insert(&drive_a, &floppy);
+  wait_for_ready(&drive_a);
   send(amsdos_specify, sizeof amsdos_specify);
   uint8_t command[9] = {0x66, 0x00, 0x00, 0x00, 0xCA, 0x02, 0xCA, 0x2A, 0xFF};
   uint8_t first[2] = {0};

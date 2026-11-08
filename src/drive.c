@@ -14,11 +14,12 @@ void drive_insert(drive_t *drive, floppy_t *floppy) {
   drive->revolutions = 0;
   drive->microseconds_into_byte = 0;
   drive->byte_passed = false;
+  drive->index_pulses_seen = 0;
 }
 
 void drive_set_motor(drive_t *drive, bool on) {
   if (on && !drive->motor) {
-    drive->spinning_up = drive->spin_up;
+    drive->index_pulses_seen = 0;
   }
   if (!on) {
     drive->byte_passed = false;
@@ -51,9 +52,6 @@ void drive_tick(drive_t *drive) {
   if (!drive->motor || drive->floppy == NULL) {
     return;
   }
-  if (drive->spinning_up > 0) {
-    drive->spinning_up--;
-  }
   if (++drive->microseconds_into_byte < FLOPPY_MICROSECONDS_PER_BYTE) {
     return;
   }
@@ -63,11 +61,15 @@ void drive_tick(drive_t *drive) {
   if (drive->position >= floppy_track_length(drive->floppy, drive->cylinder, drive->side)) {
     drive->position = 0;
     drive->revolutions++;
+    if (drive->index_pulses_seen < DRIVE_INDEX_PULSES_TO_READY) {
+      drive->index_pulses_seen++;
+    }
   }
 }
 
 bool drive_ready(const drive_t *drive) {
-  return drive->floppy != NULL && drive->motor && drive->spinning_up == 0;
+  return drive->floppy != NULL && drive->motor &&
+         drive->index_pulses_seen >= DRIVE_INDEX_PULSES_TO_READY;
 }
 
 bool drive_track_zero(const drive_t *drive) { return drive->cylinder == 0; }
