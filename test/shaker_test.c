@@ -149,9 +149,9 @@ static uint8_t disc_image[256 * 1024];
 static uint8_t pixels[CPC_FRAMEBUFFER_WIDTH * CPC_FRAMEBUFFER_HEIGHT * 3];
 static floppy_t disc;
 
-/* Locating the grid scores two hundred and eighty-nine candidates, each of
-   them two thousand cells, so a cell is named some six hundred thousand
-   times a sample. The eight bytes of a glyph read as one 64-bit number, so
+/* Searching for the grid scores two hundred and eighty-nine candidates of
+   two thousand cells each, so one search may look up nearly six hundred
+   thousand cells. The eight bytes of a glyph read as one 64-bit number, so
    the table is indexed once and looked up rather than walked. Should two
    codes ever share a bitmap the lower keeps it, which is the answer walking
    the table gave; none of the three firmware ROMs holds such a pair. */
@@ -238,6 +238,25 @@ static char saved_previous_screen[ROWS][COLUMNS + 1];
 static char menu_screen[ROWS][COLUMNS + 1];
 static int grid_left = NOMINAL_LEFT;
 static int grid_top = NOMINAL_TOP;
+
+/* A read depends on nothing but the raster, the grid it starts from, the
+   border ink and the glyph table, which only power_on builds. A page whose
+   picture stands still is read MAX_SAMPLES_WITHOUT_NEWS times over, and
+   where no grid reads well enough to be kept, each of those reads searches
+   every candidate again. */
+static struct {
+  bool held;
+  uint8_t raster[sizeof framebuffer];
+  int started_left;
+  int started_top;
+  uint8_t border_ink;
+
+  char screen[ROWS][COLUMNS + 1];
+  int ended_left;
+  int ended_top;
+  int percentage_named;
+} last_read;
+
 static const char *rom_directory = "roms";
 static const char *disc_directory = "test/data/discs";
 /* Where the sweep writes, by default the directory the Makefile makes for
@@ -423,6 +442,7 @@ static bool power_on(void) {
     return false;
   }
   build_glyph_index();
+  last_read.held = false;
   cpc_init(&cpc, ram, sizeof ram, rom, crtc_type);
   cpc_set_upper_rom(&cpc, 0, rom + 0x4000);
   cpc_fit_disc_interface(&cpc, true);
@@ -521,9 +541,9 @@ static bool find_display_corner(int *corner_left, int *corner_top) {
 }
 
 /* Two readings of the same cell. One lying wholly inside the frame needs
-   no bounds test at all, and it is the loop a sweep spends most of itself
-   in; a picture these tests have pushed off the edge takes the second,
-   which asks of every pixel and reads what lies outside as paper. */
+   no bounds test at all, and it is the loop where reading the screen spends
+   most of its time; a picture these tests have pushed off the edge takes the
+   second, which asks of every pixel and reads what lies outside as paper. */
 static uint64_t cut_bitmap(int left, int top, int row, int column, uint8_t behind) {
   int cell_left = left + column * GLYPH_WIDTH;
   int cell_top = top + row * GLYPH_HEIGHT;
@@ -649,10 +669,7 @@ static void locate_grid(void) {
   grid_top = best_top;
 }
 
-/* Returns the percentage of drawn glyphs the table could name, or
-   NOTHING_DRAWN when there was too little on the screen to judge. */
-static int read_screen(void) {
-  memcpy(previous_screen, screen, sizeof screen);
+static int read_screen_afresh(void) {
   locate_grid();
   uint8_t behind = paper_colour(grid_left, grid_top);
   int glyphs_drawn = 0;
@@ -672,6 +689,31 @@ static int read_screen(void) {
     screen[row][COLUMNS] = '\0';
   }
   return proportion_named(glyphs_named, glyphs_drawn);
+}
+
+/* Returns the percentage of drawn glyphs the table could name, or
+   NOTHING_DRAWN when there was too little on the screen to judge. */
+static int read_screen(void) {
+  memcpy(previous_screen, screen, sizeof screen);
+  const uint8_t border_ink = cpc.gate_array.inks[16];
+  if (last_read.held && last_read.started_left == grid_left && last_read.started_top == grid_top &&
+      last_read.border_ink == border_ink &&
+      memcmp(last_read.raster, framebuffer, sizeof framebuffer) == 0) {
+    memcpy(screen, last_read.screen, sizeof screen);
+    grid_left = last_read.ended_left;
+    grid_top = last_read.ended_top;
+    return last_read.percentage_named;
+  }
+  last_read.held = true;
+  memcpy(last_read.raster, framebuffer, sizeof framebuffer);
+  last_read.started_left = grid_left;
+  last_read.started_top = grid_top;
+  last_read.border_ink = border_ink;
+  last_read.percentage_named = read_screen_afresh();
+  memcpy(last_read.screen, screen, sizeof screen);
+  last_read.ended_left = grid_left;
+  last_read.ended_top = grid_top;
+  return last_read.percentage_named;
 }
 
 static bool write_raster(const char *path) {
