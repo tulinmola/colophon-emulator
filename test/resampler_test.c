@@ -29,13 +29,28 @@ static size_t square(uint32_t half, int32_t level, long clocks) {
   return written;
 }
 
-/* |X(k)| of `count` samples from `from`, for a whole number of periods. */
+static double cosines[sizeof samples / sizeof samples[0]];
+static double sines[sizeof samples / sizeof samples[0]];
+static size_t steps_in_a_turn;
+
+/* |X(k)| of `count` samples from `from`, for a whole number of periods.
+   Angles a whole turn apart share a cosine and a sine, so one turn of
+   `count` steps, tabled once, serves every bin. */
 static double magnitude(const float *from, size_t count, size_t bin) {
+  if (steps_in_a_turn != count) {
+    for (size_t step = 0; step < count; step++) {
+      double angle = 2.0 * PI * (double)step / (double)count;
+      cosines[step] = cos(angle);
+      sines[step] = sin(angle);
+    }
+    steps_in_a_turn = count;
+  }
   double real = 0.0, imaginary = 0.0;
+  size_t step = 0;
   for (size_t index = 0; index < count; index++) {
-    double angle = 2.0 * PI * (double)bin * (double)index / (double)count;
-    real += from[index] * cos(angle);
-    imaginary -= from[index] * sin(angle);
+    real += from[index] * cosines[step];
+    imaginary -= from[index] * sines[step];
+    step = (step + bin) % count;
   }
   return sqrt(real * real + imaginary * imaginary);
 }

@@ -614,11 +614,13 @@ static void a_tape_in_the_deck_is_what_bit_6_reads(void) {
   TEST_CHECK(run_to_halt());
   TEST_EQUAL(spectrum.cpu.a & 0x40, 0x00);
 
-  /* Run the reel on to the first edge, past the cassette's leader (tzx.h),
-     and read again. */
+  /* Play the tape on to the first edge, past the cassette's leader (tzx.h),
+     and read again. The deck plays it alone: the machine would play it
+     tick for tick the same, and nothing else it does over the leader is
+     graded. */
   uint32_t guard = 0;
   while (!tape_level(&tape) && guard++ < 20000 * SPECTRUM_TICKS_PER_MILLISECOND) {
-    spectrum_tick(&spectrum);
+    tape_tick(&tape);
   }
   TEST_CHECK(tape_level(&tape));
   spectrum.ear = false;

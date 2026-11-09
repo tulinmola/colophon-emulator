@@ -70,12 +70,9 @@ BENCH_C = test/bench.c
 Z80_SINGLE_STEP_C = test/z80_single_step_test.c test/json.c
 Z80_EXERCISER_C = test/z80_exerciser_test.c
 
-# Every target depends on every header: the build compiles straight from
-# sources, with nothing finer to hang a dependency on.
-HEADERS = $(wildcard src/*.h) $(wildcard lib/*.h) $(wildcard cli/*.h) $(wildcard test/*.h)
-
 # Taken by wildcard so a file cannot be added and left out of the formatter
 # or the linter.
+HEADERS = $(wildcard src/*.h) $(wildcard lib/*.h) $(wildcard cli/*.h) $(wildcard test/*.h)
 SOURCES = $(wildcard src/*.c) $(wildcard lib/*.c) $(wildcard cli/*.c) $(wildcard test/*.c)
 
 SINGLE_STEP_DATA = test/data/SingleStepTests/z80/v1
@@ -122,137 +119,135 @@ CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homeb
 
 all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test $(BUILD)/command_line_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test $(BUILD)/shaker_test $(BUILD)/demo_test $(BUILD)/bench
 
+# Each source compiles once, to an object every binary naming it links.
+# Beside each object the compiler lists the project's headers it read, so an
+# edit to one recompiles what read it.
+OBJECTS_OF = $(patsubst %.c,$(BUILD)/%.o,$(1))
+
+$(BUILD)/%.o: %.c $(BUILD)/flags
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MMD -MP $(INCLUDES) -c $< -o $@
+
+# What a source may include beyond its own directory: the core and lib/
+# nothing, the command line those two, the tests all three.
+$(BUILD)/src/%.o $(BUILD)/lib/%.o: INCLUDES =
+$(BUILD)/cli/%.o: INCLUDES = -Isrc -Ilib
+$(BUILD)/test/%.o: INCLUDES = -Isrc -Ilib -Icli
+
+# The compiler and its flags, in a file rewritten only when they change, so
+# that a build with different ones recompiles every object rather than mix
+# the two.
+COMPILER_AND_FLAGS_QUOTED = '$(subst ','\'',$(CC) $(CFLAGS))'
+
+$(BUILD)/flags: FORCE
+	@mkdir -p $(BUILD)
+	@printf '%s\n' $(COMPILER_AND_FLAGS_QUOTED) | cmp -s - $@ || printf '%s\n' $(COMPILER_AND_FLAGS_QUOTED) > $@
+
+FORCE:
+
+# After the all rule: make's default is the first target it reads, and these
+# files name targets of their own.
+-include $(patsubst %.c,$(BUILD)/%.d,$(SOURCES))
+
 # The command line. The core allocates nothing and does no I/O; everything
 # that does lives in cli/.
-$(BUILD)/emulator: $(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Ilib -Icli $(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C) -lm -o $@
+$(BUILD)/emulator: $(call OBJECTS_OF,$(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C))
+	$(CC) $(CFLAGS) $^ -lm -o $@
 
-$(BUILD)/z80_test: $(Z80_C) $(Z80_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(Z80_C) $(Z80_TEST_C) -o $@
+$(BUILD)/z80_test: $(call OBJECTS_OF,$(Z80_C) $(Z80_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/crtc_test: $(CRTC_C) $(CRTC_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(CRTC_C) $(CRTC_TEST_C) -o $@
+$(BUILD)/crtc_test: $(call OBJECTS_OF,$(CRTC_C) $(CRTC_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/gate_array_test: $(GATE_ARRAY_C) $(GATE_ARRAY_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(GATE_ARRAY_C) $(GATE_ARRAY_TEST_C) -o $@
+$(BUILD)/gate_array_test: $(call OBJECTS_OF,$(GATE_ARRAY_C) $(GATE_ARRAY_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/monitor_test: $(MONITOR_C) $(MONITOR_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(MONITOR_C) $(MONITOR_TEST_C) -o $@
+$(BUILD)/monitor_test: $(call OBJECTS_OF,$(MONITOR_C) $(MONITOR_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/ppi_test: $(PPI_C) $(PPI_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(PPI_C) $(PPI_TEST_C) -o $@
+$(BUILD)/ppi_test: $(call OBJECTS_OF,$(PPI_C) $(PPI_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/ay38910_test: $(AY38910_C) $(AY38910_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(AY38910_C) $(AY38910_TEST_C) -o $@
+$(BUILD)/ay38910_test: $(call OBJECTS_OF,$(AY38910_C) $(AY38910_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/keyboard_test: $(KEYBOARD_C) $(KEYBOARD_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(KEYBOARD_C) $(KEYBOARD_TEST_C) -o $@
+$(BUILD)/keyboard_test: $(call OBJECTS_OF,$(KEYBOARD_C) $(KEYBOARD_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/tape_test: $(TAPE_C) $(TAPE_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(TAPE_C) $(TAPE_TEST_C) -o $@
+$(BUILD)/tape_test: $(call OBJECTS_OF,$(TAPE_C) $(TAPE_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/tzx_test: $(TZX_C) $(TZX_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(TZX_C) $(TZX_TEST_C) -o $@
+$(BUILD)/tzx_test: $(call OBJECTS_OF,$(TZX_C) $(TZX_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/bench: $(CPC_CORE_C) $(BENCH_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(CPC_CORE_C) $(BENCH_C) -o $@
+$(BUILD)/bench: $(call OBJECTS_OF,$(CPC_CORE_C) $(BENCH_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/demo_test: $(CPC_CORE_C) $(PNG_C) $(DEMO_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Icli -Itest $(CPC_CORE_C) $(PNG_C) $(DEMO_TEST_C) -o $@
+$(BUILD)/demo_test: $(call OBJECTS_OF,$(CPC_CORE_C) $(PNG_C) $(DEMO_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/shaker_test: $(CPC_CORE_C) $(PNG_C) $(SHAKER_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Icli -Itest $(CPC_CORE_C) $(PNG_C) $(SHAKER_TEST_C) -o $@
+$(BUILD)/shaker_test: $(call OBJECTS_OF,$(CPC_CORE_C) $(PNG_C) $(SHAKER_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/ula_test: $(ULA_C) $(ULA_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(ULA_C) $(ULA_TEST_C) -o $@
+$(BUILD)/ula_test: $(call OBJECTS_OF,$(ULA_C) $(ULA_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/spectrum_test: $(SPECTRUM_CORE_C) $(SPECTRUM_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_TEST_C) -o $@
+$(BUILD)/spectrum_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/spectrum_snapshot_test: $(SPECTRUM_CORE_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_SNAPSHOT_TEST_C) -o $@
+$(BUILD)/spectrum_snapshot_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_SNAPSHOT_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/cpc_test: $(CPC_CORE_C) $(CPC_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(CPC_CORE_C) $(CPC_TEST_C) -o $@
+$(BUILD)/cpc_test: $(call OBJECTS_OF,$(CPC_CORE_C) $(CPC_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/cpc_firmware_test: $(CPC_CORE_C) $(CPC_FIRMWARE_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(CPC_CORE_C) $(CPC_FIRMWARE_TEST_C) -o $@
+$(BUILD)/cpc_firmware_test: $(call OBJECTS_OF,$(CPC_CORE_C) $(CPC_FIRMWARE_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/spectrum_firmware_test: $(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C) -o $@
+$(BUILD)/spectrum_firmware_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/spectrum_interrupt_test: $(SPECTRUM_CORE_C) $(SPECTRUM_INTERRUPT_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_INTERRUPT_TEST_C) -o $@
+$(BUILD)/spectrum_interrupt_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_INTERRUPT_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/spectrum_timing_test: $(SPECTRUM_CORE_C) $(SPECTRUM_TIMING_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(SPECTRUM_CORE_C) $(SPECTRUM_TIMING_TEST_C) -o $@
+$(BUILD)/spectrum_timing_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_TIMING_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/cpc_timing_test: $(CPC_CORE_C) $(CPC_TIMING_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(CPC_CORE_C) $(CPC_TIMING_TEST_C) -o $@
+$(BUILD)/cpc_timing_test: $(call OBJECTS_OF,$(CPC_CORE_C) $(CPC_TIMING_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/cpc_snapshot_test: $(CPC_CORE_C) $(CPC_SNAPSHOT_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(CPC_CORE_C) $(CPC_SNAPSHOT_TEST_C) -o $@
+$(BUILD)/cpc_snapshot_test: $(call OBJECTS_OF,$(CPC_CORE_C) $(CPC_SNAPSHOT_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/floppy_test: $(FLOPPY_C) $(FLOPPY_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(FLOPPY_C) $(FLOPPY_TEST_C) -o $@
+$(BUILD)/floppy_test: $(call OBJECTS_OF,$(FLOPPY_C) $(FLOPPY_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/drive_test: $(FLOPPY_C) $(DRIVE_C) $(DRIVE_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(FLOPPY_C) $(DRIVE_C) $(DRIVE_TEST_C) -o $@
+$(BUILD)/drive_test: $(call OBJECTS_OF,$(FLOPPY_C) $(DRIVE_C) $(DRIVE_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/upd765_test: $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(UPD765_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(UPD765_TEST_C) -o $@
+$(BUILD)/upd765_test: $(call OBJECTS_OF,$(FLOPPY_C) $(DRIVE_C) $(UPD765_C) $(UPD765_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/png_test: $(PNG_C) $(PNG_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Icli -Itest $(PNG_C) $(PNG_TEST_C) -o $@
+$(BUILD)/png_test: $(call OBJECTS_OF,$(PNG_C) $(PNG_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
 # Links no machine: it runs the command line's own binary, which the fast tier
 # builds for it.
-$(BUILD)/command_line_test: $(COMMAND_LINE_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Itest $(COMMAND_LINE_TEST_C) -o $@
+$(BUILD)/command_line_test: $(call OBJECTS_OF,$(COMMAND_LINE_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/wav_test: $(WAV_C) $(WAV_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Icli -Itest $(WAV_C) $(WAV_TEST_C) -o $@
+$(BUILD)/wav_test: $(call OBJECTS_OF,$(WAV_C) $(WAV_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/resampler_test: $(RESAMPLER_C) $(RESAMPLER_TEST_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Ilib -Itest $(RESAMPLER_C) $(RESAMPLER_TEST_C) -lm -o $@
+$(BUILD)/resampler_test: $(call OBJECTS_OF,$(RESAMPLER_C) $(RESAMPLER_TEST_C))
+	$(CC) $(CFLAGS) $^ -lm -o $@
 
-$(BUILD)/z80_single_step_test: $(Z80_C) $(Z80_SINGLE_STEP_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(Z80_C) $(Z80_SINGLE_STEP_C) -o $@
+$(BUILD)/z80_single_step_test: $(call OBJECTS_OF,$(Z80_C) $(Z80_SINGLE_STEP_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
-$(BUILD)/z80_exerciser_test: $(Z80_C) $(Z80_EXERCISER_C) $(HEADERS)
-	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -Isrc -Itest $(Z80_C) $(Z80_EXERCISER_C) -o $@
+$(BUILD)/z80_exerciser_test: $(call OBJECTS_OF,$(Z80_C) $(Z80_EXERCISER_C))
+	$(CC) $(CFLAGS) $^ -o $@
 
 # The fast tier: hermetic, no network, runs on every change.
 test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test $(BUILD)/emulator $(BUILD)/command_line_test
@@ -402,4 +397,4 @@ lint:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all roms discs sources-agree bench test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser test-all format format-check lint clean
+.PHONY: all roms discs sources-agree FORCE bench test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser test-all format format-check lint clean

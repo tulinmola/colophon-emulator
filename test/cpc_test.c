@@ -1156,8 +1156,9 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   /* Turned on, the reel runs once the line has been high 50ms longer than
      it has been low, which is how late it follows the line either way
      (cpc.c). A drop on the way — the firmware's keyboard scan makes one twice
-     a frame — costs the climb twice what the drop lasted and no more. The board sees the line on
-     its next tick, not the write, and counts from there. */
+     a frame — costs the climb twice what the drop lasted and no more. The
+     board sees the line on its next tick, not the write, and counts from
+     there. */
   set_motor(true);
   for (uint32_t tick = 0; tick < reel_lag_ticks / 2; tick++) {
     cpc_tick(&cpc);
@@ -1174,12 +1175,13 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   cpc_tick(&cpc);
   TEST_CHECK(tape_playing(&tape));
 
-  /* The tape starts low, behind the cassette's leader (tzx.h); run on to the
-     first edge. The pulse after it lasts exactly as long as the format's
-     timing scaled to this board's clock. */
+  /* The tape starts low, behind the cassette's leader (tzx.h). The deck
+     alone plays it on to the first edge: the board, its line held high,
+     would play it tick for tick the same, and nothing else it does over
+     the leader is graded. */
   uint32_t guard = 0;
   while (!tape_level(&tape) && guard++ < 20000 * CPC_TICKS_PER_MILLISECOND) {
-    cpc_tick(&cpc);
+    tape_tick(&tape);
   }
   TEST_CHECK(tape_level(&tape));
 
