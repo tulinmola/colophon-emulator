@@ -271,8 +271,8 @@ test: sources-agree $(BUILD)/z80_test $(BUILD)/crtc_test $(BUILD)/gate_array_tes
 	@$(BUILD)/floppy_test
 	@$(BUILD)/drive_test
 	@$(BUILD)/upd765_test
-	@$(BUILD)/png_test
-	@$(BUILD)/wav_test
+	@$(BUILD)/png_test $(BUILD)/png_test_output.png
+	@$(BUILD)/wav_test $(BUILD)/wav_test_output.wav
 	@$(BUILD)/resampler_test
 	@mkdir -p $(BUILD)/command_line
 	@$(BUILD)/command_line_test $(BUILD)/emulator $(BUILD)/command_line

@@ -12,7 +12,7 @@
 #include "png_read.h"
 #include "test.h"
 
-#define OUTPUT_PATH "build/png_test_output.png"
+static const char *output_path;
 
 /* The check values both algorithms publish for the string "123456789". If
    these fail, the reader is not evidence of anything. */
@@ -28,11 +28,11 @@ static void round_trip(uint32_t width, uint32_t height) {
   for (size_t index = 0; index < (size_t)width * height * 3; index++) {
     pixels[index] = (uint8_t)(index * 7 + index / 13);
   }
-  TEST_CHECK(png_write(OUTPUT_PATH, pixels, width, height));
+  TEST_CHECK(png_write(output_path, pixels, width, height));
   uint32_t read_width = 0;
   uint32_t read_height = 0;
   char problem[256];
-  uint8_t *read_back = png_read(OUTPUT_PATH, &read_width, &read_height, problem, sizeof problem);
+  uint8_t *read_back = png_read(output_path, &read_width, &read_height, problem, sizeof problem);
   if (read_back == NULL) {
     TEST_FAIL("%s", problem);
     free(pixels);
@@ -45,7 +45,7 @@ static void round_trip(uint32_t width, uint32_t height) {
   }
   free(read_back);
   free(pixels);
-  remove(OUTPUT_PATH);
+  remove(output_path);
 }
 
 static void a_single_pixel_survives(void) { round_trip(1, 1); }
@@ -58,7 +58,12 @@ static void an_image_of_several_blocks_survives(void) { round_trip(200, 200); }
 
 static void a_screenshot_sized_image_survives(void) { round_trip(768, 544); }
 
-int main(void) {
+int main(int argc, char **argv) {
+  if (argc != 2) {
+    fprintf(stderr, "usage: png_test FILE\n");
+    return 1;
+  }
+  output_path = argv[1];
   TEST_RUN(the_readers_checksums_match_their_published_values);
   TEST_RUN(a_single_pixel_survives);
   TEST_RUN(a_small_image_survives);

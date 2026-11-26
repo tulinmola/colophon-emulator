@@ -88,7 +88,7 @@ static floppy_t disc;
 
 static const char *rom_directory = "roms";
 static const char *disc_directory = "test/data/discs";
-static const char *report_directory = "build/demos";
+static const char *report_directory = "build/demos/crtc0";
 static const char *record_path = "test/demo-batman-forever-crtc0.txt";
 static uint8_t crtc_type;
 static long frames_to_play = 34000;

@@ -12,7 +12,7 @@
 #include "test.h"
 #include "wav.h"
 
-#define OUTPUT_PATH "build/wav_test_output.wav"
+static const char *output_path;
 
 static uint32_t get32(const uint8_t *at) {
   return (uint32_t)at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24;
@@ -27,12 +27,16 @@ static void a_written_file_reads_back_as_its_layout_says(void) {
     samples[index] = (int16_t)(index * 37 - 20000);
   }
   wav_t wav;
-  TEST_CHECK(wav_open(&wav, OUTPUT_PATH, 125000, 2));
+  bool opened = wav_open(&wav, output_path, 125000, 2);
+  TEST_CHECK(opened);
+  if (!opened) {
+    return;
+  }
   wav_write(&wav, samples, 300);
   wav_write(&wav, samples + 600, 400);
   TEST_CHECK(wav_close(&wav));
 
-  FILE *file = fopen(OUTPUT_PATH, "rb");
+  FILE *file = fopen(output_path, "rb");
   TEST_CHECK(file != NULL);
   if (file == NULL) {
     return;
@@ -63,7 +67,11 @@ static void a_written_file_reads_back_as_its_layout_says(void) {
    file still closes as the frames it holds. */
 static void a_file_stops_at_the_4gib_its_sizes_can_hold(void) {
   wav_t wav;
-  TEST_CHECK(wav_open(&wav, OUTPUT_PATH, 48000, 2));
+  bool opened = wav_open(&wav, output_path, 48000, 2);
+  TEST_CHECK(opened);
+  if (!opened) {
+    return;
+  }
   int16_t frame[2] = {1, 2};
   wav_write(&wav, frame, 1);
   /* As though the file already held its last whole frame but one. */
@@ -73,7 +81,7 @@ static void a_file_stops_at_the_4gib_its_sizes_can_hold(void) {
   wav_write(&wav, frame, 1);
   TEST_CHECK(wav.full);
   TEST_CHECK(!wav_close(&wav));
-  FILE *file = fopen(OUTPUT_PATH, "rb");
+  FILE *file = fopen(output_path, "rb");
   uint8_t header[44] = {0};
   bool read = file != NULL && fread(header, 1, sizeof header, file) == sizeof header;
   if (file != NULL) {
@@ -85,7 +93,12 @@ static void a_file_stops_at_the_4gib_its_sizes_can_hold(void) {
   }
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+  if (argc != 2) {
+    fprintf(stderr, "usage: wav_test FILE\n");
+    return 1;
+  }
+  output_path = argv[1];
   TEST_RUN(a_written_file_reads_back_as_its_layout_says);
   TEST_RUN(a_file_stops_at_the_4gib_its_sizes_can_hold);
   return TEST_REPORT("wav");
