@@ -260,6 +260,15 @@ static void the_first_interrupt_is_accepted_sixteen_tstates_in(void) {
   TEST_EQUAL(acknowledged_at, 18);
 }
 
+/* The raster the header gives hosts to size their buffers by is the one
+   this machine's ULA draws. */
+static void the_raster_is_the_frame_the_ula_draws(void) {
+  power_on(SPECTRUM_RAM_48K);
+  TEST_EQUAL(spectrum.ula.frame.ticks_per_line * ULA_SAMPLES_PER_TICK, SPECTRUM_FRAMEBUFFER_WIDTH);
+  TEST_EQUAL(spectrum.ula.frame.lines_per_frame, SPECTRUM_FRAMEBUFFER_HEIGHT);
+  TEST_EQUAL(spectrum.ula.frame.ticks_per_frame, SPECTRUM_TICKS_PER_FRAME);
+}
+
 static void the_border_reaches_the_framebuffer(void) {
   power_on(SPECTRUM_RAM_48K);
   const uint8_t program[] = {0x3E, 0x02, 0xD3, 0xFE, 0x76}; /* border 2, then wait */
@@ -268,7 +277,7 @@ static void the_border_reaches_the_framebuffer(void) {
 
   /* A line below the picture is border from end to end. Its samples sit
      SPECTRUM_PICTURE_SHIFT lines above where the beam drew them. */
-  int line = ULA_FIRST_DISPLAY_LINE + ULA_DISPLAY_LINES + 4 - SPECTRUM_PICTURE_SHIFT;
+  int line = spectrum.ula.frame.first_display_line + ULA_DISPLAY_LINES + 4 - SPECTRUM_PICTURE_SHIFT;
   TEST_EQUAL(framebuffer[line * SPECTRUM_FRAMEBUFFER_WIDTH + 200], 2);
   TEST_EQUAL(framebuffer[line * SPECTRUM_FRAMEBUFFER_WIDTH + 430], 2);
 }
@@ -290,7 +299,7 @@ static void the_picture_lands_where_the_frame_sync_leaves_it(void) {
       break;
     }
   }
-  TEST_EQUAL(top, ULA_FIRST_DISPLAY_LINE - SPECTRUM_PICTURE_SHIFT);
+  TEST_EQUAL(top, spectrum.ula.frame.first_display_line - SPECTRUM_PICTURE_SHIFT);
 }
 
 /* Spot checks against the published matrix, not against the table restated:
@@ -644,6 +653,7 @@ int main(void) {
   TEST_RUN(the_first_interrupt_is_accepted_sixteen_tstates_in);
   TEST_RUN(the_keyboard_finds_a_character_where_it_is_printed);
   TEST_RUN(every_legend_is_where_the_key_is_printed);
+  TEST_RUN(the_raster_is_the_frame_the_ula_draws);
   TEST_RUN(the_border_reaches_the_framebuffer);
   TEST_RUN(the_picture_lands_where_the_frame_sync_leaves_it);
   TEST_RUN(an_uncontended_instruction_takes_its_book_time);

@@ -5,32 +5,69 @@
 
 #include <string.h>
 
-/* A raster line begins at its retrace; the frame counter begins at the
-   interrupt. The two origins are this far apart because 14336 divides
-   exactly by a line, so the interrupt falls at the same offset into a line
-   as the first displayed byte does, 64 lines earlier ("ZX Spectrum
-   Compatible Interrupts"). T-state 0 is therefore line 0 column
-   DISPLAY_COLUMN — inside the vertical sync, directly above the first pixel
-   the chip will ever paint. */
-#define LINE_ORIGIN (ULA_RETRACE_TICKS + ULA_LEFT_BORDER_TICKS)
-#define DISPLAY_COLUMN LINE_ORIGIN
-#define RIGHT_BORDER_COLUMN (DISPLAY_COLUMN + ULA_DISPLAY_TICKS)
-#define LAST_DISPLAY_LINE (ULA_FIRST_DISPLAY_LINE + ULA_DISPLAY_LINES)
-
-/* The chip wants the bus one T-state before the first byte it displays, and
-   keeps wanting it for as long as it is reading the screen: the first
-   contended T-state of a frame is 14335, one before the first displayed one,
-   and the pattern runs the 192 lines of the picture out ("Contended
-   memory"). */
-#define FIRST_CONTENDED_TICK (ULA_FIRST_DISPLAY_LINE * ULA_TICKS_PER_LINE - 1)
-#define CONTENDED_RUN_TICKS (ULA_DISPLAY_LINES * ULA_TICKS_PER_LINE)
+/* Each type's frame, by the sources in ula.h. The 5C and 6C's is
+   libspectrum's, and its 14336 divides exactly by a line, so the interrupt
+   falls at the same offset into a line as the first displayed byte, 64
+   lines earlier ("ZX Spectrum Compatible Interrupts"). The 7K010's line and
+   frame are Rak's and Alford's, its 63 lines above the picture Farrow's and
+   the FAQ's, and its line's split libspectrum's. On an early chip its first
+   contended T-state is the FAQ's 14361 and its first displayed byte
+   libspectrum's 14362; a late chip has both a T-state later. */
+static const ula_frame frames[] = {
+    [ULA_5C_6C_EARLY] =
+        {
+            .ticks_per_line = 224,
+            .lines_per_frame = 312,
+            .ticks_per_frame = 224 * 312,
+            .retrace_ticks = 48,
+            .first_display_line = 64,
+            .first_display_tick = 14336,
+            .interrupt_ticks = 32,
+        },
+    [ULA_7K010_LATE] =
+        {
+            .ticks_per_line = 228,
+            .lines_per_frame = 311,
+            .ticks_per_frame = 228 * 311,
+            .retrace_ticks = 52,
+            .first_display_line = 63,
+            .first_display_tick = 14363,
+            .interrupt_ticks = 36,
+        },
+};
 
 /* Four T-states to a display byte: eight pixels at two a T-state. */
 #define TICKS_PER_BYTE 4
 
+static uint16_t display_column(const ula_frame *frame) {
+  return (uint16_t)(frame->retrace_ticks + ULA_LEFT_BORDER_TICKS);
+}
+
+/* A raster line begins at its retrace; the frame counter begins at the
+   interrupt. They are this far apart, which puts T-state 0 on line 0, inside
+   the vertical sync: on a 5C or 6C directly above the first pixel the chip
+   will ever paint, and on a late 7K010 one T-state to the right of it. */
+static uint32_t line_origin(const ula_frame *frame) {
+  return frame->first_display_line * frame->ticks_per_line + display_column(frame) -
+         frame->first_display_tick;
+}
+
+/* The chip wants the bus one T-state before the first byte it displays, and
+   keeps wanting it for as long as it is reading the screen: on a 5C or 6C
+   the first contended T-state of a frame is 14335, "just one cycle before
+   the top left corner is reached" (the 48K reference), and an early 7K010's
+   two stand as far apart, the 128K reference's 14361 against libspectrum's
+   14362. The pattern runs the 192 lines of the picture out. */
+static uint32_t first_contended_tick(const ula_frame *frame) {
+  return frame->first_display_tick - 1;
+}
+
 static bool in_display(const ula_t *ula) {
-  return ula->line >= ULA_FIRST_DISPLAY_LINE && ula->line < LAST_DISPLAY_LINE &&
-         ula->column >= DISPLAY_COLUMN && ula->column < RIGHT_BORDER_COLUMN;
+  const ula_frame *frame = &ula->frame;
+  uint16_t left = display_column(frame);
+  return ula->line >= frame->first_display_line &&
+         ula->line < frame->first_display_line + ULA_DISPLAY_LINES && ula->column >= left &&
+         ula->column < left + ULA_DISPLAY_TICKS;
 }
 
 /* A15..A0 = 0 1 0 R4 R3 P2 P1 P0 R2 R1 R0 C4 C3 C2 C1 C0. The pixel row
@@ -47,14 +84,16 @@ uint16_t ula_attribute_address(int row, int column) {
 }
 
 void ula_seek(ula_t *ula, uint32_t frame_tick) {
-  uint32_t raster = (frame_tick + LINE_ORIGIN) % ULA_TICKS_PER_FRAME;
-  ula->frame_tick = frame_tick % ULA_TICKS_PER_FRAME;
-  ula->line = (uint16_t)(raster / ULA_TICKS_PER_LINE);
-  ula->column = (uint16_t)(raster % ULA_TICKS_PER_LINE);
+  const ula_frame *frame = &ula->frame;
+  ula->frame_tick = frame_tick % frame->ticks_per_frame;
+  uint32_t raster = (ula->frame_tick + line_origin(frame)) % frame->ticks_per_frame;
+  ula->line = (uint16_t)(raster / frame->ticks_per_line);
+  ula->column = (uint16_t)(raster % frame->ticks_per_line);
 }
 
-void ula_init(ula_t *ula) {
+void ula_init(ula_t *ula, ula_type type) {
   memset(ula, 0, sizeof *ula);
+  ula->frame = frames[type];
   ula_seek(ula, 0);
 }
 
@@ -62,8 +101,8 @@ bool ula_fetch(const ula_t *ula, uint16_t *display, uint16_t *attribute) {
   if (!in_display(ula)) {
     return false;
   }
-  int row = ula->line - ULA_FIRST_DISPLAY_LINE;
-  int character = (ula->column - DISPLAY_COLUMN) / TICKS_PER_BYTE;
+  int row = ula->line - ula->frame.first_display_line;
+  int character = (ula->column - display_column(&ula->frame)) / TICKS_PER_BYTE;
   *display = ula_display_address(row, character);
   *attribute = ula_attribute_address(row, character);
   return true;
@@ -93,24 +132,28 @@ void ula_video(const ula_t *ula, uint8_t display, uint8_t attribute,
   }
   uint8_t bright = (attribute & 0x40) ? 0x08 : 0x00;
 
-  int pixel = ((ula->column - DISPLAY_COLUMN) % TICKS_PER_BYTE) * ULA_SAMPLES_PER_TICK;
+  int pixel = ((ula->column - display_column(&ula->frame)) % TICKS_PER_BYTE) * ULA_SAMPLES_PER_TICK;
   for (int index = 0; index < ULA_SAMPLES_PER_TICK; index++) {
     bool lit = (display >> (7 - (pixel + index))) & 1;
     samples[index] = (uint8_t)((lit ? ink : paper) | bright);
   }
 }
 
-uint8_t ula_contention(uint32_t frame_tick) {
+uint8_t ula_contention(const ula_t *ula, uint32_t frame_tick) {
   /* Six T-states owed at the head of the slot, falling to none for the two
-     the chip leaves the processor ("Contended memory"). */
+     the chip leaves the processor ("Contended memory"), on a 7K010 as on a
+     5C or 6C (the 128K reference). */
   static const uint8_t owed[8] = {6, 5, 4, 3, 2, 1, 0, 0};
-  uint32_t tick = frame_tick % ULA_TICKS_PER_FRAME;
-  if (tick < FIRST_CONTENDED_TICK) {
+  const ula_frame *frame = &ula->frame;
+  uint32_t tick = frame_tick % frame->ticks_per_frame;
+  uint32_t first = first_contended_tick(frame);
+  if (tick < first) {
     return 0;
   }
-  uint32_t since_first = tick - FIRST_CONTENDED_TICK;
-  uint32_t tick_in_line = since_first % ULA_TICKS_PER_LINE;
-  if (since_first >= CONTENDED_RUN_TICKS || tick_in_line >= ULA_DISPLAY_TICKS) {
+  uint32_t since_first = tick - first;
+  uint32_t tick_in_line = since_first % frame->ticks_per_line;
+  if (since_first >= ULA_DISPLAY_LINES * (uint32_t)frame->ticks_per_line ||
+      tick_in_line >= ULA_DISPLAY_TICKS) {
     return 0;
   }
   return owed[tick_in_line % 8];

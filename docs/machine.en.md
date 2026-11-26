@@ -175,7 +175,9 @@ The screen and the processor share one bank of memory, and the ULA settles that 
 
 The interrupt itself is a window rather than an event. The ULA holds the line low for the first thirty-two T-states of a frame and no longer, and the processor looks at it only on the last T-state of an instruction — so an instruction that ends on the thirty-second takes it and one that ends a T-state later waits a whole frame. Nothing on this board drives the data bus while the acknowledge is on it, so what the processor reads is the floating &FF; in mode 2 that is what makes a Spectrum's vector table 257 bytes long and read at I:&FF.
 
-A memory access is charged once, at the T-state it begins. An internal T-state that only holds an address is charged like an access of its own, because these ULAs weigh the address and not the request. A port is charged by a rule of its own, at up to four of the T-states of the one access, turning on the port's low bit as well as its address. An interrupt acknowledge is charged nothing, and nothing here can settle whether the chip would: the acknowledge always falls in the top border, where nothing is owed under any rule.
+Its timings are an early machine's. On some Spectrums every timing falls a T-state later after the interrupt — the contention, the screen, the beam — and a program timed to the T-state can tell which kind it is running on. The one here is early, the kind the published tables are written for; a late 48K is not built.
+
+A memory access is charged once, at the T-state it begins. An internal T-state that only holds an address is charged like an access of its own, because these ULAs weigh the address and not the request. A port is charged by a rule of its own, at up to four of the T-states of the one access, turning on the port's low bit as well as its address. An interrupt acknowledge is charged nothing, and nothing here can settle whether the chip would: the acknowledge always falls in the frame sync above the picture, where nothing is owed under any rule.
 
 Two things are missing.
 

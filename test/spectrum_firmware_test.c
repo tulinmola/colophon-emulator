@@ -28,11 +28,6 @@
 #define FONT_IN_ROM 0x3D00
 #define FIRST_CODE 32
 
-/* The display's top-left sample in the framebuffer: a retrace and a left
-   border across, and as far down as the frame sync left the picture. */
-#define DISPLAY_LEFT ((ULA_RETRACE_TICKS + ULA_LEFT_BORDER_TICKS) * ULA_SAMPLES_PER_TICK)
-#define DISPLAY_TOP (ULA_FIRST_DISPLAY_LINE - SPECTRUM_PICTURE_SHIFT)
-
 /* The boot message is on screen well before this; the ROM spends most of it
    testing the RAM it has just found. */
 #define FRAMES_TO_PROMPT 100
@@ -45,6 +40,16 @@ static uint8_t rom[SPECTRUM_ROM_SIZE];
 static uint8_t ram[SPECTRUM_RAM_48K];
 static uint8_t framebuffer[SPECTRUM_FRAMEBUFFER_WIDTH * SPECTRUM_FRAMEBUFFER_HEIGHT];
 static spectrum_t spectrum;
+
+/* The display's top-left sample in the framebuffer: a retrace and a left
+   border across, and as far down as the frame sync left the picture. */
+static int display_left(void) {
+  return (spectrum.ula.frame.retrace_ticks + ULA_LEFT_BORDER_TICKS) * ULA_SAMPLES_PER_TICK;
+}
+
+static int display_top(void) {
+  return spectrum.ula.frame.first_display_line - SPECTRUM_PICTURE_SHIFT;
+}
 
 static bool load_rom(void) {
   char path[512];
@@ -123,8 +128,8 @@ static void screen_from_framebuffer(char text[ULA_ROWS][ULA_COLUMNS + 1]) {
       int counts[16] = {0};
       for (int line = 0; line < 8; line++) {
         for (int pixel = 0; pixel < 8; pixel++) {
-          int y = DISPLAY_TOP + row * 8 + line;
-          int x = DISPLAY_LEFT + column * 8 + pixel;
+          int y = display_top() + row * 8 + line;
+          int x = display_left() + column * 8 + pixel;
           counts[framebuffer[y * SPECTRUM_FRAMEBUFFER_WIDTH + x] & 0x0F]++;
         }
       }
@@ -138,8 +143,8 @@ static void screen_from_framebuffer(char text[ULA_ROWS][ULA_COLUMNS + 1]) {
       for (int line = 0; line < 8; line++) {
         uint8_t bits = 0;
         for (int pixel = 0; pixel < 8; pixel++) {
-          int y = DISPLAY_TOP + row * 8 + line;
-          int x = DISPLAY_LEFT + column * 8 + pixel;
+          int y = display_top() + row * 8 + line;
+          int x = display_left() + column * 8 + pixel;
           if ((framebuffer[y * SPECTRUM_FRAMEBUFFER_WIDTH + x] & 0x0F) != paper) {
             bits |= (uint8_t)(0x80 >> pixel);
           }

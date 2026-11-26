@@ -83,7 +83,10 @@ static void io_write(spectrum_t *spectrum, uint16_t port, uint8_t data) {
 void spectrum_init(spectrum_t *spectrum, uint8_t *ram, uint32_t ram_size, const uint8_t *rom) {
   memset(spectrum, 0, sizeof *spectrum);
   z80_init(&spectrum->cpu);
-  ula_init(&spectrum->ula);
+  /* Early, the timing the published tables are for: "Some machines use the
+     timings given in this FAQ, while others are one T state later for all
+     timings" (the FAQ's 48K reference, cited in ula.h). */
+  ula_init(&spectrum->ula, ULA_5C_6C_EARLY);
   keyboard_init(&spectrum->keyboard);
   spectrum->ram = ram;
   spectrum->ram_size = ram_size;
@@ -91,8 +94,18 @@ void spectrum_init(spectrum_t *spectrum, uint8_t *ram, uint32_t ram_size, const 
 }
 
 void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer) {
-  monitor_init(&spectrum->monitor, framebuffer, SPECTRUM_FRAMEBUFFER_WIDTH,
-               SPECTRUM_FRAMEBUFFER_HEIGHT, SPECTRUM_FRAME_SYNC_SAMPLES, SPECTRUM_LINE_SYNC_CENTRE);
+  const ula_frame *frame = &spectrum->ula.frame;
+  uint16_t width = (uint16_t)(frame->ticks_per_line * ULA_SAMPLES_PER_TICK);
+  /* Half of the line's own sync, which is where the middle of that pulse
+     lands once the beam is timed from it. */
+  uint16_t line_sync_centre = (uint16_t)(frame->retrace_ticks * ULA_SAMPLES_PER_TICK / 2);
+  /* A sync held this long means the frame is over. No measurement of what a
+     television needs was in hand, so this is chosen rather than found: one
+     line's worth of samples, comfortably longer than a line's own sync and
+     far shorter than the eight lines the frame's runs to. */
+  uint16_t frame_sync_samples = width;
+  monitor_init(&spectrum->monitor, framebuffer, width, frame->lines_per_frame, frame_sync_samples,
+               line_sync_centre);
 }
 
 /* The sixteen kilobytes the ULA's address lines reach, which on a 16K
@@ -166,23 +179,25 @@ static void run_processor(spectrum_t *spectrum) {
        only holds one costs what one that acts on it costs. */
     case Z80_CYCLE_MEMORY:
     case Z80_CYCLE_INTERNAL:
-      spectrum->held_ticks =
-          in_contended_memory(z80_address(pins)) ? ula_contention(spectrum->ula.frame_tick) : 0;
+      spectrum->held_ticks = in_contended_memory(z80_address(pins))
+                                 ? ula_contention(&spectrum->ula, spectrum->ula.frame_tick)
+                                 : 0;
       break;
     case Z80_CYCLE_PORT:
       spectrum->port_charges_left = port_charges(z80_address(pins));
       break;
     /* No evidence here can say whether an acknowledge is charged: the
-       interrupt is held across the first 32 T-states of a frame and the chip
-       wants the bus from 14335, so an acknowledge always falls in the top
-       border, where nothing is owed under any rule. */
+       interrupt is held across a frame's first few dozen T-states and the
+       chip wants the bus only from the picture's first line, so an
+       acknowledge always falls in the frame sync above the picture, where
+       nothing is owed under any rule. */
     case Z80_CYCLE_INTERRUPT:
     case Z80_CYCLE_NONE:
       break;
   }
 
   if (spectrum->port_charges_left & 1) {
-    spectrum->held_ticks = ula_contention(spectrum->ula.frame_tick);
+    spectrum->held_ticks = ula_contention(&spectrum->ula, spectrum->ula.frame_tick);
   }
   spectrum->port_charges_left = (uint8_t)(spectrum->port_charges_left >> 1);
 }

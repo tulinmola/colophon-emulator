@@ -85,25 +85,17 @@
 #include "ula.h"
 #include "z80.h"
 
-/* The whole raster the beam covers, at two samples to a T-state. Unlike a
-   CPC's, this is an invariant and not a convention: a Spectrum has no
-   programmable video counter, so every frame is this long. */
-#define SPECTRUM_FRAMEBUFFER_WIDTH (ULA_TICKS_PER_LINE * ULA_SAMPLES_PER_TICK)
-#define SPECTRUM_FRAMEBUFFER_HEIGHT ULA_LINES_PER_FRAME
-#define SPECTRUM_TICKS_PER_FRAME ULA_TICKS_PER_FRAME
+/* The whole raster the beam covers, at two samples to a T-state: the 48K's
+   ULA, a 5C or 6C, draws 312 lines of 224. Unlike a CPC's, this is an
+   invariant and not a convention: a Spectrum has no programmable video
+   counter, so every frame this ULA draws is this long. */
+#define SPECTRUM_FRAMEBUFFER_WIDTH (224 * ULA_SAMPLES_PER_TICK)
+#define SPECTRUM_FRAMEBUFFER_HEIGHT 312
+#define SPECTRUM_TICKS_PER_FRAME (224 * 312)
 
 /* The board's clock is 3.5MHz, which is what a tape's timings are read
    against. Where it comes from is in ula.h. */
 #define SPECTRUM_TICKS_PER_MILLISECOND 3500
-
-/* Half of the line's own sync, which is where the middle of that pulse lands
-   once the beam is timed from it. */
-#define SPECTRUM_LINE_SYNC_CENTRE (ULA_RETRACE_TICKS * ULA_SAMPLES_PER_TICK / 2)
-/* A sync held this long means the frame is over. No measurement of what a
-   television needs was in hand, so this is chosen rather than found: one
-   line's worth of samples, comfortably longer than a line's own sync and far
-   shorter than the eight lines the frame's runs to. */
-#define SPECTRUM_FRAME_SYNC_SAMPLES SPECTRUM_FRAMEBUFFER_WIDTH
 
 /* The memory the board fits: 16K of ROM low, then RAM. Sixteen kilobytes of
    it makes a 16K machine and forty-eight a 48K, which the firmware works out
