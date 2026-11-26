@@ -274,6 +274,43 @@ static void the_header_carries_one_interrupt_flag_and_restores_both(void) {
   TEST_CHECK(!restored.cpu.iff2);
 }
 
+/* MAME takes IFF1 from bit 0 of the interrupt byte, which the format leaves
+   undefined, so the flag is written there as well; reading still follows
+   the format, and bit 0 alone enables nothing. */
+static void the_interrupt_flag_is_written_where_mame_reads_it_too(void) {
+  power_on(&saved, saved_ram, SPECTRUM_RAM_48K);
+  spectrum_finish_instruction(&saved);
+  const char *problem = NULL;
+  saved.cpu.iff1 = saved.cpu.iff2 = true;
+  TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(bytes[0x13], 0x05);
+
+  /* After a non-maskable interrupt taken with interrupts enabled, and before
+     its RETN, the two differ; bit 0 takes IFF2, as the RETN would, so MAME
+     resumes what this reader resumes. */
+  saved.cpu.iff1 = false;
+  TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(bytes[0x13], 0x05);
+
+  saved.cpu.iff1 = saved.cpu.iff2 = false;
+  TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+  TEST_EQUAL(bytes[0x13], 0x00);
+
+  /* A snapshot written to the format, by another emulator or by this one
+     before bit 0 was, carries bit 2 alone and resumes enabled. */
+  bytes[0x13] = 0x04;
+  power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(restored.cpu.iff1);
+  TEST_CHECK(restored.cpu.iff2);
+
+  bytes[0x13] = 0x01;
+  power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(!restored.cpu.iff1);
+  TEST_CHECK(!restored.cpu.iff2);
+}
+
 /* A round trip cannot catch a field written and read at the same wrong
    offset, so the header is checked against the published table instead: the
    offsets are transcribed a second time, from
@@ -318,7 +355,7 @@ static void the_header_is_laid_out_as_the_format_says(void) {
   TEST_EQUAL(bytes[0x0D] | (bytes[0x0E] << 8), 0x0F0E); /* BC          */
   TEST_EQUAL(bytes[0x0F] | (bytes[0x10] << 8), 0x1110); /* IY          */
   TEST_EQUAL(bytes[0x11] | (bytes[0x12] << 8), 0x1312); /* IX          */
-  TEST_EQUAL(bytes[0x13], 0x04);                        /* IFF2, bit 2 */
+  TEST_EQUAL(bytes[0x13] & 0x04, 0x04);                 /* IFF2, bit 2 */
   TEST_EQUAL(bytes[0x14], 0x15);                        /* R           */
   TEST_EQUAL(bytes[0x15] | (bytes[0x16] << 8), 0x1716); /* AF          */
   TEST_EQUAL(bytes[0x17] | (bytes[0x18] << 8), 0xC000); /* SP, pushed  */
@@ -378,5 +415,6 @@ int main(void) {
   TEST_RUN(the_program_counter_costs_two_bytes_of_the_snapshot);
   TEST_RUN(a_stack_at_the_bottom_of_memory_cannot_be_written);
   TEST_RUN(the_header_carries_one_interrupt_flag_and_restores_both);
+  TEST_RUN(the_interrupt_flag_is_written_where_mame_reads_it_too);
   return TEST_REPORT("spectrum snapshot");
 }

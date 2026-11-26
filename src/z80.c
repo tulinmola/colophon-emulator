@@ -1555,12 +1555,17 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
   cpu->nmi_previous = nmi_now;
   cpu->int_line = (pins & Z80_INT) != 0;
 
+  /* HALT is held through a halted fetch's refresh as well. The netlist
+     trace of an NMI taken while halted, in floooh's instruction-timing
+     article cited at z80_instruction_done, shows it beside RFSH in T4 and
+     gone only in that T-state's second half; the article's prose has an INT
+     clear it at the same point. Reporting it for the whole of that T4 is
+     this core's choice. */
+  const uint64_t halt = cpu->halted ? Z80_HALT : 0;
+
   switch (cpu->step) {
     case M1_T1:
-      pins = z80_set_address(pins & ~Z80_OUT_PINS, cpu->pc) | Z80_M1;
-      if (cpu->halted) {
-        pins |= Z80_HALT;
-      }
+      pins = z80_set_address(pins & ~Z80_OUT_PINS, cpu->pc) | Z80_M1 | halt;
       cpu->step = M1_T2;
       break;
 
@@ -1582,14 +1587,15 @@ uint64_t z80_tick(z80_t *cpu, uint64_t pins) {
 
     case M1_T3:
       cpu->opcode = (cpu->halted || cpu->accepting == ACCEPT_NMI) ? 0x00 : z80_data(pins);
-      pins = z80_set_address(pins & ~Z80_OUT_PINS, (uint16_t)((cpu->i << 8) | cpu->r)) | Z80_RFSH;
+      pins = z80_set_address(pins & ~Z80_OUT_PINS, (uint16_t)((cpu->i << 8) | cpu->r)) | Z80_RFSH |
+             halt;
       /* R is a 7-bit counter; bit 7 changes only via LD R,A. */
       cpu->r = (cpu->r & 0x80) | ((cpu->r + 1) & 0x7F);
       cpu->step = M1_T4;
       break;
 
     case M1_T4:
-      pins = (pins & ~Z80_OUT_PINS) | Z80_RFSH;
+      pins = (pins & ~Z80_OUT_PINS) | Z80_RFSH | halt;
       if (cpu->accepting == ACCEPT_NMI) {
         cpu->wz = 0x0066;
         cpu->finish = FINISH_PC_FROM_WZ;

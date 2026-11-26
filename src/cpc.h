@@ -46,10 +46,19 @@
  *   cpctech), https://cpctech.cpcwiki.de/docs/fdc.html — the disc
  *   interface's decode: A10 and A7 low select it, A8 and A0 then choose
  *   between the drive motor and the controller's two registers; the motor
- *   port drives every drive at once from bit 0; INT, DMA and terminal
- *   count left unconnected. It prints the selecting bit as 11 where "I/O
- *   port allocation" says 10; &FB7E has bit 10 low and bit 11 high, which
- *   settles it.
+ *   port drives every drive at once from bit 0; INT left unconnected. It
+ *   says the same of "the signals for DMA transfer", /DACK, DRQ and TC, of
+ *   which Amstrad's drawings bear out DRQ alone. It prints the selecting
+ *   bit as 11 where "I/O port allocation" says 10; &FB7E has bit 10 low and
+ *   bit 11 high, which settles it.
+ * - The CPC664 and CPC6128 service manuals and the DDI-1's (Amstrad, 1984
+ *   and 1985), https://archive.org/details/amstrad-cpc-664-service-manual,
+ *   https://archive.org/details/Amstrad_CPC6128_Service_Manual_1985_Amstrad_Consumer_Electronics_a
+ *   and https://cpcrulez.fr/hardware-service_manual-dd1_fd1.htm — the same
+ *   interface circuit in all three, on which /DACK is held high, and the
+ *   controller's TC is wired to its RESET, the pair drawn low in operation,
+ *   so terminal count rises only with a reset. Nothing here resets the
+ *   controller after power-on, so the pin is never raised.
  */
 #ifndef COLOPHON_CPC_H
 #define COLOPHON_CPC_H

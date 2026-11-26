@@ -40,11 +40,17 @@
  * Reading one sets both flags from that single bit, which is where a RETN
  * would have left them, without spending the instruction.
  *
- * What that loses is a machine caught inside its own interrupt handler,
- * where IFF1 is clear and IFF2 is not. The format has one bit for the pair,
- * so such a machine comes back with interrupts already enabled instead of
- * still masked. That is the format's, not this reader's, and there is
- * nowhere to put the difference.
+ * What that loses is a machine that took a non-maskable interrupt with
+ * interrupts enabled and has not yet run its RETN, where IFF1 is clear and
+ * IFF2 is not. The format has one bit for the pair, so such a machine comes
+ * back with interrupts already enabled instead of still masked. That is the
+ * format's, not this reader's, and there is nowhere to put the difference.
+ *
+ * One bit is written that the format does not define. MAME reads IFF1 from
+ * bit 0 of the interrupt byte, so a snapshot carrying bit 2 alone resumes
+ * there with interrupts disabled. Bit 0 is written with the same flag as
+ * bit 2, which is what the RETN would have put in IFF1, so that MAME and
+ * this reader resume the same machine; reading ignores it.
  *
  * There is no file handling here: bytes in, bytes out, like everything else
  * in this directory.
@@ -55,6 +61,10 @@
  *   by field, the total length, the program counter on the stack and the two
  *   bytes it costs, and that "when the registers have been loaded, a RETN
  *   command is required to start the program".
+ * - MAME's snapshot reader,
+ *   https://github.com/mamedev/mame/blob/d66c1c7/src/mame/sinclair/spec_snqk.cpp
+ *   — its own note on the header, "bit 0 contains IFF1, bit 2 contains
+ *   IFF2", which is how it reads one.
  */
 #ifndef COLOPHON_SPECTRUM_SNAPSHOT_H
 #define COLOPHON_SPECTRUM_SNAPSHOT_H

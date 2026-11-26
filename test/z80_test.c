@@ -626,6 +626,41 @@ static void test_interrupt_wakes_a_halted_cpu(void) {
   TEST_EQUAL(pushed_word(&cpu), 0x1001); /* the instruction after HALT */
 }
 
+/* HALT is held through every T-state of a halted fetch, refresh included,
+   and is gone from the first T-state of the cycle that follows: floooh's
+   netlist trace of an NMI taken while halted shows it beside RFSH in the
+   last fetch's T4 and cleared in that T-state's second half, and the
+   article's prose says the same of an INT
+   (https://floooh.github.io/2021/12/06/z80-instruction-timing.html). */
+static void check_halt_held_until_taken(uint64_t interrupt) {
+  z80_t cpu;
+  const uint8_t program[] = {0x76}; /* HALT */
+  start_at(&cpu, program, sizeof program);
+  cpu.im = 1;
+  cpu.iff1 = cpu.iff2 = true;
+  TEST_EQUAL(run_instruction(&cpu), 4);
+
+  /* Two halted fetches, then the one the interrupt arrives in. */
+  uint64_t pins = 0;
+  for (int tick = 0; tick < 3 * 4; tick++) {
+    if (tick == 2 * 4) {
+      pins |= interrupt;
+    }
+    pins = service_bus(z80_tick(&cpu, pins));
+    TEST_CHECK((pins & Z80_HALT) != 0);
+  }
+  TEST_CHECK(!cpu.halted);
+
+  pins = z80_tick(&cpu, pins);
+  TEST_CHECK((pins & Z80_M1) != 0);
+  TEST_CHECK((pins & Z80_HALT) == 0);
+}
+
+static void test_halt_is_held_until_an_interrupt_is_taken(void) {
+  check_halt_held_until_taken(Z80_NMI);
+  check_halt_held_until_taken(Z80_INT);
+}
+
 /* RETN restores IFF1 during the next opcode fetch, too late for an interrupt
    at the end of RETN itself. Only an earlier NMI can leave the flip-flops
    disagreeing, which is the only time this is observable. */
@@ -916,6 +951,7 @@ int main(void) {
   TEST_RUN(test_ei_blocks_for_one_instruction);
   TEST_RUN(test_prefix_blocks_acceptance);
   TEST_RUN(test_interrupt_wakes_a_halted_cpu);
+  TEST_RUN(test_halt_is_held_until_an_interrupt_is_taken);
   TEST_RUN(test_retn_blocks_for_one_instruction);
   TEST_RUN(test_ld_a_i_interrupted_clears_parity);
   return TEST_REPORT("z80");

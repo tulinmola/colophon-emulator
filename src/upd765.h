@@ -7,7 +7,7 @@
  * shows — RQM says the chip wants a byte moved, DIO says which way, EXM
  * that an execution phase is under way in non-DMA mode, CB that a command
  * is in progress — and the boards this chip was fitted to wired neither
- * its interrupt nor its DMA lines, so the handshake is all there is.
+ * its interrupt nor its DMA request, so the handshake is all there is.
  *
  * Time is the disc's. The chip finds a sector when its identity passes
  * under the head and moves each byte of the data field as it goes by, one
@@ -51,8 +51,8 @@
  *   READY and the interrupt it raises, and the doubling of every timing at
  *   4MHz.
  * - "Floppy disc controller and Floppy disc drives" (Kevin Thacker's
- *   cpctech), https://cpctech.cpcwiki.de/docs/fdc.html — INT, DRQ, /DACK
- *   and TC left unconnected on the Amstrad interface, and the 4MHz clock.
+ *   cpctech), https://cpctech.cpcwiki.de/docs/fdc.html — INT and DRQ left
+ *   unconnected on the Amstrad interface, and the 4MHz clock.
  * - "I/O port allocation" (Mark Rison & Kevin Thacker),
  *   https://cpctech.cpcwiki.de/docs/iopord.html — a write with A0 low,
  *   which the datasheet calls illegal, reaches the data register.

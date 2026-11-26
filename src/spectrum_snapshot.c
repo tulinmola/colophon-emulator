@@ -18,7 +18,7 @@
 #define AT_BC 0x0D
 #define AT_IY 0x0F
 #define AT_IX 0x11
-#define AT_INTERRUPT 0x13 /* bit 2 holds IFF2, and nothing holds IFF1 */
+#define AT_INTERRUPT 0x13 /* bit 2 holds IFF2; the format has no bit for IFF1 */
 #define AT_R 0x14
 #define AT_AF 0x15
 #define AT_SP 0x17
@@ -27,6 +27,9 @@
 #define AT_RAM 0x1B
 
 #define IFF2_BIT 0x04
+/* Not the format's but MAME's, which takes IFF1 from it. Written with IFF2,
+   which is what the RETN a snapshot resumes with puts in IFF1; never read. */
+#define MAME_IFF1_BIT 0x01
 
 static uint16_t read16(const uint8_t *bytes, size_t at) {
   return (uint16_t)(bytes[at] | (bytes[at + 1] << 8));
@@ -148,7 +151,7 @@ bool spectrum_snapshot_save(const spectrum_t *spectrum, uint8_t *bytes, size_t c
   write16(bytes, AT_BC, (uint16_t)((cpu->b << 8) | cpu->c));
   write16(bytes, AT_IY, (uint16_t)((cpu->iyh << 8) | cpu->iyl));
   write16(bytes, AT_IX, (uint16_t)((cpu->ixh << 8) | cpu->ixl));
-  bytes[AT_INTERRUPT] = cpu->iff2 ? IFF2_BIT : 0x00;
+  bytes[AT_INTERRUPT] = cpu->iff2 ? (IFF2_BIT | MAME_IFF1_BIT) : 0x00;
   bytes[AT_R] = cpu->r;
   write16(bytes, AT_AF, (uint16_t)((cpu->a << 8) | cpu->f));
   write16(bytes, AT_SP, stack);
