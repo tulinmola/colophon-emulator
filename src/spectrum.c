@@ -7,8 +7,10 @@
 #include <stddef.h>
 #include <string.h>
 
-/* Nothing answers above the RAM that is fitted, and the bus floats there. */
-#define FLOATING 0xFF
+/* What the data bus reads where nothing drives it: the board pulls it up,
+   through the 8K2 resistors Chris Smith found on Sinclair's schematics
+   ("Clock Alignment and Stability"). */
+#define IDLE_BUS 0xFF
 
 /* Below the RAM's base this underflows, which every caller guards against
    first by knowing the ROM answers there. */
@@ -19,7 +21,12 @@ static uint8_t read_memory(const spectrum_t *spectrum, uint16_t address) {
     return spectrum->rom[address];
   }
   uint32_t offset = ram_offset(address);
-  return offset < spectrum->ram_size ? spectrum->ram[offset] : FLOATING;
+  /* Nothing answers above the RAM that is fitted. No measurement of what a
+     16K reads there was found; the Sinclair Wiki expects the floating bus ("The
+     same effect is likely to be seen when reading unattached memory, such
+     as reading the upper 32K on a 16K machine"), and the idle bus is
+     assumed. */
+  return offset < spectrum->ram_size ? spectrum->ram[offset] : IDLE_BUS;
 }
 
 /* A write to the ROM lands nowhere: there is no RAM beneath it to fall
@@ -40,7 +47,7 @@ static void write_memory(spectrum_t *spectrum, uint16_t address, uint8_t value) 
 static uint8_t read_video(const spectrum_t *spectrum, uint16_t address) {
   uint32_t offset = ram_offset(address);
   if (offset >= SPECTRUM_RAM_16K || offset >= spectrum->ram_size) {
-    return FLOATING;
+    return IDLE_BUS;
   }
   return spectrum->ram[offset];
 }
@@ -70,8 +77,10 @@ static uint8_t read_keyboard(const spectrum_t *spectrum, uint16_t port) {
 /* The ULA is the only thing fitted, and it answers every port with A0 low. */
 static bool ula_answers(uint16_t port) { return (port & 0x0001) == 0; }
 
+/* A port nothing answers is read through the resistors between the two
+   halves of the data bus, so it gives whatever is on the ULA's half. */
 static uint8_t io_read(const spectrum_t *spectrum, uint16_t port) {
-  return ula_answers(port) ? read_keyboard(spectrum, port) : FLOATING;
+  return ula_answers(port) ? read_keyboard(spectrum, port) : spectrum->ula_bus;
 }
 
 static void io_write(spectrum_t *spectrum, uint16_t port, uint8_t data) {
@@ -115,7 +124,9 @@ static bool in_contended_memory(uint16_t address) {
 }
 
 /* Which of a port access's four T-states are charged, one bit each, first
-   one lowest ("Contended I/O"). */
+   one lowest ("Contended I/O"). In the page's notation a charge is weighed
+   where its T-state would begin and comes before it, so a T-state that is
+   charged runs where the chip owes the processor nothing. */
 static uint8_t port_charges(uint16_t port) {
   const bool looks_contended = in_contended_memory(port);
   const bool ula_port = ula_answers(port);
@@ -130,16 +141,14 @@ static uint8_t port_charges(uint16_t port) {
 
 /* The beam's own work, which the processor's clock has no bearing on. */
 static void paint(spectrum_t *spectrum) {
-  uint16_t display_address = 0;
-  uint16_t attribute_address = 0;
-  uint8_t display = 0;
-  uint8_t attribute = 0;
-  if (ula_fetch(&spectrum->ula, &display_address, &attribute_address)) {
-    display = read_video(spectrum, display_address);
-    attribute = read_video(spectrum, attribute_address);
+  uint16_t address = 0;
+  spectrum->ula_bus = IDLE_BUS;
+  if (ula_fetch(&spectrum->ula, &address)) {
+    spectrum->ula_bus = read_video(spectrum, address);
+    ula_latch(&spectrum->ula, spectrum->ula_bus);
   }
   uint8_t samples[ULA_SAMPLES_PER_TICK];
-  ula_video(&spectrum->ula, display, attribute, samples);
+  ula_video(&spectrum->ula, samples);
   monitor_receive(&spectrum->monitor, samples, ULA_SAMPLES_PER_TICK, ula_csync(&spectrum->ula));
 }
 
@@ -153,13 +162,22 @@ static void run_processor(spectrum_t *spectrum) {
     bus &= ~Z80_INT;
   }
 
+  /* The processor takes a port's byte on the read's last T-state, the one
+     after the request, and the ULA may have held the clock between the two,
+     so the byte it takes is the one on the bus here. */
+  if (spectrum->reading_port) {
+    bus = z80_set_data(bus, io_read(spectrum, z80_address(bus)));
+    spectrum->reading_port = false;
+  }
+
   z80_cycle cycle = z80_next_cycle(&spectrum->cpu);
   uint64_t pins = z80_tick(&spectrum->cpu, bus);
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
-    /* Interrupt acknowledge. Nothing drives the bus, so the byte is the
-       floating 0xFF; in mode 1, which is the only mode the firmware uses, it
-       is ignored anyway. */
-    pins = z80_set_data(pins, FLOATING);
+    /* Interrupt acknowledge. Nothing answers it, so the byte is what the
+       ULA's half of the bus holds, which is idle above the picture, where
+       an acknowledge falls; in mode 1, which is the only mode the firmware
+       uses, it is ignored anyway. */
+    pins = z80_set_data(pins, spectrum->ula_bus);
   } else if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
     pins = z80_set_data(pins, read_memory(spectrum, z80_address(pins)));
   } else if ((pins & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR)) {
@@ -167,7 +185,10 @@ static void run_processor(spectrum_t *spectrum) {
   } else if ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
     io_write(spectrum, z80_address(pins), z80_data(pins));
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
+    /* The port's byte is on the bus from the request on, and is taken on
+       the next T-state, where it is answered again. */
     pins = z80_set_data(pins, io_read(spectrum, z80_address(pins)));
+    spectrum->reading_port = true;
   }
 
   spectrum->pins = pins;
@@ -183,8 +204,14 @@ static void run_processor(spectrum_t *spectrum) {
                                  ? ula_contention(&spectrum->ula, spectrum->ula.frame_tick)
                                  : 0;
       break;
+    /* The first T-state's charge is taken after it, at the position it
+       ran at: nothing happens on it that a hold either side could move. */
     case Z80_CYCLE_PORT:
       spectrum->port_charges_left = port_charges(z80_address(pins));
+      spectrum->held_ticks = (spectrum->port_charges_left & 1)
+                                 ? ula_contention(&spectrum->ula, spectrum->ula.frame_tick)
+                                 : 0;
+      spectrum->port_charges_left = (uint8_t)(spectrum->port_charges_left >> 1);
       break;
     /* No evidence here can say whether an acknowledge is charged: the
        interrupt is held across a frame's first few dozen T-states and the
@@ -196,8 +223,12 @@ static void run_processor(spectrum_t *spectrum) {
       break;
   }
 
+  /* The next T-state of a port access, weighed where it would begin: the
+     third, which gives or asks for the byte, and the fourth, which takes it,
+     both come after their holds. */
   if (spectrum->port_charges_left & 1) {
-    spectrum->held_ticks = ula_contention(&spectrum->ula, spectrum->ula.frame_tick);
+    uint32_t next = spectrum->ula.frame_tick + 1 + spectrum->held_ticks;
+    spectrum->held_ticks = (uint8_t)(spectrum->held_ticks + ula_contention(&spectrum->ula, next));
   }
   spectrum->port_charges_left = (uint8_t)(spectrum->port_charges_left >> 1);
 }

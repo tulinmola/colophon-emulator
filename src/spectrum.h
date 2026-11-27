@@ -28,9 +28,13 @@
  * rule of its own, which turns on the port's low bit as well as its
  * address.
  *
- * Not wired: the floating bus. A port nothing answers reads 0xFF here, where
- * the hardware gives back whatever the ULA last fetched — which is how a
- * program with no other clock finds the beam.
+ * A port nothing answers reads the floating bus: the data bus is in two
+ * halves joined by resistors, and the read finds whatever the ULA has on
+ * its half at that moment — a byte of the screen it is fetching, or the
+ * board's 0xFF when it fetches nothing — which is how a program with no
+ * other clock finds the beam. The processor takes the byte on the read's
+ * last T-state, so that is where a port is answered, after any T-states the
+ * ULA held the clock for since the request.
  *
  * Sources:
  * - "Contended I/O" (Sinclair Wiki),
@@ -49,7 +53,9 @@
  *   returns the keyboard on bits 0-4 and the EAR socket on bit 6.
  * - "Keyboard" (Sinclair Wiki),
  *   https://sinclair.wiki.zxnet.co.uk/wiki/Keyboard, and "The Keyboard"
- *   (Chris Smith), http://www.zxdesign.info/keyboard.shtml — the forty keys
+ *   (Chris Smith),
+ *   https://web.archive.org/web/20141021195037/http://www.zxdesign.info/keyboard.shtml
+ *   — the forty keys
  *   as eight half-rows of five, each half-row selected by one of the upper
  *   address lines A8 to A15 held low, and read together when more than one
  *   is.
@@ -60,6 +66,21 @@
  *   180 to 2800 T-states after bit 4 falls, for "capacitors connected
  *   between pin 28 of ULA and EAR and MIC connectors", with "no delay" when
  *   bit 4 rises.
+ * - "The floating bus explained!" (Ramsoft, technical report rev 1.06,
+ *   2002), served at http://www.ramsoft.bbk.org/floatingbus.html and now
+ *   mirrored at
+ *   https://k1.spdns.de/Develop/Projects/zxsp/Info/Floating%20bus%20technical%20guide.html
+ *   — "Due to the resistors which decouple the two dedicated buses inside
+ *   the Spectrum, when the Z80 reads from an unattached port (such as 0xFF)
+ *   it actually reads the data currently present on the ULA bus", idle
+ *   0xFF, and "during a port read, the Z80 fetches the input byte from the
+ *   bus in the last cycle of the I/O transaction (i.e. T4)".
+ * - "Clock Alignment and Stability" (Chris Smith, 2007),
+ *   https://web.archive.org/web/20150326163725/http://www.zxdesign.info/clockAlignment.shtml
+ *   — on his clone, the processor samples a port "approximately 32ns after
+ *   the falling edge of the CPU clock during T3 of an IO instruction": the
+ *   datasheet's T3, which follows the wait state the processor inserts, and
+ *   Ramsoft's T4.
  * - Sinclair ZX Spectrum Service Manual,
  *   https://spectrumcomputing.co.uk/pub/sinclair/technical-docs/ZXSpectrum48K_ServiceManual.pdf,
  *   and its Figure 1.5, the Issue 3 circuit diagram,
@@ -151,8 +172,16 @@ typedef struct {
 
   /* The T-states of a port access still to be weighed, one bit each. A port
      is charged at more than one of its own, so the answer is worked out when
-     the access begins and spent a bit a tick. */
+     the access begins and spent as its T-states come. */
   uint8_t port_charges_left;
+
+  /* A port read under way, its byte to be taken on the next T-state the
+     processor runs. */
+  bool reading_port;
+
+  /* What the ULA's half of the data bus carries on this T-state: the byte
+     it is fetching, or 0xFF. */
+  uint8_t ula_bus;
 
   /* What the EAR socket hears with no tape in the deck; a loaded one drives
      the socket instead. On hardware it also hears bit 4 of the last write
@@ -193,7 +222,9 @@ void spectrum_insert_tape(spectrum_t *spectrum, tape_t *tape);
 /* Advance the machine one T-state. The ULA runs every time; the processor
  * runs unless the ULA is holding its clock, and a held tick returns the
  * bus the last one left, address and all. Returns that bus for the host to
- * watch. */
+ * watch. A port read's byte is on it as it stands on each T-state from the
+ * request on, and the byte the processor takes is the one on the tick after
+ * the last that shows the request. */
 uint64_t spectrum_tick(spectrum_t *spectrum);
 
 /* Between instructions and owing the ULA nothing. A held T-state is one the

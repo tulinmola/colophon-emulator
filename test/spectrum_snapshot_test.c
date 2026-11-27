@@ -108,7 +108,7 @@ static void a_hold_still_owed_cannot_be_saved_either(void) {
   saved.cpu.pc = 0x0100;
   saved.cpu.h = 0x80;
   saved.cpu.d = 0x40;
-  ula_seek(&saved.ula, 14320);
+  ula_seek(&saved.ula, 14321);
   do {
     spectrum_tick(&saved);
   } while (!z80_instruction_complete(&saved.cpu));
