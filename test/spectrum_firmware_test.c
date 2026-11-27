@@ -2,10 +2,11 @@
  * spectrum_firmware_test — boot the real firmware and read the screen back.
  *
  * The acceptance tier for the machine. Everything here is judged by Sinclair
- * rather than by us: the boot message is theirs, the arithmetic is BASIC's,
- * and the letters are identified by looking each glyph up in the character
- * table the ROM itself carries at &3D00 — eight bytes per code from 32 up,
- * which is how the firmware draws them in the first place. A test that
+ * and Amstrad rather than by us: the boot messages and the menu are theirs,
+ * the arithmetic is BASIC's, and the letters are identified by looking each
+ * glyph up in the character table the 48K ROM carries at &3D00 — eight
+ * bytes per code from 32 up, which is how the firmware draws them in the
+ * first place, on a +2 from the same ROM in its second half. A test that
  * recognised letters by our own table would only prove we agree with
  * ourselves.
  *
@@ -14,7 +15,7 @@
  * serialiser, the sync separator and the beam, so agreeing means the whole
  * video path holds and not merely the memory under it.
  *
- * Needs the firmware image: run `make roms`.
+ * Needs the firmware images: run `make roms`.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,56 +28,94 @@
 
 #define FONT_IN_ROM 0x3D00
 #define FIRST_CODE 32
+/* Where the +2's second ROM, the 48K's, begins in its one chip. */
+#define PLUS2_ROM_1 0x4000
 
-/* The display's top-left sample in the framebuffer: a retrace and a left
-   border across, and as far down as the frame sync left the picture. */
-#define DISPLAY_LEFT ((ULA_RETRACE_TICKS + ULA_LEFT_BORDER_TICKS) * ULA_SAMPLES_PER_TICK)
-#define DISPLAY_TOP (ULA_FIRST_DISPLAY_LINE - SPECTRUM_PICTURE_SHIFT)
-
-/* The boot message is on screen well before this; the ROM spends most of it
-   testing the RAM it has just found. */
+/* Either model's boot message or menu is on screen well before this; the
+   ROMs spend most of it testing the RAM. */
 #define FRAMES_TO_PROMPT 100
 /* The firmware scans the keyboard off the 50Hz interrupt and debounces, so
    a key must be held for several scans and released for several more. */
 #define FRAMES_PER_KEY 6
 
 static const char *rom_directory = "roms";
-static uint8_t rom[SPECTRUM_ROM_SIZE];
-static uint8_t ram[SPECTRUM_RAM_48K];
-static uint8_t framebuffer[SPECTRUM_FRAMEBUFFER_WIDTH * SPECTRUM_FRAMEBUFFER_HEIGHT];
+static uint8_t rom[SPECTRUM_PLUS2_ROM_SIZE];
+static uint8_t ram[SPECTRUM_RAM_128K];
+static uint8_t framebuffer[SPECTRUM_LARGEST_FRAMEBUFFER];
 static spectrum_t spectrum;
 
-static bool load_rom(void) {
+static int raster_width(void) { return spectrum.ula.frame.ticks_per_line * ULA_SAMPLES_PER_TICK; }
+
+/* The character table the screen is read by: the 48K ROM's, which a +2
+   carries as its second. */
+static const uint8_t *font(void) {
+  return rom + (spectrum.model == SPECTRUM_PLUS2 ? PLUS2_ROM_1 : 0) + FONT_IN_ROM;
+}
+
+/* The display file the ULA is drawing: a 48K's first 16K of RAM, a +2's
+   bank 5 or bank 7. */
+static const uint8_t *display_file(void) {
+  if (spectrum.model == SPECTRUM_48K) {
+    return ram;
+  }
+  unsigned bank = (spectrum.bank_register & SPECTRUM_BANK_SCREEN) ? 7 : 5;
+  return ram + (size_t)bank * SPECTRUM_BANK_SIZE;
+}
+
+/* The display's top-left sample in the framebuffer: a retrace and a left
+   border across, and as far down as the frame sync left the picture. */
+static int display_left(void) {
+  return (spectrum.ula.frame.retrace_ticks + ULA_LEFT_BORDER_TICKS) * ULA_SAMPLES_PER_TICK;
+}
+
+static int display_top(void) {
+  return spectrum.ula.frame.first_display_line - SPECTRUM_PICTURE_SHIFT;
+}
+
+/* One 16K image, into the ROM at an offset. */
+static bool load_rom(const char *name, size_t at) {
   char path[512];
-  snprintf(path, sizeof path, "%s/spectrum48.rom", rom_directory);
+  snprintf(path, sizeof path, "%s/%s", rom_directory, name);
   FILE *file = fopen(path, "rb");
   if (file == NULL) {
     TEST_FAIL("cannot open %s — run 'make roms'", path);
     return false;
   }
-  size_t read = fread(rom, 1, sizeof rom, file);
+  size_t read = fread(rom + at, 1, 0x4000, file);
   fclose(file);
-  if (read != sizeof rom) {
-    TEST_FAIL("%s is %zu bytes, expected %zu", path, read, sizeof rom);
+  if (read != 0x4000) {
+    TEST_FAIL("%s is %zu bytes, expected %d", path, read, 0x4000);
     return false;
   }
   return true;
 }
 
-static bool power_on(void) {
-  if (!load_rom()) {
-    return false;
-  }
+static void power_on(spectrum_model model, uint32_t ram_size) {
   memset(ram, 0x00, sizeof ram);
   memset(framebuffer, 0x00, sizeof framebuffer);
-  spectrum_init(&spectrum, ram, sizeof ram, rom);
+  spectrum_init(&spectrum, model, ram, ram_size, rom);
   spectrum_connect_monitor(&spectrum, framebuffer);
+}
+
+static bool power_on_48k(void) {
+  if (!load_rom("spectrum48.rom", 0)) {
+    return false;
+  }
+  power_on(SPECTRUM_48K, SPECTRUM_RAM_48K);
+  return true;
+}
+
+static bool power_on_plus2(void) {
+  if (!load_rom("spectrumplus2-0.rom", 0) || !load_rom("spectrumplus2-1.rom", PLUS2_ROM_1)) {
+    return false;
+  }
+  power_on(SPECTRUM_PLUS2, SPECTRUM_RAM_128K);
   return true;
 }
 
 static void run_frames(int frames) {
   for (int frame = 0; frame < frames; frame++) {
-    for (int tick = 0; tick < SPECTRUM_TICKS_PER_FRAME; tick++) {
+    for (uint32_t tick = 0; tick < spectrum.ula.frame.ticks_per_frame; tick++) {
       spectrum_tick(&spectrum);
     }
   }
@@ -95,7 +134,7 @@ static void type_key(keyboard_key key, keyboard_key held_with) {
 /* The glyph in the ROM's own table, or '?' for a shape it does not draw. */
 static char character_for(const uint8_t glyph[8]) {
   for (int code = FIRST_CODE; code < 128; code++) {
-    if (memcmp(rom + FONT_IN_ROM + (size_t)(code - FIRST_CODE) * 8, glyph, 8) == 0) {
+    if (memcmp(font() + (size_t)(code - FIRST_CODE) * 8, glyph, 8) == 0) {
       return (char)code;
     }
   }
@@ -107,7 +146,8 @@ static void screen_from_memory(char text[ULA_ROWS][ULA_COLUMNS + 1]) {
     for (int column = 0; column < ULA_COLUMNS; column++) {
       uint8_t glyph[8];
       for (int line = 0; line < 8; line++) {
-        glyph[line] = ram[ula_display_address(row * 8 + line, column) - SPECTRUM_RAM_BASE];
+        glyph[line] =
+            display_file()[ula_display_address(row * 8 + line, column) - SPECTRUM_RAM_BASE];
       }
       text[row][column] = character_for(glyph);
     }
@@ -123,9 +163,9 @@ static void screen_from_framebuffer(char text[ULA_ROWS][ULA_COLUMNS + 1]) {
       int counts[16] = {0};
       for (int line = 0; line < 8; line++) {
         for (int pixel = 0; pixel < 8; pixel++) {
-          int y = DISPLAY_TOP + row * 8 + line;
-          int x = DISPLAY_LEFT + column * 8 + pixel;
-          counts[framebuffer[y * SPECTRUM_FRAMEBUFFER_WIDTH + x] & 0x0F]++;
+          int y = display_top() + row * 8 + line;
+          int x = display_left() + column * 8 + pixel;
+          counts[framebuffer[y * raster_width() + x] & 0x0F]++;
         }
       }
       int paper = 0;
@@ -138,9 +178,9 @@ static void screen_from_framebuffer(char text[ULA_ROWS][ULA_COLUMNS + 1]) {
       for (int line = 0; line < 8; line++) {
         uint8_t bits = 0;
         for (int pixel = 0; pixel < 8; pixel++) {
-          int y = DISPLAY_TOP + row * 8 + line;
-          int x = DISPLAY_LEFT + column * 8 + pixel;
-          if ((framebuffer[y * SPECTRUM_FRAMEBUFFER_WIDTH + x] & 0x0F) != paper) {
+          int y = display_top() + row * 8 + line;
+          int x = display_left() + column * 8 + pixel;
+          if ((framebuffer[y * raster_width() + x] & 0x0F) != paper) {
             bits |= (uint8_t)(0x80 >> pixel);
           }
         }
@@ -155,7 +195,7 @@ static void screen_from_framebuffer(char text[ULA_ROWS][ULA_COLUMNS + 1]) {
 /* The message is Sinclair's, and its first character is the copyright sign,
    which the ROM's table draws at code 127. */
 static void the_48k_boots_to_its_copyright_message(void) {
-  if (!power_on()) {
+  if (!power_on_48k()) {
     return;
   }
   run_frames(FRAMES_TO_PROMPT);
@@ -169,7 +209,7 @@ static void the_48k_boots_to_its_copyright_message(void) {
 }
 
 static void the_screen_reads_the_same_through_the_beam(void) {
-  if (!power_on()) {
+  if (!power_on_48k()) {
     return;
   }
   run_frames(FRAMES_TO_PROMPT);
@@ -193,7 +233,7 @@ static void the_screen_reads_the_same_through_the_beam(void) {
 }
 
 static void basic_does_arithmetic_it_is_typed(void) {
-  if (!power_on()) {
+  if (!power_on_48k()) {
     return;
   }
   run_frames(FRAMES_TO_PROMPT);
@@ -219,7 +259,7 @@ static void basic_does_arithmetic_it_is_typed(void) {
    the quotes are symbol-shifted, and the letters inside them arrive as
    letters because by then the cursor is in L mode. */
 static void the_keyboard_types_what_is_printed_on_it(void) {
-  if (!power_on()) {
+  if (!power_on_48k()) {
     return;
   }
   run_frames(FRAMES_TO_PROMPT);
@@ -282,7 +322,7 @@ static void fill_block(uint8_t *block) {
 
 /* Play an image to LD-BYTES and hold it to the block coming back whole. */
 static void the_rom_loads_the_block_from(const uint8_t *image, uint32_t length) {
-  if (!power_on()) {
+  if (!power_on_48k()) {
     return;
   }
   uint8_t block[BLOCK_BYTES];
@@ -291,7 +331,7 @@ static void the_rom_loads_the_block_from(const uint8_t *image, uint32_t length) 
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, length, SPECTRUM_TICKS_PER_MILLISECOND, TZX_SPECTRUM, &problem)) {
+  if (!tzx_open(&reader, image, length, SPECTRUM_48K_CLOCK_HERTZ / 1000, TZX_SPECTRUM, &problem)) {
     TEST_FAIL("the tape was refused: %s", problem);
     return;
   }
@@ -310,7 +350,8 @@ static void the_rom_loads_the_block_from(const uint8_t *image, uint32_t length) 
   spectrum.cpu.pc = 0x8000;
   spectrum.cpu.sp = 0x7FF0;
 
-  for (long tick = 0; tick < MOST_FRAMES_TO_LOAD * (long)SPECTRUM_TICKS_PER_FRAME; tick++) {
+  for (long tick = 0; tick < MOST_FRAMES_TO_LOAD * (long)spectrum.ula.frame.ticks_per_frame;
+       tick++) {
     spectrum_tick(&spectrum);
     if (spectrum.cpu.halted) {
       break;
@@ -379,7 +420,7 @@ static void a_block_ending_low_before_a_stop_loads_through_the_roms_own_loader(v
    reaches into the machine — the header is read by the ROM, the block is
    loaded by the ROM, and BASIC runs what arrives. */
 static void a_program_loads_off_a_tape_and_runs(void) {
-  if (!power_on()) {
+  if (!power_on_48k()) {
     return;
   }
   /* A header naming a BASIC program that autostarts at line 10, and the
@@ -412,7 +453,7 @@ static void a_program_loads_off_a_tape_and_runs(void) {
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, (uint32_t)sizeof image, SPECTRUM_TICKS_PER_MILLISECOND,
+  if (!tzx_open(&reader, image, (uint32_t)sizeof image, SPECTRUM_48K_CLOCK_HERTZ / 1000,
                 TZX_SPECTRUM, &problem)) {
     TEST_FAIL("the tape was refused: %s", problem);
     return;
@@ -458,7 +499,7 @@ static void a_program_loads_off_a_tape_and_runs(void) {
    write every time, so an interval between two rising edges holds two
    OUTs' charges and can be up to twelve longer. */
 static void beep_1_0_plays_middle_c(void) {
-  if (!power_on()) {
+  if (!power_on_48k()) {
     return;
   }
   run_frames(FRAMES_TO_PROMPT);
@@ -474,7 +515,8 @@ static void beep_1_0_plays_middle_c(void) {
   long since_rising = -1;
   long shortest = 0;
   int cycles = 0;
-  for (int tick = 0; tick < 50 * SPECTRUM_TICKS_PER_FRAME && cycles < 100; tick++) {
+  for (long tick = 0; tick < 50 * (long)spectrum.ula.frame.ticks_per_frame && cycles < 100;
+       tick++) {
     spectrum_tick(&spectrum);
     uint16_t now = spectrum_sound_speaker(&spectrum);
     if (since_rising >= 0) {
@@ -496,6 +538,158 @@ static void beep_1_0_plays_middle_c(void) {
   TEST_EQUAL(shortest, 13372);
 }
 
+/* Whether a line of the screen, read off the display file, holds what is
+   expected from a column on. */
+static bool reads(int row, int column, const char *expected) {
+  char text[ULA_ROWS][ULA_COLUMNS + 1];
+  screen_from_memory(text);
+  if (strncmp(text[row] + column, expected, strlen(expected)) != 0) {
+    TEST_FAIL("row %d reads |%s|, expected |%s| at column %d", row, text[row], expected, column);
+    return false;
+  }
+  return true;
+}
+
+/* Type text as the keyboard carries it, each character with the shift it
+   needs. */
+static void type_text(const char *text) {
+  for (const char *at = text; *at != '\0'; at++) {
+    spectrum_shift shift = SPECTRUM_NO_SHIFT;
+    keyboard_key key = spectrum_key_for_character(*at, &shift);
+    keyboard_key held = KEYBOARD_NO_KEY;
+    if (shift == SPECTRUM_WITH_CAPS_SHIFT) {
+      held = SPECTRUM_CAPS_SHIFT;
+    } else if (shift == SPECTRUM_WITH_SYMBOL_SHIFT) {
+      held = SPECTRUM_SYMBOL_SHIFT;
+    }
+    type_key(key, held);
+  }
+}
+
+/* The +2's menu: the 128's without the Tape Tester. Paul Farrow's page on
+   the +2's ROMs: "The Tape Tester menu option and routine were removed",
+   and "ROM routine entry addresses were shifted due to the above changes"
+   (http://www.fruitcake.plus.com/Sinclair/Spectrum128/ROMDisassembly/Spectrum128ROMDisassembly2.htm).
+   Before the menu, the 128's ROM 0 pages each of the eight banks in and
+   checks it, and would stop at a coloured border if one failed (Farrow's
+   disassembly of it, cited in ula.h). */
+#define PLUS2_MENU_COLUMN 8
+#define PLUS2_MENU_FIRST_ROW 8
+
+static void the_plus2_boots_to_its_menu(void) {
+  if (!power_on_plus2()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  const char *items[] = {"Tape Loader", "128 BASIC", "Calculator", "48 BASIC"};
+  for (int item = 0; item < 4; item++) {
+    if (!reads(PLUS2_MENU_FIRST_ROW + item, PLUS2_MENU_COLUMN, items[item])) {
+      return;
+    }
+  }
+  reads(ULA_ROWS - 1, 14, "Electronics plc");
+}
+
+static void the_plus2s_menu_reads_the_same_through_the_beam(void) {
+  if (!power_on_plus2()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  char from_memory[ULA_ROWS][ULA_COLUMNS + 1];
+  char from_beam[ULA_ROWS][ULA_COLUMNS + 1];
+  screen_from_memory(from_memory);
+  screen_from_framebuffer(from_beam);
+  if (strncmp(from_beam[PLUS2_MENU_FIRST_ROW] + PLUS2_MENU_COLUMN, "Tape Loader", 11) != 0) {
+    TEST_FAIL("the beam's first item reads |%s|", from_beam[PLUS2_MENU_FIRST_ROW]);
+  }
+  for (int row = 0; row < ULA_ROWS; row++) {
+    if (strcmp(from_memory[row], from_beam[row]) != 0) {
+      TEST_FAIL("row %d: display file |%s| but beam |%s|", row, from_memory[row], from_beam[row]);
+      return;
+    }
+  }
+}
+
+/* "In 128 BASIC none of these special key entries apply. Instead, you type
+   each word in full, letter by letter" (Spectrum 128 Introduction, Amstrad,
+   1986, transcribed by Damien Burke,
+   https://jacekmatulewski.fizyka.umk.pl/zx/doc/man128.txt). The menu moves
+   on CAPS SHIFT and 6, the cursor down. */
+static void the_plus2s_128_basic_does_arithmetic_typed_letter_by_letter(void) {
+  if (!power_on_plus2()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  type_key(SPECTRUM_KEY(4, 4), SPECTRUM_CAPS_SHIFT);
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+  run_frames(FRAMES_PER_KEY);
+  type_text("print 2+2");
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+  run_frames(FRAMES_PER_KEY);
+  if (reads(1, 0, "4")) {
+    reads(ULA_ROWS - 1, 0, "0 OK");
+  }
+}
+
+/* The menu's 48 BASIC writes 0x30 to the bank register — the 48K ROM, and
+   the lock — and starts that ROM afresh (Farrow, at the 128's L1B47, "Force
+   48 mode"), whose message the +2 carries as "© 1982 Amstrad". */
+static void the_plus2s_48_basic_locks_the_paging(void) {
+  if (!power_on_plus2()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  for (int item = 0; item < 3; item++) {
+    type_key(SPECTRUM_KEY(4, 4), SPECTRUM_CAPS_SHIFT);
+  }
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+  run_frames(FRAMES_TO_PROMPT);
+  TEST_EQUAL(spectrum.bank_register, SPECTRUM_BANK_ROM | SPECTRUM_BANK_LOCK);
+  char expected[ULA_COLUMNS + 1];
+  snprintf(expected, sizeof expected, "%c 1982 Amstrad", 127);
+  reads(ULA_ROWS - 1, 0, expected);
+}
+
+/* PLAY "c" is middle C, which the ROM's note table plays on channel A with
+   a tone period of 0x01A8, 424 (Farrow: "Octave 5, Note 60 - C ... C4
+   Middle C"). A tone channel's wave lasts 16 clocks of the sound chip a
+   period (ay38910.h), and the chip runs at half the processor's clock, so
+   the wave is 2·16·424 = 13,568 T-states. */
+static void play_c_sounds_middle_c_through_the_sound_chip(void) {
+  if (!power_on_plus2()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  type_key(SPECTRUM_KEY(4, 4), SPECTRUM_CAPS_SHIFT);
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+  run_frames(FRAMES_PER_KEY);
+  type_text("play \"c\"");
+  keyboard_press(&spectrum.keyboard, SPECTRUM_ENTER);
+  run_frames(FRAMES_PER_KEY);
+  keyboard_release_all(&spectrum.keyboard);
+
+  TEST_EQUAL(spectrum.psg.registers[0] | spectrum.psg.registers[1] << 8, 424);
+  uint8_t level = spectrum.psg.output[0];
+  long since_rising = -1;
+  int waves = 0;
+  for (long tick = 0; tick < 10 * (long)spectrum.ula.frame.ticks_per_frame && waves < 20; tick++) {
+    spectrum_tick(&spectrum);
+    uint8_t now = spectrum.psg.output[0];
+    if (since_rising >= 0) {
+      since_rising++;
+    }
+    if (now > level) {
+      if (since_rising >= 0) {
+        TEST_EQUAL(since_rising, 13568);
+        waves++;
+      }
+      since_rising = 0;
+    }
+    level = now;
+  }
+  TEST_EQUAL(waves, 20);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -509,5 +703,10 @@ int main(int argc, char **argv) {
   TEST_RUN(a_block_ending_low_before_a_stop_loads_through_the_roms_own_loader);
   TEST_RUN(a_program_loads_off_a_tape_and_runs);
   TEST_RUN(beep_1_0_plays_middle_c);
+  TEST_RUN(the_plus2_boots_to_its_menu);
+  TEST_RUN(the_plus2s_menu_reads_the_same_through_the_beam);
+  TEST_RUN(the_plus2s_128_basic_does_arithmetic_typed_letter_by_letter);
+  TEST_RUN(the_plus2s_48_basic_locks_the_paging);
+  TEST_RUN(play_c_sounds_middle_c_through_the_sound_chip);
   return TEST_REPORT("spectrum firmware");
 }

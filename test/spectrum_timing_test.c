@@ -24,8 +24,9 @@
  * - "Contended memory" (Sinclair Wiki),
  *   https://sinclair.wiki.zxnet.co.uk/wiki/Contended_memory — the delay owed
  *   at each T-state of a frame ("If the contended memory is accessed 14335
- *   ... tstates after an interrupt ... the Z80 will be delayed for 6
- *   tstates"), and the instruction breakdown table, which gives for each
+ *   or 14336 tstates after an interrupt ... the Z80 will be delayed for 6
+ *   tstates", the second for late machines), and the instruction breakdown
+ *   table, which gives for each
  *   opcode "the pattern of contention that is applied ... which is
  *   essentially equivalent to when T1 operations happen in each
  *   instruction". Every pattern below is transcribed from that table.
@@ -43,7 +44,7 @@
 #include "spectrum.h"
 #include "test.h"
 
-static uint8_t rom[SPECTRUM_ROM_SIZE];
+static uint8_t rom[SPECTRUM_48K_ROM_SIZE];
 static uint8_t ram[SPECTRUM_RAM_48K];
 static spectrum_t spectrum;
 
@@ -58,8 +59,11 @@ static spectrum_t spectrum;
 /* The published rule, in the published numbers. The first T-state at which
    an access to contended memory is delayed, the delay owed at each of the
    eight that follow, how many T-states of a line are spent on the picture and
-   how many the line lasts, and how many lines carry one. */
-#define FIRST_DELAYED_TSTATE 14335
+   how many the line lasts, and how many lines carry one. The first is the
+   wiki's 14335 counted as ula.h counts, which makes it 14336: the wiki's
+   numbers agree with Fuse's, whose processor can answer the interrupt a
+   T-state sooner than the one here. */
+#define FIRST_DELAYED_TSTATE 14336
 #define DISPLAYED_TSTATES_IN_A_LINE 128
 #define TSTATES_IN_A_LINE 224
 #define DISPLAYED_LINES 192
@@ -394,10 +398,13 @@ static int measured_tstates(const timing *entry, uint32_t at) {
   spectrum.cpu.sp = WORKING_SP;
   spectrum.cpu.i = entry->interrupt_register;
   spectrum.cpu.f = entry->flags;
+  /* IN A,(n) and OUT (n),A put A on the high half of the address. */
+  spectrum.cpu.a = (uint8_t)(entry->port >> 8);
   spectrum.cpu.b = (uint8_t)(entry->port >> 8);
   spectrum.cpu.c = (uint8_t)entry->port;
   spectrum.held_ticks = 0;
   spectrum.port_charges_left = 0;
+  spectrum.reading_port = false;
   ula_seek(&spectrum.ula, at);
 
   int tstates = 0;
@@ -434,7 +441,7 @@ static void walk(uint32_t from, uint32_t to) {
 static void power_on(void) {
   memset(rom, 0x00, sizeof rom);
   memset(ram, 0x00, sizeof ram);
-  spectrum_init(&spectrum, ram, SPECTRUM_RAM_48K, rom);
+  spectrum_init(&spectrum, SPECTRUM_48K, ram, SPECTRUM_RAM_48K, rom);
 }
 
 /* The whole of the first line that carries picture, and the border in front

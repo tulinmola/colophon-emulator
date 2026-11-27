@@ -60,17 +60,17 @@ cpc_set_links(&cpc, true, CPC_MANUFACTURER_AMSTRAD);
 
 A CPC's last argument is which of the five CRTCs the machine is built with. Only type 0 behaves as itself. What a program can read of the chip follows the number given, and so does each of the other exceptions the video section of [the machine page](machine.en.md) sets out; in everything else the chip is a type 0 whatever it is built as.
 
-A Spectrum wants one ROM and has no links at all:
+A Spectrum wants its model, one ROM and has no links at all:
 
 ```c
 spectrum_t spectrum;
-spectrum_init(&spectrum, ram, ram_size, rom);
+spectrum_init(&spectrum, SPECTRUM_48K, ram, ram_size, rom);
 spectrum_connect_monitor(&spectrum, framebuffer);
 ```
 
 On a CPC the RAM's size is the machine's identity as far as the board is concerned: 64K means no PAL is fitted and banking commands die on the empty socket, 128K makes it a 6128. An upper ROM socket left empty resolves to ROM 0 when something selects it, as it does on the hardware.
 
-A Spectrum's is read the same way: sixteen kilobytes makes a 16K and forty-eight a 48K, and the firmware works out which it has by writing to the top of the address space and reading back.
+A 48K Spectrum's is read the same way: sixteen kilobytes makes a 16K and forty-eight a 48K, and the firmware works out which it has by writing to the top of the address space and reading back. A +2 takes 128K, eight banks of 16K, and a ROM of 32K, its two ROMs end to end.
 
 The framebuffer is the machine's own raster in colour codes — the whole beam path, not the picture — and its size is the machine's to say. Left unplugged, either machine runs on and draws into the void, as it would with the cable out.
 
@@ -90,7 +90,7 @@ A few functions exist anyway, because each encodes something a host would otherw
 
 `cpc_sound_socket` turns the sound chip's three levels into voltages, by a measurement of one output into about a CPC's load, applies the board's resistors to them and gives the stereo socket's two sides in tenths of a millivolt. The chip's outputs are levels from 0 to 15, as its pins are switched; what a level comes to in volts depends on what the pin drives, and that is the board's.
 
-`spectrum_sound_speaker` does the same for a Spectrum's loudspeaker. The ULA keeps the last write's bits 4 and 3 as it was given them; the function turns them into the voltage across the speaker, by a measurement of the ULA's pin less the textbook drop of the two silicon junctions between it and the speaker, in tenths of a millivolt.
+`spectrum_sound_speaker` does the same for a 48K's loudspeaker; a +2 has none, and gives 0 there. The ULA keeps the last write's bits 4 and 3 as it was given them; the function turns them into the voltage across the speaker, by a measurement of the ULA's pin less the textbook drop of the two silicon junctions between it and the speaker, in tenths of a millivolt.
 
 A host that sets the registers behind the memory map from outside — restoring a snapshot, say — owes the machine a `cpc_remap` afterwards.
 
@@ -98,7 +98,7 @@ A host that sets the registers behind the memory map from outside — restoring 
 
 A chip module knows nothing about any machine. No chip's code names one and no chip depends on one: `ppi.c`, `ay38910.c`, `keyboard.c`, `monitor.c`, `upd765.c`, `drive.c` and `floppy.c` do not contain the word, and `crtc.c` has it only inside quotations from its source. Nor does a chip hold a machine's data. The key matrix is a grid of switches and nothing more — how many lines a machine wires to it, which key sits where, and what is printed on the keycap all live with the machine whose keyboard it is, and the chip declares only how much room to reserve for them. A comment may name a machine to justify a decision, and three in `z80.c` do — why the processor implements the NMOS parity bug, why it leaves the general case of interrupt mode 0 alone, and why its acknowledge samples WAIT where it does — but that is the comment explaining a choice, not the code making one.
 
-Each machine's wiring gets a file of its own, and that file is the only one that knows what its chips are soldered into: its memory map, its I/O decode, and whatever else its board did — a CPC's file also holds the video address wiring, the motor line running from a port of its own to the drives, and the clock that divides between the chips, none of which a Spectrum has. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it. Nor is the disc: the controller is the µPD765 the Spectrum +3 also used, the drive answers the Shugart lines any such controller reads, and the medium is the shape any of them finds, so all three would go into a second machine as they are.
+Each machine's wiring gets a file of its own, and that file is the only one that knows what its chips are soldered into: its memory map, its I/O decode, and whatever else its board did — a CPC's file also holds the video address wiring and the motor line running from a port of its own to the drives, which a Spectrum has not, and the clock that divides between the chips, which a +2's file holds as well. The monitor is not even that — it is a cathode ray tube, and a tube will take composite sync from anything that emits it. Nor is the disc: the controller is the µPD765 the Spectrum +3 also used, the drive answers the Shugart lines any such controller reads, and the medium is the shape any of them finds, so all three would go into a second machine as they are.
 
 That is no longer a claim. A ZX Spectrum was built beside the CPC out of the same processor, the same monitor and the same key matrix, none of which changed to accommodate it; what it needed of its own was one chip and one file of wiring. Whatever comes third should cost about the same.
 

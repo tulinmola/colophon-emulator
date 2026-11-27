@@ -1,7 +1,9 @@
 #!/bin/sh
 # Downloads the firmware ROM images into roms/. A CPC's is 32K, the operating
 # system at offset 0x0000 and BASIC at 0x4000, beside the 16K AMSDOS ROM that
-# comes with the disc interface; a Spectrum's is one 16K image.
+# comes with the disc interface; a 48K Spectrum's is one 16K image, and a +2's
+# is two, the halves of its one 32K chip: Amstrad's revision of the 128's
+# ROM, then its 48K one.
 #
 # Amstrad's permission is what they are fetched under. Cliff Lawson answered
 # for the Spectrum ROMs on comp.sys.sinclair in August 1999 and cross-posted
@@ -21,24 +23,26 @@
 # durable record than the bytes would be — a hash identifies the right file
 # from any source, while a committed copy rots with one repository.
 #
-# So: pinned by content, validated on 2026-09-05, bumped deliberately and
-# never implicitly. The images are served by the Caprice32 and Fuse projects,
-# both GPL — these are Amstrad's images, not their work. When a URL dies, any
-# copy matching the hash will do.
+# So: pinned by content, validated on 2026-09-05 (the +2's on 2026-11-27),
+# bumped deliberately and never implicitly. The images are served by the
+# Caprice32 and Fuse projects, both GPL — these are Amstrad's images, not
+# their work. When a URL dies, any copy matching the hash will do.
 set -e
 
 caprice32_url="https://raw.githubusercontent.com/ColinPitrat/caprice32/master/rom"
 fuse_url="https://sourceforge.net/p/fuse-emulator/fuse/ci/master/tree/roms"
 roms_directory="$(cd "$(dirname "$0")/.." && pwd)/roms"
 
-# The names on the left are ours: upstream calls the Spectrum image 48.rom,
-# which says nothing standing next to cpc464.rom.
+# The names on the left are ours: upstream calls the Spectrum images 48.rom,
+# plus2-0.rom and plus2-1.rom, which say nothing standing next to cpc464.rom.
 images="\
-cpc464.rom     00960d9bf75b2b90856c970f1aa078e1e2aa028b2c104f1dded0262f5d37b15e $caprice32_url/cpc464.rom
-cpc664.rom     1fcb20cf169f170774bf94954db9372c95edd038a5cb8e5199774552b93f8747 $caprice32_url/cpc664.rom
-cpc6128.rom    31c3668c67bea027dab698ece233c9434d9324f9ba7dac84db58f400b6689562 $caprice32_url/cpc6128.rom
-amsdos.rom     ea65e0fb44ee93ede4b6c507509b7e5ddf497fb7155023bea91ef229469fa04d $caprice32_url/amsdos.rom
-spectrum48.rom d55daa439b673b0e3f5897f99ac37ecb45f974d1862b4dadb85dec34af99cb42 $fuse_url/48.rom?format=raw"
+cpc464.rom          00960d9bf75b2b90856c970f1aa078e1e2aa028b2c104f1dded0262f5d37b15e $caprice32_url/cpc464.rom
+cpc664.rom          1fcb20cf169f170774bf94954db9372c95edd038a5cb8e5199774552b93f8747 $caprice32_url/cpc664.rom
+cpc6128.rom         31c3668c67bea027dab698ece233c9434d9324f9ba7dac84db58f400b6689562 $caprice32_url/cpc6128.rom
+amsdos.rom          ea65e0fb44ee93ede4b6c507509b7e5ddf497fb7155023bea91ef229469fa04d $caprice32_url/amsdos.rom
+spectrum48.rom      d55daa439b673b0e3f5897f99ac37ecb45f974d1862b4dadb85dec34af99cb42 $fuse_url/48.rom?format=raw
+spectrumplus2-0.rom 51dc881d1d3e8242972390224e7cfd8650987d9a620e086aca9dfdf6988fcbf1 $fuse_url/plus2-0.rom?format=raw
+spectrumplus2-1.rom ae6d95f1e6d16c3d1c947b77e6087952f3204b7930c6cadae3769289a1f5a1b9 $fuse_url/plus2-1.rom?format=raw"
 
 if command -v shasum >/dev/null 2>&1; then
     sha256_of() { shasum -a 256 "$1" | cut -d' ' -f1; }

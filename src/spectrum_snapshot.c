@@ -40,8 +40,13 @@ static void write16(uint8_t *bytes, size_t at, uint16_t value) {
   bytes[at + 1] = (uint8_t)(value >> 8);
 }
 
+/* The format has no bank register and no sound chip, and holds 48K. */
+static bool describes(const spectrum_t *spectrum) {
+  return spectrum->model == SPECTRUM_48K && spectrum->ram_size == SPECTRUM_RAM_48K;
+}
+
 size_t spectrum_snapshot_size(const spectrum_t *spectrum) {
-  return spectrum->ram_size == SPECTRUM_RAM_48K ? SPECTRUM_SNAPSHOT_SIZE : 0;
+  return describes(spectrum) ? SPECTRUM_SNAPSHOT_SIZE : 0;
 }
 
 bool spectrum_snapshot_load(spectrum_t *spectrum, const uint8_t *bytes, size_t length,
@@ -50,7 +55,7 @@ bool spectrum_snapshot_load(spectrum_t *spectrum, const uint8_t *bytes, size_t l
     *problem = "is not 49179 bytes, which is the only length a 48K snapshot has";
     return false;
   }
-  if (spectrum->ram_size != SPECTRUM_RAM_48K) {
+  if (!describes(spectrum)) {
     *problem = "describes a 48K machine, and this one is not";
     return false;
   }
@@ -65,6 +70,7 @@ bool spectrum_snapshot_load(spectrum_t *spectrum, const uint8_t *bytes, size_t l
   z80_init(cpu);
   spectrum->held_ticks = 0;
   spectrum->port_charges_left = 0;
+  spectrum->reading_port = false;
   cpu->i = bytes[AT_I];
   cpu->hl_ = read16(bytes, AT_SHADOW_HL);
   cpu->de_ = read16(bytes, AT_SHADOW_DE);
@@ -114,7 +120,7 @@ bool spectrum_snapshot_load(spectrum_t *spectrum, const uint8_t *bytes, size_t l
 
 bool spectrum_snapshot_save(const spectrum_t *spectrum, uint8_t *bytes, size_t capacity,
                             const char **problem) {
-  if (spectrum->ram_size != SPECTRUM_RAM_48K) {
+  if (!describes(spectrum)) {
     *problem = "only a 48K machine fits this format";
     return false;
   }

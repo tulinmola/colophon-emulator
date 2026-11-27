@@ -7,55 +7,85 @@
 #include <stddef.h>
 #include <string.h>
 
-/* Nothing answers above the RAM that is fitted, and the bus floats there. */
-#define FLOATING 0xFF
+/* What the data bus reads where nothing drives it: the board pulls it up,
+   through the 8K2 resistors Chris Smith found on Sinclair's schematics
+   ("Clock Alignment and Stability"). */
+#define IDLE_BUS 0xFF
 
-/* Below the RAM's base this underflows, which every caller guards against
-   first by knowing the ROM answers there. */
-static uint32_t ram_offset(uint16_t address) { return (uint32_t)address - SPECTRUM_RAM_BASE; }
+/* Where the processor's address lands in the RAM, at or above
+   SPECTRUM_RAM_BASE. A 48K's RAM is one run from there; a +2 shows bank 5
+   at 0x4000, bank 2 at 0x8000 and at 0xC000 the bank its register names
+   (the 128 service manual, §4). */
+static uint32_t ram_offset(const spectrum_t *spectrum, uint16_t address) {
+  if (spectrum->model == SPECTRUM_48K) {
+    return (uint32_t)address - SPECTRUM_RAM_BASE;
+  }
+  static const uint8_t fixed_bank[] = {0, 5, 2};
+  unsigned window = address / SPECTRUM_BANK_SIZE;
+  unsigned bank = window == 3 ? spectrum->bank_register & SPECTRUM_BANK_PAGE : fixed_bank[window];
+  return bank * SPECTRUM_BANK_SIZE + address % SPECTRUM_BANK_SIZE;
+}
+
+/* Bit 4 of the bank register is the ROM chip's A14, so on a 48K, whose
+   register stays clear, this is the address itself. */
+static uint32_t rom_offset(const spectrum_t *spectrum, uint16_t address) {
+  return (spectrum->bank_register & SPECTRUM_BANK_ROM) ? address + 0x4000u : address;
+}
 
 static uint8_t read_memory(const spectrum_t *spectrum, uint16_t address) {
-  if (address < SPECTRUM_ROM_SIZE) {
-    return spectrum->rom[address];
+  if (address < SPECTRUM_RAM_BASE) {
+    return spectrum->rom[rom_offset(spectrum, address)];
   }
-  uint32_t offset = ram_offset(address);
-  return offset < spectrum->ram_size ? spectrum->ram[offset] : FLOATING;
+  uint32_t offset = ram_offset(spectrum, address);
+  /* Nothing answers above the RAM that is fitted. No measurement of what a
+     16K reads there was found; the Sinclair Wiki expects the floating bus ("The
+     same effect is likely to be seen when reading unattached memory, such
+     as reading the upper 32K on a 16K machine"), and the idle bus is
+     assumed. */
+  return offset < spectrum->ram_size ? spectrum->ram[offset] : IDLE_BUS;
 }
 
 /* A write to the ROM lands nowhere: there is no RAM beneath it to fall
    through to, as there is on a CPC. */
 static void write_memory(spectrum_t *spectrum, uint16_t address, uint8_t value) {
-  if (address < SPECTRUM_ROM_SIZE) {
+  if (address < SPECTRUM_RAM_BASE) {
     return;
   }
-  uint32_t offset = ram_offset(address);
+  uint32_t offset = ram_offset(spectrum, address);
   if (offset < spectrum->ram_size) {
     spectrum->ram[offset] = value;
   }
 }
 
-/* The ULA's address lines reach the first sixteen kilobytes of RAM and no
-   further, whatever the processor is looking at, so this bound is the chip's
-   and not a guess about what it will ask for. */
+/* The ULA's address lines reach one bank of sixteen kilobytes and no
+   further, whatever the processor is looking at, so this bound is the
+   chip's and not a guess about what it will ask for. On a 48K that bank is
+   the first of its RAM, and on a +2 bank 5, or bank 7 while bit 3 of the
+   bank register is set. */
 static uint8_t read_video(const spectrum_t *spectrum, uint16_t address) {
-  uint32_t offset = ram_offset(address);
-  if (offset >= SPECTRUM_RAM_16K || offset >= spectrum->ram_size) {
-    return FLOATING;
+  uint32_t offset = (uint32_t)address - SPECTRUM_RAM_BASE;
+  if (offset >= SPECTRUM_BANK_SIZE) {
+    return IDLE_BUS;
   }
-  return spectrum->ram[offset];
+  if (spectrum->model == SPECTRUM_PLUS2) {
+    unsigned bank = (spectrum->bank_register & SPECTRUM_BANK_SCREEN) ? 7 : 5;
+    offset += bank * SPECTRUM_BANK_SIZE;
+  }
+  return offset < spectrum->ram_size ? spectrum->ram[offset] : IDLE_BUS;
 }
 
 /* Every zero in the top half of the address selects a half-row, and the
    selected ones are wire-ANDed together — so an address with several bits
    low reads several half-rows at once, and one with none reads no keys.
-   Bits 5 and 7 carry nothing and read high on every board: "Bits 5 and 7 as
-   read by INning from Port 0xfe are always one" (World of Spectrum, 48K
+   Bits 5 and 7 carry nothing and read high on every 48K board: "Bits 5 and
+   7 as read by INning from Port 0xfe are always one" (World of Spectrum, 48K
    reference). The Sinclair Wiki's "Keyboard" page says instead that the upper
    two bits read 1 on an issue 2 and 0 on later ones; that is the issue
    difference misattributed, because what the issues differ over is bit 6 —
    how much of a write to port &FE comes back on a read — and we follow the
-   reference. Bit 6 is the EAR socket, which is spectrum_t's `ear` here and
-   hears nothing this machine writes. */
+   reference. A +2 is taken to read the same, for want of a source on one.
+   Bit 6 is the EAR socket, which is spectrum_t's `ear` here and hears
+   nothing this machine writes. */
 static uint8_t read_keyboard(const spectrum_t *spectrum, uint16_t port) {
   uint8_t keys = 0x1F;
   for (uint8_t half_row = 0; half_row < SPECTRUM_HALF_ROWS; half_row++) {
@@ -67,44 +97,128 @@ static uint8_t read_keyboard(const spectrum_t *spectrum, uint16_t port) {
   return (uint8_t)(keys | 0xA0 | (ear ? 0x40 : 0x00));
 }
 
-/* The ULA is the only thing fitted, and it answers every port with A0 low. */
+/* The ULA answers every port with A0 low, on both models. */
 static bool ula_answers(uint16_t port) { return (port & 0x0001) == 0; }
 
-static uint8_t io_read(const spectrum_t *spectrum, uint16_t port) {
-  return ula_answers(port) ? read_keyboard(spectrum, port) : FLOATING;
+/* The +2's paging logic decodes its two ports from A15 and A1 alone, on a
+   read or a write: BANK with both low and PSG with A15 high (JL's
+   equations). */
+static bool bank_register_answers(const spectrum_t *spectrum, uint16_t port) {
+  return spectrum->model == SPECTRUM_PLUS2 && (port & 0x8002) == 0x0000;
+}
+
+static bool psg_answers(const spectrum_t *spectrum, uint16_t port) {
+  return spectrum->model == SPECTRUM_PLUS2 && (port & 0x8002) == 0x8000;
+}
+
+/* BDIR is a write and BC1 is A14 (the 128 service manual, §5.6.2), with BC2
+   tied high (Worsley's +2 redraw). The manual's table has no row for a read
+   with A14 low, which leaves it no function at all. */
+static ay38910_function psg_function(uint16_t port, bool writing) {
+  bool bc1 = (port & 0x4000) != 0;
+  if (writing) {
+    return bc1 ? AY38910_SELECT : AY38910_WRITE;
+  }
+  return bc1 ? AY38910_READ : AY38910_INACTIVE;
+}
+
+/* A port nothing answers is read through the resistors between the two
+   halves of the data bus, so it gives whatever is on the ULA's half. The
+   sound chip is on the processor's half (Worsley's +2 redraw), so where it
+   and the ULA both answer, the processor reads the chip; that is the
+   drawing's reading, and nothing found measures it. */
+static uint8_t io_read(spectrum_t *spectrum, uint16_t port) {
+  uint8_t data = ula_answers(port) ? read_keyboard(spectrum, port) : spectrum->ula_bus;
+  if (psg_answers(spectrum, port)) {
+    data = ay38910_access(&spectrum->psg, psg_function(port, false), data);
+  }
+  return data;
 }
 
 static void io_write(spectrum_t *spectrum, uint16_t port, uint8_t data) {
   if (ula_answers(port)) {
     ula_write(&spectrum->ula, data);
   }
+  if (psg_answers(spectrum, port)) {
+    ay38910_access(&spectrum->psg, psg_function(port, true), data);
+  }
 }
 
-void spectrum_init(spectrum_t *spectrum, uint8_t *ram, uint32_t ram_size, const uint8_t *rom) {
+/* The register's clock is held high by its own bit 5 once that is set
+   (Worsley's +2 redraw), so it takes nothing more until reset. */
+static void latch_bank_register(spectrum_t *spectrum, uint8_t data) {
+  if ((spectrum->bank_register & SPECTRUM_BANK_LOCK) == 0) {
+    spectrum->bank_register = data & 0x3F;
+  }
+}
+
+/* Each model's ULA and clock. The 48K's ULA is early, the timing the
+   published tables are for: "Some machines use the timings given in this
+   FAQ, while others are one T state later for all timings" (the FAQ's 48K
+   reference, cited in ula.h). The +2's is late, as the grey +2s that pass
+   Butler's tests run (ula.h). */
+static const struct {
+  ula_type ula;
+  uint32_t clock_hertz;
+} models[] = {
+    [SPECTRUM_48K] = {ULA_5C_6C_EARLY, SPECTRUM_48K_CLOCK_HERTZ},
+    [SPECTRUM_PLUS2] = {ULA_7K010_LATE, SPECTRUM_PLUS2_CLOCK_HERTZ},
+};
+
+void spectrum_init(spectrum_t *spectrum, spectrum_model model, uint8_t *ram, uint32_t ram_size,
+                   const uint8_t *rom) {
   memset(spectrum, 0, sizeof *spectrum);
+  spectrum->model = model;
   z80_init(&spectrum->cpu);
-  ula_init(&spectrum->ula);
+  ula_init(&spectrum->ula, models[model].ula);
   keyboard_init(&spectrum->keyboard);
+  ay38910_init(&spectrum->psg);
+  /* Nothing is plugged into the keypad or the RS232 socket, and port A is
+     taken to read high on every line: the chip pulls each one up (GI's data
+     manual, p. 10), and what the board's line receivers make of an empty
+     socket was not found. The ROM then finds no keypad. */
+  ay38910_present_port_a(&spectrum->psg, 0xFF);
   spectrum->ram = ram;
   spectrum->ram_size = ram_size;
   spectrum->rom = rom;
 }
 
-void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer) {
-  monitor_init(&spectrum->monitor, framebuffer, SPECTRUM_FRAMEBUFFER_WIDTH,
-               SPECTRUM_FRAMEBUFFER_HEIGHT, SPECTRUM_FRAME_SYNC_SAMPLES, SPECTRUM_LINE_SYNC_CENTRE);
+uint32_t spectrum_clock_hertz(const spectrum_t *spectrum) {
+  return models[spectrum->model].clock_hertz;
 }
 
-/* The sixteen kilobytes the ULA's address lines reach, which on a 16K
-   machine is all the RAM there is. */
-static bool in_contended_memory(uint16_t address) {
-  return address >= SPECTRUM_RAM_BASE && address < SPECTRUM_RAM_BASE + SPECTRUM_RAM_16K;
+void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer) {
+  const ula_frame *frame = &spectrum->ula.frame;
+  uint16_t width = (uint16_t)(frame->ticks_per_line * ULA_SAMPLES_PER_TICK);
+  /* Half of the line's own sync, which is where the middle of that pulse
+     lands once the beam is timed from it. */
+  uint16_t line_sync_centre = (uint16_t)(frame->retrace_ticks * ULA_SAMPLES_PER_TICK / 2);
+  /* A sync held this long means the frame is over. No measurement of what a
+     television needs was in hand, so this is chosen rather than found: one
+     line's worth of samples, comfortably longer than a line's own sync and
+     far shorter than the eight lines the frame's runs to. */
+  uint16_t frame_sync_samples = width;
+  monitor_init(&spectrum->monitor, framebuffer, width, frame->lines_per_frame, frame_sync_samples,
+               line_sync_centre);
+}
+
+/* Whether the ULA wants the bus for an address, which it sees by its top
+   two lines alone and wants when they read 01. On a 48K they are the
+   processor's A15 and A14. On a +2 the paging logic drives them, and shows
+   the ULA an odd bank at 0xC000 as 01 (JL's equations: ULA15 = A15·/A14 +
+   A15·A14·/B0, ULA14 = /A15·A14 + A15·A14·B0, B0 the register's bit 0); a
+   48K's register stays clear, so the one rule serves both. */
+static bool in_contended_memory(const spectrum_t *spectrum, uint16_t address) {
+  unsigned window = address / SPECTRUM_BANK_SIZE;
+  return window == 1 || (window == 3 && (spectrum->bank_register & 0x01) != 0);
 }
 
 /* Which of a port access's four T-states are charged, one bit each, first
-   one lowest ("Contended I/O"). */
-static uint8_t port_charges(uint16_t port) {
-  const bool looks_contended = in_contended_memory(port);
+   one lowest ("Contended I/O"). In the page's notation a charge is weighed
+   where its T-state would begin and comes before it, so a T-state that is
+   charged runs where the chip owes the processor nothing. */
+static uint8_t port_charges(const spectrum_t *spectrum, uint16_t port) {
+  const bool looks_contended = in_contended_memory(spectrum, port);
   const bool ula_port = ula_answers(port);
   const bool charged[] = {looks_contended, looks_contended || ula_port,
                           looks_contended && !ula_port, looks_contended && !ula_port};
@@ -117,16 +231,14 @@ static uint8_t port_charges(uint16_t port) {
 
 /* The beam's own work, which the processor's clock has no bearing on. */
 static void paint(spectrum_t *spectrum) {
-  uint16_t display_address = 0;
-  uint16_t attribute_address = 0;
-  uint8_t display = 0;
-  uint8_t attribute = 0;
-  if (ula_fetch(&spectrum->ula, &display_address, &attribute_address)) {
-    display = read_video(spectrum, display_address);
-    attribute = read_video(spectrum, attribute_address);
+  uint16_t address = 0;
+  spectrum->ula_bus = IDLE_BUS;
+  if (ula_fetch(&spectrum->ula, &address)) {
+    spectrum->ula_bus = read_video(spectrum, address);
+    ula_latch(&spectrum->ula, spectrum->ula_bus);
   }
   uint8_t samples[ULA_SAMPLES_PER_TICK];
-  ula_video(&spectrum->ula, display, attribute, samples);
+  ula_video(&spectrum->ula, samples);
   monitor_receive(&spectrum->monitor, samples, ULA_SAMPLES_PER_TICK, ula_csync(&spectrum->ula));
 }
 
@@ -140,21 +252,43 @@ static void run_processor(spectrum_t *spectrum) {
     bus &= ~Z80_INT;
   }
 
+  /* The processor takes a port's byte on the read's last T-state, the one
+     after the request, and the ULA may have held the clock between the two,
+     so the byte it takes is the one on the bus here. */
+  if (spectrum->reading_port) {
+    bus = z80_set_data(bus, io_read(spectrum, z80_address(bus)));
+    spectrum->reading_port = false;
+  }
+  /* That T-state is the access's last, and the bank register takes the
+     byte as it ends, from whichever side drove it: the ULA's fetch on this
+     T-state has already gone to the old screen, and its next goes to the
+     new. */
+  if (spectrum->latching_bank_register) {
+    latch_bank_register(spectrum, z80_data(bus));
+    spectrum->latching_bank_register = false;
+  }
+
   z80_cycle cycle = z80_next_cycle(&spectrum->cpu);
   uint64_t pins = z80_tick(&spectrum->cpu, bus);
   if ((pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
-    /* Interrupt acknowledge. Nothing drives the bus, so the byte is the
-       floating 0xFF; in mode 1, which is the only mode the firmware uses, it
-       is ignored anyway. */
-    pins = z80_set_data(pins, FLOATING);
+    /* Interrupt acknowledge. Nothing answers it, so the byte is what the
+       ULA's half of the bus holds, which is idle above the picture, where
+       an acknowledge falls; in mode 1, which is the only mode the firmware
+       uses, it is ignored anyway. */
+    pins = z80_set_data(pins, spectrum->ula_bus);
   } else if ((pins & (Z80_MREQ | Z80_RD)) == (Z80_MREQ | Z80_RD)) {
     pins = z80_set_data(pins, read_memory(spectrum, z80_address(pins)));
   } else if ((pins & (Z80_MREQ | Z80_WR)) == (Z80_MREQ | Z80_WR)) {
     write_memory(spectrum, z80_address(pins), z80_data(pins));
   } else if ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR)) {
     io_write(spectrum, z80_address(pins), z80_data(pins));
+    spectrum->latching_bank_register = bank_register_answers(spectrum, z80_address(pins));
   } else if ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD)) {
+    /* The port's byte is on the bus from the request on, and is taken on
+       the next T-state, where it is answered again. */
     pins = z80_set_data(pins, io_read(spectrum, z80_address(pins)));
+    spectrum->reading_port = true;
+    spectrum->latching_bank_register = bank_register_answers(spectrum, z80_address(pins));
   }
 
   spectrum->pins = pins;
@@ -166,23 +300,35 @@ static void run_processor(spectrum_t *spectrum) {
        only holds one costs what one that acts on it costs. */
     case Z80_CYCLE_MEMORY:
     case Z80_CYCLE_INTERNAL:
-      spectrum->held_ticks =
-          in_contended_memory(z80_address(pins)) ? ula_contention(spectrum->ula.frame_tick) : 0;
+      spectrum->held_ticks = in_contended_memory(spectrum, z80_address(pins))
+                                 ? ula_contention(&spectrum->ula, spectrum->ula.frame_tick)
+                                 : 0;
       break;
+    /* The first T-state's charge is taken after it, at the position it
+       ran at: nothing happens on it that a hold either side could move. */
     case Z80_CYCLE_PORT:
-      spectrum->port_charges_left = port_charges(z80_address(pins));
+      spectrum->port_charges_left = port_charges(spectrum, z80_address(pins));
+      spectrum->held_ticks = (spectrum->port_charges_left & 1)
+                                 ? ula_contention(&spectrum->ula, spectrum->ula.frame_tick)
+                                 : 0;
+      spectrum->port_charges_left = (uint8_t)(spectrum->port_charges_left >> 1);
       break;
     /* No evidence here can say whether an acknowledge is charged: the
-       interrupt is held across the first 32 T-states of a frame and the chip
-       wants the bus from 14335, so an acknowledge always falls in the top
-       border, where nothing is owed under any rule. */
+       interrupt is held across a frame's first few dozen T-states and the
+       chip wants the bus only from the picture's first line, so an
+       acknowledge always falls in the frame sync above the picture, where
+       nothing is owed under any rule. */
     case Z80_CYCLE_INTERRUPT:
     case Z80_CYCLE_NONE:
       break;
   }
 
+  /* The next T-state of a port access, weighed where it would begin: the
+     third, which gives or asks for the byte, and the fourth, which takes it,
+     both come after their holds. */
   if (spectrum->port_charges_left & 1) {
-    spectrum->held_ticks = ula_contention(spectrum->ula.frame_tick);
+    uint32_t next = spectrum->ula.frame_tick + 1 + spectrum->held_ticks;
+    spectrum->held_ticks = (uint8_t)(spectrum->held_ticks + ula_contention(&spectrum->ula, next));
   }
   spectrum->port_charges_left = (uint8_t)(spectrum->port_charges_left >> 1);
 }
@@ -193,6 +339,17 @@ uint64_t spectrum_tick(spectrum_t *spectrum) {
   paint(spectrum);
   if (spectrum->tape != NULL) {
     tape_tick(spectrum->tape);
+  }
+  /* The +2's sound chip is clocked from the ULA's pin C (Worsley's +2
+     redraw) at half the processor's rate: "The basic clock frequency of the
+     circuit is 1.7734MHz (to 0.01%)", says the manual of the +3, whose
+     sound chip answers at the same two ports (chapter 8, part 30,
+     https://worldofspectrum.org/ZXSpectrum128+3Manual/chapter8pt30.html).
+     Contention is the ULA stopping the processor's own clock input, so it is
+     taken to leave this one running. Where its edges fall against the frame
+     was not found; they fall here on the even T-states. */
+  if (spectrum->model == SPECTRUM_PLUS2 && spectrum->ula.frame_tick % 2 == 0) {
+    ay38910_tick(&spectrum->psg);
   }
   if (spectrum->held_ticks > 0) {
     spectrum->held_ticks--;
@@ -300,6 +457,9 @@ static const uint16_t pin_28[2][2] = {{3400, 6600}, {35600, 37000}};
 #define SPEAKER_DROP 14000
 
 uint16_t spectrum_sound_speaker(const spectrum_t *spectrum) {
+  if (spectrum->model == SPECTRUM_PLUS2) {
+    return 0;
+  }
   uint16_t pin = pin_28[spectrum->ula.speaker ? 1 : 0][spectrum->ula.microphone ? 1 : 0];
   return pin > SPEAKER_DROP ? (uint16_t)(pin - SPEAKER_DROP) : 0;
 }

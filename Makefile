@@ -7,19 +7,19 @@ MONITOR_C = src/monitor.c
 KEYBOARD_C = src/keyboard.c
 TAPE_C = src/tape.c
 TZX_C = src/tzx.c
-SHARED_C = $(Z80_C) $(MONITOR_C) $(KEYBOARD_C) $(TAPE_C) $(TZX_C)
+AY38910_C = src/ay38910.c
+SHARED_C = $(Z80_C) $(MONITOR_C) $(KEYBOARD_C) $(TAPE_C) $(TZX_C) $(AY38910_C)
 
 CRTC_C = src/crtc.c
 GATE_ARRAY_C = src/gate_array.c
 PPI_C = src/ppi.c
-AY38910_C = src/ay38910.c
 UPD765_C = src/upd765.c
 DRIVE_C = src/drive.c
 FLOPPY_C = src/floppy.c src/dsk.c
 CPC_C = src/cpc.c
 CPC_SNAPSHOT_C = src/cpc_snapshot.c
-CPC_OWN_C = $(CRTC_C) $(GATE_ARRAY_C) $(PPI_C) $(AY38910_C) $(UPD765_C) $(DRIVE_C) \
-            $(FLOPPY_C) $(CPC_C) $(CPC_SNAPSHOT_C)
+CPC_OWN_C = $(CRTC_C) $(GATE_ARRAY_C) $(PPI_C) $(UPD765_C) $(DRIVE_C) $(FLOPPY_C) $(CPC_C) \
+            $(CPC_SNAPSHOT_C)
 CPC_CORE_C = $(SHARED_C) $(CPC_OWN_C)
 
 ULA_C = src/ula.c
@@ -64,6 +64,7 @@ SPECTRUM_TIMING_TEST_C = test/spectrum_timing_test.c
 SPECTRUM_INTERRUPT_TEST_C = test/spectrum_interrupt_test.c
 SPECTRUM_SNAPSHOT_TEST_C = test/spectrum_snapshot_test.c
 SPECTRUM_FIRMWARE_TEST_C = test/spectrum_firmware_test.c
+SPECTRUM_PROGRAMS_TEST_C = test/spectrum_programs_test.c
 SHAKER_TEST_C = test/shaker_test.c test/shaker_trace.c
 DEMO_TEST_C = test/demo_test.c
 BENCH_C = test/bench.c
@@ -117,7 +118,7 @@ endif
 CLANG_FORMAT ?= $(shell command -v clang-format 2>/dev/null || echo xcrun clang-format)
 CLANG_TIDY ?= $(shell command -v clang-tidy 2>/dev/null || command -v /opt/homebrew/opt/llvm/bin/clang-tidy 2>/dev/null || echo clang-tidy)
 
-all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test $(BUILD)/command_line_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test $(BUILD)/shaker_test $(BUILD)/demo_test $(BUILD)/bench
+all: $(BUILD)/emulator $(BUILD)/z80_test $(BUILD)/tape_test $(BUILD)/tzx_test $(BUILD)/crtc_test $(BUILD)/gate_array_test $(BUILD)/monitor_test $(BUILD)/ppi_test $(BUILD)/ay38910_test $(BUILD)/keyboard_test $(BUILD)/ula_test $(BUILD)/spectrum_test $(BUILD)/spectrum_snapshot_test $(BUILD)/spectrum_timing_test $(BUILD)/spectrum_interrupt_test $(BUILD)/cpc_test $(BUILD)/cpc_timing_test $(BUILD)/cpc_snapshot_test $(BUILD)/floppy_test $(BUILD)/drive_test $(BUILD)/upd765_test $(BUILD)/png_test $(BUILD)/wav_test $(BUILD)/resampler_test $(BUILD)/command_line_test $(BUILD)/z80_single_step_test $(BUILD)/z80_exerciser_test $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test $(BUILD)/spectrum_programs_test $(BUILD)/shaker_test $(BUILD)/demo_test $(BUILD)/bench
 
 # Each source compiles once, to an object every binary naming it links.
 # Beside each object the compiler lists the project's headers it read, so an
@@ -208,6 +209,9 @@ $(BUILD)/cpc_firmware_test: $(call OBJECTS_OF,$(CPC_CORE_C) $(CPC_FIRMWARE_TEST_
 $(BUILD)/spectrum_firmware_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_FIRMWARE_TEST_C))
 	$(CC) $(CFLAGS) $^ -o $@
 
+$(BUILD)/spectrum_programs_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_PROGRAMS_TEST_C))
+	$(CC) $(CFLAGS) $^ -o $@
+
 $(BUILD)/spectrum_interrupt_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_INTERRUPT_TEST_C))
 	$(CC) $(CFLAGS) $^ -o $@
 
@@ -288,7 +292,7 @@ BUILT_C = $(ALL_CORES_C) $(RESAMPLER_C) $(PNG_C) $(WAV_C) $(CLI_C) \
           $(CPC_SNAPSHOT_TEST_C) $(CPC_TIMING_TEST_C) $(CPC_FIRMWARE_TEST_C) \
           $(SPECTRUM_TEST_C) $(SPECTRUM_SNAPSHOT_TEST_C) $(SPECTRUM_TIMING_TEST_C) \
           $(SPECTRUM_INTERRUPT_TEST_C) \
-          $(SPECTRUM_FIRMWARE_TEST_C) $(SHAKER_TEST_C) $(DEMO_TEST_C) $(BENCH_C) \
+          $(SPECTRUM_FIRMWARE_TEST_C) $(SPECTRUM_PROGRAMS_TEST_C) $(SHAKER_TEST_C) $(DEMO_TEST_C) $(BENCH_C) \
           $(Z80_SINGLE_STEP_C) $(Z80_EXERCISER_C)
 
 sources-agree:
@@ -317,6 +321,10 @@ roms:
 discs:
 	@sh tools/fetch-discs.sh
 
+# Every tape image the tiers read, likewise.
+tapes:
+	@sh tools/fetch-tapes.sh
+
 # The machine tier: the real firmware, booted and typed at, and a real disc
 # catalogued. Needs the ROM and disc images, so it fetches them first.
 test-firmware: $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
@@ -324,6 +332,14 @@ test-firmware: $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
 	@sh tools/fetch-discs.sh shaker27.dsk
 	@$(BUILD)/cpc_firmware_test roms test/data/discs
 	@$(BUILD)/spectrum_firmware_test roms
+
+# Programs written by others to test a Spectrum's timing, each judged by
+# what a real machine showed: a floating bus self test, a suite of timing
+# tests, and the border and screen tests a table of measurements records.
+test-spectrum-programs: $(BUILD)/spectrum_programs_test
+	@sh tools/fetch-roms.sh
+	@sh tools/fetch-tapes.sh
+	@$(BUILD)/spectrum_programs_test roms test/data/tapes
 
 # Shaker: Longshot's CRTC acid tests, walked module by module, and what they
 # said set against the copy on record in test/, one to a version and a type.
@@ -375,7 +391,7 @@ test-exerciser: $(BUILD)/z80_exerciser_test
 # for its record with whatever values that command line gave it. A variable
 # given there reaches every make below this one, so each is named again where
 # the loops call them.
-test-all: test test-sanitized test-firmware test-single-step test-exerciser
+test-all: test test-sanitized test-firmware test-spectrum-programs test-single-step test-exerciser
 	@for version in 27 26; do \
 		for type in 0 1 2 3 4; do \
 			$(MAKE) --no-print-directory test-shaker SHAKER=$$version CRTC=$$type MODULE= GROUP= || exit 1; \
@@ -397,4 +413,4 @@ lint:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all roms discs sources-agree FORCE bench test test-sanitized test-firmware test-shaker test-demos test-single-step test-exerciser test-all format format-check lint clean
+.PHONY: all roms discs tapes sources-agree FORCE bench test test-sanitized test-firmware test-spectrum-programs test-shaker test-demos test-single-step test-exerciser test-all format format-check lint clean

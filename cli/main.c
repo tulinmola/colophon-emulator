@@ -98,8 +98,8 @@ typedef struct {
   .crop_left = CPC_CROP_LEFT, .crop_top = CPC_CROP_TOP, .crop_width = CPC_CROP_WIDTH,              \
   .crop_height = CPC_CROP_HEIGHT, .sample_rgb = gate_array_rgb,                                    \
   .default_frames = CPC_DEFAULT_FRAMES, .double_lines = true
-#define SPECTRUM_RASTER                                                                            \
-  .raster_width = SPECTRUM_FRAMEBUFFER_WIDTH, .raster_height = SPECTRUM_FRAMEBUFFER_HEIGHT,        \
+#define SPECTRUM_48K_RASTER                                                                        \
+  .raster_width = SPECTRUM_48K_RASTER_WIDTH, .raster_height = SPECTRUM_48K_RASTER_HEIGHT,          \
   .crop_left = SPECTRUM_CROP_LEFT, .crop_top = SPECTRUM_CROP_TOP,                                  \
   .crop_width = SPECTRUM_CROP_WIDTH, .crop_height = SPECTRUM_CROP_HEIGHT, .sample_rgb = ula_rgb,   \
   .default_frames = SPECTRUM_DEFAULT_FRAMES, .double_lines = false
@@ -134,7 +134,7 @@ static const machine_t machines[] = {
      .ram_size = SPECTRUM_RAM_48K,
      .disc_interface = false,
      .description = "Sinclair ZX Spectrum 48K",
-     SPECTRUM_RASTER},
+     SPECTRUM_48K_RASTER},
 };
 static const size_t machine_count = sizeof machines / sizeof machines[0];
 
@@ -796,7 +796,7 @@ static void spectrum_record_sound(const spectrum_t *spectrum) {
 
 static void spectrum_run_frames(spectrum_t *spectrum, long frames) {
   for (long frame = 0; frame < frames; frame++) {
-    for (int tick = 0; tick < SPECTRUM_TICKS_PER_FRAME; tick++) {
+    for (uint32_t tick = 0; tick < spectrum->ula.frame.ticks_per_frame; tick++) {
       spectrum_tick(spectrum);
       if (recording != NULL) {
         spectrum_record_sound(spectrum);
@@ -931,7 +931,7 @@ static int run_spectrum(const options_t *options) {
   if (spectrum_refuses(options)) {
     return 1;
   }
-  static uint8_t rom[SPECTRUM_ROM_SIZE];
+  static uint8_t rom[SPECTRUM_48K_ROM_SIZE];
   if (!load_rom(options->rom_directory, options->machine->rom_file, rom, sizeof rom)) {
     return 1;
   }
@@ -947,7 +947,7 @@ static int run_spectrum(const options_t *options) {
     free(ram);
     return 1;
   }
-  spectrum_init(spectrum, ram, options->machine->ram_size, rom);
+  spectrum_init(spectrum, SPECTRUM_48K, ram, options->machine->ram_size, rom);
   spectrum_connect_monitor(spectrum, framebuffer);
 
   int status = 0;
@@ -961,7 +961,7 @@ static int run_spectrum(const options_t *options) {
     const char *problem = NULL;
     if (tape_image == NULL) {
       status = 1;
-    } else if (!tzx_open(&reader, tape_image, (uint32_t)size, SPECTRUM_TICKS_PER_MILLISECOND,
+    } else if (!tzx_open(&reader, tape_image, (uint32_t)size, spectrum_clock_hertz(spectrum) / 1000,
                          TZX_SPECTRUM, &problem)) {
       fprintf(stderr, "%s %s\n", options->tape_path, problem);
       status = 1;
@@ -993,8 +993,8 @@ static int run_spectrum(const options_t *options) {
   }
   if (status == 0 && (options->sound_path != NULL || options->sound_steps_path != NULL)) {
     const int32_t levels[RESAMPLER_CHANNELS] = {spectrum_sound_speaker(spectrum)};
-    recording = recorder_open(options, 1, SPECTRUM_TICKS_PER_MILLISECOND * 1000,
-                              SPECTRUM_SOUND_STEPS_PER_SECOND, levels);
+    recording = recorder_open(options, 1, spectrum_clock_hertz(spectrum),
+                              spectrum_clock_hertz(spectrum), levels);
     if (recording == NULL) {
       status = 1;
     }
