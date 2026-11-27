@@ -48,9 +48,9 @@
 
 static const char *rom_directory = "roms";
 static const char *tape_directory = "test/data/tapes";
-static uint8_t rom[SPECTRUM_ROM_SIZE];
+static uint8_t rom[SPECTRUM_48K_ROM_SIZE];
 static uint8_t ram[SPECTRUM_RAM_48K];
-static uint8_t framebuffer[SPECTRUM_FRAMEBUFFER_WIDTH * SPECTRUM_FRAMEBUFFER_HEIGHT];
+static uint8_t framebuffer[SPECTRUM_48K_RASTER_WIDTH * SPECTRUM_48K_RASTER_HEIGHT];
 static spectrum_t spectrum;
 
 static uint8_t image[64 * 1024];
@@ -68,7 +68,7 @@ static int display_top(void) {
 }
 
 static uint8_t colour_at(int x, int y) {
-  return framebuffer[y * SPECTRUM_FRAMEBUFFER_WIDTH + x] & 0x0F;
+  return framebuffer[y * SPECTRUM_48K_RASTER_WIDTH + x] & 0x0F;
 }
 
 /* The file into the buffer, which must have room to spare: one that fills
@@ -103,14 +103,14 @@ static bool power_on(void) {
   memcpy(rom, image, sizeof rom);
   memset(ram, 0x00, sizeof ram);
   memset(framebuffer, 0x00, sizeof framebuffer);
-  spectrum_init(&spectrum, ram, sizeof ram, rom);
+  spectrum_init(&spectrum, SPECTRUM_48K, ram, sizeof ram, rom);
   spectrum_connect_monitor(&spectrum, framebuffer);
   return true;
 }
 
 static void run_frames(int frames) {
   for (int frame = 0; frame < frames; frame++) {
-    for (int tick = 0; tick < SPECTRUM_TICKS_PER_FRAME; tick++) {
+    for (uint32_t tick = 0; tick < spectrum.ula.frame.ticks_per_frame; tick++) {
       spectrum_tick(&spectrum);
     }
   }
@@ -236,7 +236,7 @@ static bool load_program(const char *name, const char *showing) {
     return false;
   }
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, (uint32_t)length, SPECTRUM_TICKS_PER_MILLISECOND, TZX_SPECTRUM,
+  if (!tzx_open(&reader, image, (uint32_t)length, SPECTRUM_48K_CLOCK_HERTZ / 1000, TZX_SPECTRUM,
                 &problem)) {
     TEST_FAIL("%s was refused: %s", name, problem);
     return false;
@@ -414,7 +414,7 @@ static void the_butlers_tests_find_an_early_48k_and_pass_it(void) {
    as far across as the OUT that starts it lands: its first sample, or -1. */
 static int stripe_starts_at(void) {
   int y = display_top() - 1;
-  for (int x = 0; x < SPECTRUM_FRAMEBUFFER_WIDTH; x++) {
+  for (int x = 0; x < SPECTRUM_48K_RASTER_WIDTH; x++) {
     if (colour_at(x, y) == 2) {
       return x;
     }

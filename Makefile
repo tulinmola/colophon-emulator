@@ -7,19 +7,19 @@ MONITOR_C = src/monitor.c
 KEYBOARD_C = src/keyboard.c
 TAPE_C = src/tape.c
 TZX_C = src/tzx.c
-SHARED_C = $(Z80_C) $(MONITOR_C) $(KEYBOARD_C) $(TAPE_C) $(TZX_C)
+AY38910_C = src/ay38910.c
+SHARED_C = $(Z80_C) $(MONITOR_C) $(KEYBOARD_C) $(TAPE_C) $(TZX_C) $(AY38910_C)
 
 CRTC_C = src/crtc.c
 GATE_ARRAY_C = src/gate_array.c
 PPI_C = src/ppi.c
-AY38910_C = src/ay38910.c
 UPD765_C = src/upd765.c
 DRIVE_C = src/drive.c
 FLOPPY_C = src/floppy.c src/dsk.c
 CPC_C = src/cpc.c
 CPC_SNAPSHOT_C = src/cpc_snapshot.c
-CPC_OWN_C = $(CRTC_C) $(GATE_ARRAY_C) $(PPI_C) $(AY38910_C) $(UPD765_C) $(DRIVE_C) \
-            $(FLOPPY_C) $(CPC_C) $(CPC_SNAPSHOT_C)
+CPC_OWN_C = $(CRTC_C) $(GATE_ARRAY_C) $(PPI_C) $(UPD765_C) $(DRIVE_C) $(FLOPPY_C) $(CPC_C) \
+            $(CPC_SNAPSHOT_C)
 CPC_CORE_C = $(SHARED_C) $(CPC_OWN_C)
 
 ULA_C = src/ula.c

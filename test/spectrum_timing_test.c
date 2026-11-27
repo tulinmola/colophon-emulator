@@ -44,7 +44,7 @@
 #include "spectrum.h"
 #include "test.h"
 
-static uint8_t rom[SPECTRUM_ROM_SIZE];
+static uint8_t rom[SPECTRUM_48K_ROM_SIZE];
 static uint8_t ram[SPECTRUM_RAM_48K];
 static spectrum_t spectrum;
 
@@ -441,7 +441,7 @@ static void walk(uint32_t from, uint32_t to) {
 static void power_on(void) {
   memset(rom, 0x00, sizeof rom);
   memset(ram, 0x00, sizeof ram);
-  spectrum_init(&spectrum, ram, SPECTRUM_RAM_48K, rom);
+  spectrum_init(&spectrum, SPECTRUM_48K, ram, SPECTRUM_RAM_48K, rom);
 }
 
 /* The whole of the first line that carries picture, and the border in front

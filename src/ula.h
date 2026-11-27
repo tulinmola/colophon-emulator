@@ -4,7 +4,7 @@
  * Where a CPC divides the work between a 6845 and a Gate Array, a Spectrum
  * has one chip. It counts out the frame, reads the screen, turns bytes into
  * pixels, raises the interrupt, sends the monitor its composite sync, holds
- * the border colour and drives the speaker. It does not read memory: the
+ * the border colour and drives the sound. It does not read memory: the
  * machine fetches the byte ula_fetch names and hands it over with
  * ula_latch, as it does for a Gate Array.
  *
@@ -280,7 +280,7 @@ typedef struct {
   uint8_t drawn_attribute;
 
   uint8_t border;  /* port 0xFE bits 2-0 */
-  bool speaker;    /* bit 4, which also drives the EAR socket */
+  bool speaker;    /* bit 4: a 48K's loudspeaker, and the EAR line */
   bool microphone; /* bit 3 */
 } ula_t;
 

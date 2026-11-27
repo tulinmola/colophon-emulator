@@ -13,7 +13,7 @@
 
 static spectrum_t saved;
 static spectrum_t restored;
-static uint8_t rom[SPECTRUM_ROM_SIZE];
+static uint8_t rom[SPECTRUM_PLUS2_ROM_SIZE]; /* room for either model's */
 static uint8_t saved_ram[SPECTRUM_RAM_48K];
 static uint8_t restored_ram[SPECTRUM_RAM_48K];
 static uint8_t bytes[SPECTRUM_SNAPSHOT_SIZE];
@@ -44,12 +44,12 @@ static void power_on(spectrum_t *machine, uint8_t *ram, uint32_t ram_size) {
   memcpy(rom, program, sizeof program);
   memcpy(rom + 0x0038, handler, sizeof handler);
   memset(ram, 0x00, ram_size);
-  spectrum_init(machine, ram, ram_size, rom);
+  spectrum_init(machine, SPECTRUM_48K, ram, ram_size, rom);
 }
 
 static void run(spectrum_t *machine, long frames) {
   for (long frame = 0; frame < frames; frame++) {
-    for (int tick = 0; tick < SPECTRUM_TICKS_PER_FRAME; tick++) {
+    for (uint32_t tick = 0; tick < machine->ula.frame.ticks_per_frame; tick++) {
       spectrum_tick(machine);
     }
   }
@@ -60,7 +60,7 @@ static void run(spectrum_t *machine, long frames) {
    flight and the arithmetic afterwards is exact. */
 static void run_to_the_wait_loop(spectrum_t *machine, long frames) {
   run(machine, frames);
-  for (int guard = 0; guard < 2 * SPECTRUM_TICKS_PER_FRAME; guard++) {
+  for (uint32_t guard = 0; guard < 2 * machine->ula.frame.ticks_per_frame; guard++) {
     if (machine->cpu.halted && z80_instruction_complete(&machine->cpu)) {
       return;
     }
@@ -84,6 +84,17 @@ static void a_snapshot_is_the_one_length_it_can_be(void) {
   TEST_EQUAL(spectrum_snapshot_size(&saved), 0);
   TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
   TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+
+  /* Nor is a +2, whose bank register and sound chip the format has no room
+     for, even one handed no more RAM than a 48K. */
+  static uint8_t banks[SPECTRUM_RAM_128K];
+  const uint32_t sizes[] = {SPECTRUM_RAM_128K, SPECTRUM_RAM_48K};
+  for (size_t index = 0; index < sizeof sizes / sizeof sizes[0]; index++) {
+    spectrum_init(&saved, SPECTRUM_PLUS2, banks, sizes[index], rom);
+    TEST_EQUAL(spectrum_snapshot_size(&saved), 0);
+    TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+    TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  }
 }
 
 static void a_half_done_instruction_cannot_be_saved(void) {
@@ -138,7 +149,8 @@ static void a_hold_does_not_survive_a_load(void) {
   restored.cpu.h = 0x40;
   restored.cpu.l = 0x00;
   ula_seek(&restored.ula, 14331);
-  for (int guard = 0; guard < SPECTRUM_TICKS_PER_FRAME && restored.held_ticks == 0; guard++) {
+  for (uint32_t guard = 0; guard < restored.ula.frame.ticks_per_frame && restored.held_ticks == 0;
+       guard++) {
     spectrum_tick(&restored);
   }
   TEST_CHECK(restored.held_ticks > 0);
