@@ -63,16 +63,14 @@
  * a read, 0xFFFD reads the register and 0xBFFD selects nothing, so it reads
  * the floating bus.
  *
- * Not modelled on the +2: its sound, which goes to the television and an
- * audio socket rather than to a loudspeaker, and is not heard here at all;
- * its two joystick ports, which read as if nothing were plugged in; the
- * keypad and the RS232 socket, which share the sound chip's port A and are
- * taken to read as empty; what a write to port 0xFE comes back as on bit 6,
- * which the 48K here leaves out as well, so that the EAR socket alone
- * answers there on both; the crash a 128 is reported to suffer soon after
- * the I register points at memory the ULA wants, where the snow ula.h
- * leaves out begins; and the paging logic one report has some +2s carry,
- * which ignores a read of port 0x7FFD.
+ * Not modelled on the +2: its two joystick ports, which read as if nothing
+ * were plugged in; the keypad and the RS232 socket, which share the sound
+ * chip's port A and are taken to read as empty; what a write to port 0xFE
+ * comes back as on bit 6, which the 48K here leaves out as well, so that
+ * the EAR socket alone answers there on both; the crash a 128 is reported
+ * to suffer soon after the I register points at memory the ULA wants,
+ * where the snow ula.h leaves out begins; and the paging logic one report
+ * has some +2s carry, which ignores a read of port 0x7FFD.
  *
  * Sources:
  * - "Contended I/O" (Sinclair Wiki),
@@ -103,7 +101,8 @@
  *   signal on EAR"; and, with bit 3 set, bit 6 still reading high for about
  *   180 to 2800 T-states after bit 4 falls, for "capacitors connected
  *   between pin 28 of ULA and EAR and MIC connectors", with "no delay" when
- *   bit 4 rises.
+ *   bit 4 rises. The +2's MIC pin, which nothing measures, is taken to
+ *   stand where that pin does.
  * - "The floating bus explained!" (Ramsoft, technical report rev 1.06,
  *   2002), served at http://www.ramsoft.bbk.org/floatingbus.html and now
  *   mirrored at
@@ -152,10 +151,16 @@
  *   latches as BANK falls at the end of the access, and held off through a
  *   diode from its own bit 5; the sound chip's data lines on the
  *   processor's side of the resistors that split the data bus, its A8 and
- *   BC2 tied high and its clock pin wired to the ULA's pin C; the sound
- *   leaving the board for the television's modulator and a socket, SK1
- *   AUDIO OUT; and a crystal marked "35.4690 MHz", halved by a 74F74 into
- *   the ULA.
+ *   BC2 tied high and its clock pin wired to the ULA's pin C; its three
+ *   channels each through 1K8 into the base of TR6, a BC239 with its emitter
+ *   grounded, 330R from its collector to +5V, 560R from collector to base and
+ *   180R from base to ground; that collector, GI SOUND, through 18K to the
+ *   television modulator's audio input, and the ULA's MIC and EAR pins
+ *   through 68K each, every one behind 1uF; GI SOUND, the MIC line and the
+ *   tape's EAR line again through 10K and 100nF each to a socket, SK1 AUDIO
+ *   OUT; 390R from the EAR pin to ground and 680R from it to the tape's
+ *   line; and a crystal marked "35.4690 MHz", halved by a 74F74 into the
+ *   ULA.
  * - JL's reading of the 128's paging logic, a HAL10H8 whose fuse was blown,
  *   by trying every input, https://trastero.speccy.org/cosas/JL/Pal/PAL10H8.html
  *   — "BANK = /A15Z * /A1Z * /IORQ * /RDL + /A15Z * /A1Z * /IORQ * /WRL",
@@ -193,6 +198,29 @@
  * "It causes a crash when port 0x7FFD is read"; and Velesoft's report that a late board "can
  * contain same chip HAL10H8 with fixed firmware (reading from port 32765 are ignored, ZX no
  * crash)", which no owner in the thread confirmed.
+ * - Scott-Falk Hühn, "ZX Spectrum +2 - Improve sound quality",
+ *   http://s-huehn.de/spectrum/en/hardware1.htm#sp2-2b — of the +2's sound
+ *   output, SK1, "the 3 sources EAR, MIC/beeper and sound chip are mixed",
+ *   which puts the beeper on the MIC pin; and there, as made, "the sound
+ *   chip is much too quiet, the beeper too loud", which the board's values
+ *   give at that socket, where each source comes in through 10K.
+ * - Adam Wilson's restoration of a +2 on a Z70500 issue 3 board, 2021,
+ *   https://retrorepairsandrefurbs.com/2021/07/07/sinclair-zx-spectrum-128k2-grey-restoration/
+ *   — "design errors in the audio circuitry (specifically the balancing
+ *   stage) cause the 3-channel audio from the AY-3-8912 chip to be
+ *   significantly quieter than the beeper audio from the ULA", for which he
+ *   lowered the resistors that carry it to the socket and to the
+ *   television, R37 and R38; and, there, his "10k on schematic" for both,
+ *   and a reader's board with R37 at 2.2K and R38 at 18K.
+ * - Couriersud's measurement of an AY-3-8910's output at each level into
+ *   loads from 983 ohms to an open circuit, 2014, as MAME's ay8910.cpp quotes
+ *   it, https://github.com/mamedev/mame/blob/dd06c01/src/devices/sound/ay8910.cpp
+ *   — from which each level's current into the +2's mixing stage is read.
+ * - ON Semiconductor, BC237 series datasheet, 2006,
+ *   https://mm.digikey.com/Volume0/opasdata/d220001/medias/docus/2465/BC237%28B%2C%20C%29%2C%20239C.pdf
+ *   — the BC239's base-emitter voltage, 0.62V typical at 2mA and 25°C; its
+ *   gain, listed for the BC239C alone, 380 to 800 and 500 typical at 2mA;
+ *   and the family's gains, 120 to 800.
  * - comp.sys.sinclair FAQ, 128K reference, cited in ula.h — "The ULA bug
  *   which causes snow when I is set to point to contended memory still
  *   occurs, and also appears to crash the machine shortly after I is set to
@@ -405,22 +433,45 @@ void spectrum_finish_instruction(spectrum_t *spectrum);
 uint8_t spectrum_peek(const spectrum_t *spectrum, uint16_t address);
 void spectrum_poke(spectrum_t *spectrum, uint16_t address, uint8_t value);
 
-/* The voltage across the loudspeaker, in tenths of a millivolt, which a
- * write to the ULA can move on any T-state. The +2 has no loudspeaker, and
- * on one this is 0.
+/* The sound where the board sends it to be heard, in tenths of a
+ * millivolt, which a write to the ULA or the sound chip can move on any
+ * T-state, and the sound chip's own clock on every other. Each model sends
+ * it somewhere different.
  *
- * A 48K's ULA drives one pin for the speaker and both tape sockets, at a
- * level set by bits 4 and 3 of the last write to it, and the speaker stands
- * two silicon junctions below that pin, taken at 0.7V each: bit 4 sounds
- * it, and bit 3 alone does not. The board is an Issue 3's.
+ * A 48K's is the voltage across its loudspeaker. Its ULA drives one pin
+ * for the speaker and both tape sockets, at a level set by bits 4 and 3 of
+ * the last write to it, and the speaker stands two silicon junctions below
+ * that pin, taken at 0.7V each: bit 4 sounds it, and bit 3 alone does not.
+ * The board is an Issue 3's. Left out, for want of a measurement: the
+ * little current the junctions pass below their drop; the pin's fall,
+ * which the capacitors to the tape sockets slow, taken here as instant; a
+ * playing tape, which reaches the same pin through the EAR socket's
+ * capacitor and so the speaker, wherever it lifts the pin past the
+ * junctions, by an amount the recorder's volume and the ULA's output stage
+ * set; and what the speaker makes of its voltage.
  *
- * Left out, for want of a measurement: the little current the junctions
- * pass below their drop; the pin's fall, which the capacitors to the tape
- * sockets slow, taken here as instant; a playing tape, which reaches the
- * same pin through the EAR socket's capacitor and so the speaker, wherever
- * it lifts the pin past the junctions, by an amount the recorder's volume
- * and the ULA's output stage set; and what the speaker makes of its
- * voltage. */
-uint16_t spectrum_sound_speaker(const spectrum_t *spectrum);
+ * A +2 has no loudspeaker. Its sound goes to the television, and this is
+ * the voltage at the audio input of the MC1376 that modulates it, pin 5,
+ * into no current. Three things are mixed there through resistors. The
+ * sound chip's three channels each push a current into one transistor's
+ * base, where the currents add, and the transistor turns their sum into a
+ * voltage that falls as it grows. The ULA's MIC pin carries bits 4 and 3
+ * together, as a 48K's one pin does, and is taken to stand at the levels
+ * that pin was measured at, no measurement of this ULA's having been found.
+ * And the EAR pin, which is the tape's way in, stands at nothing with no
+ * tape playing. Bit 4 moves the mix about three times as far as one channel
+ * at its loudest, and as far as all three together, which owners bear out:
+ * the sound chip "significantly quieter than the beeper audio from the
+ * ULA" (Wilson, above).
+ *
+ * Left out on the +2: the capacitors each source passes through, which
+ * keep only what changes faster than a few times a second; the modulator
+ * and the television after this pin; SK1, the board's audio socket, which
+ * mixes the same sources in other proportions; a playing tape, heard
+ * through the EAR pin; the few per cent by which the transistor's output is
+ * not a straight line in its input, and by which a loud channel lets the
+ * others push less; and the boards whose mixing resistors are not the ones
+ * drawn here, as owners report some are (Wilson, above). */
+uint16_t spectrum_sound(const spectrum_t *spectrum);
 
 #endif

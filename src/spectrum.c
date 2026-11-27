@@ -442,10 +442,18 @@ void spectrum_poke(spectrum_t *spectrum, uint16_t address, uint8_t value) {
   write_memory(spectrum, address, value);
 }
 
-/* Pin 28's voltage after a write, in tenths of a millivolt, by bit 4 and
-   then bit 3 of it: Putnik's measurement of an Issue 3 board, "without
-   input signal on EAR". */
-static const uint16_t pin_28[2][2] = {{3400, 6600}, {35600, 37000}};
+/* The ULA's sound pin after a write, in tenths of a millivolt, by bit 4 and
+   then bit 3 of it. A 48K's is pin 28, and this is Putnik's measurement of
+   an Issue 3 board, "without input signal on EAR". A +2's is the 7K010's
+   MIC pin, which carries both bits as pin 28 does ("MIC/beeper", Hühn, in
+   spectrum.h; and of the 128's ULA, a write of bit 4 "effectively boosts
+   the MIC output", the 128 service manual, §5.6). No measurement of it was
+   found, and it is taken to stand where pin 28 does. */
+static const uint16_t sound_pin[2][2] = {{3400, 6600}, {35600, 37000}};
+
+static uint16_t sound_pin_level(const spectrum_t *spectrum) {
+  return sound_pin[spectrum->ula.speaker ? 1 : 0][spectrum->ula.microphone ? 1 : 0];
+}
 
 /* The speaker hangs off pin 28 through D9 into TR7, a ZTX450 emitter
    follower, with nothing else in the branch (the Issue 3 circuit diagram),
@@ -456,10 +464,65 @@ static const uint16_t pin_28[2][2] = {{3400, 6600}, {35600, 37000}};
    (§5.4.3), is left out. */
 #define SPEAKER_DROP 14000
 
-uint16_t spectrum_sound_speaker(const spectrum_t *spectrum) {
-  if (spectrum->model == SPECTRUM_PLUS2) {
-    return 0;
-  }
-  uint16_t pin = pin_28[spectrum->ula.speaker ? 1 : 0][spectrum->ula.microphone ? 1 : 0];
+static uint16_t loudspeaker(const spectrum_t *spectrum) {
+  uint16_t pin = sound_pin_level(spectrum);
   return pin > SPEAKER_DROP ? (uint16_t)(pin - SPEAKER_DROP) : 0;
+}
+
+/* The current each of the +2's sound chip's channels pushes into TR6's
+   base, in tenths of a microamp, by its level. A channel reaches the base
+   through 1K8 (Worsley's +2 redraw), and the base is taken to stand at the
+   transistor's base-emitter voltage where the stage rests: 0.62V at 2mA,
+   typical in ON Semiconductor's datasheet (spectrum.h), carried by the
+   diode law at 25°C to the 3.68mA the stage rests at, 0.636V. A level's
+   current is where its output's curve meets that load. Couriersud measured
+   each level's voltage into four loads and open, five points on its curve,
+   and the curve is taken as straight between the two points the meeting
+   lies between. Level 0 drives nothing. */
+static const uint16_t base_current[16] = {
+    0, 68, 98, 145, 212, 310, 439, 676, 793, 1297, 1827, 2300, 3003, 3789, 4642, 5575,
+};
+
+/* TR6's collector, GI SOUND, in tenths of a millivolt: where it rests with
+   no current in, and how far it falls for each milliamp in. The 560R from
+   collector to base holds the base nearly still, so a current into the
+   base flows on through that resistor, and the collector falls by the
+   voltage across it, less what the base-emitter voltage climbs as the
+   transistor carries more. Worked out from the board's resistors, with that
+   voltage following the diode law from the datasheet's 0.62V at 2mA, the
+   fall from no current to all three channels at their loudest is straight
+   within 3%, and is taken as straight. The gain is taken at 500, typical
+   for the BC239C, the only BC239 the datasheet lists; anywhere in the
+   family's 120 to 800 moves either figure by at most 2%. */
+#define GI_SOUND_RESTS 26174
+#define GI_SOUND_FALL_PER_MILLIAMP 5096
+#define TENTHS_OF_A_MICROAMP_PER_MILLIAMP 10000
+
+/* The MC1376's audio input, pin 5, is fed GI SOUND through 18K and the
+   ULA's MIC and EAR pins through 68K each, so into no current it stands at
+   their
+   three voltages, each weighed by its resistor's conductance: 68, 18 and 18
+   parts in 104. The EAR pin is the tape's way in, held at nothing by 390R
+   to ground while no tape plays. */
+#define GI_SOUND_PARTS 68
+#define MIC_PARTS 18
+#define EAR_PARTS 18
+#define EAR_WITHOUT_A_TAPE 0
+
+static uint16_t television(const spectrum_t *spectrum) {
+  uint32_t current = 0;
+  for (int channel = 0; channel < AY38910_CHANNELS; channel++) {
+    current += base_current[spectrum->psg.output[channel] & 0x0F];
+  }
+  uint32_t fall = (current * GI_SOUND_FALL_PER_MILLIAMP + TENTHS_OF_A_MICROAMP_PER_MILLIAMP / 2) /
+                  TENTHS_OF_A_MICROAMP_PER_MILLIAMP;
+  uint32_t gi_sound = GI_SOUND_RESTS - fall;
+  uint32_t parts = GI_SOUND_PARTS + MIC_PARTS + EAR_PARTS;
+  uint32_t weighed = GI_SOUND_PARTS * gi_sound + MIC_PARTS * sound_pin_level(spectrum) +
+                     EAR_PARTS * EAR_WITHOUT_A_TAPE;
+  return (uint16_t)((weighed + parts / 2) / parts);
+}
+
+uint16_t spectrum_sound(const spectrum_t *spectrum) {
+  return spectrum->model == SPECTRUM_PLUS2 ? television(spectrum) : loudspeaker(spectrum);
 }

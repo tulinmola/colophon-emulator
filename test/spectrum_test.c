@@ -27,6 +27,8 @@
  *   https://sinclair.wiki.zxnet.co.uk/wiki/Contended%20I/O — the four rows
  *   by which a port access is charged.
  */
+#include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "spectrum.h"
@@ -230,7 +232,7 @@ static void bit_4_sounds_the_speaker_and_bit_3_alone_does_not(void) {
     power_on_48k(SPECTRUM_RAM_48K);
     rom_program(program, sizeof program);
     TEST_CHECK(run_to_halt());
-    TEST_EQUAL(spectrum_sound_speaker(&spectrum), rows[row].tenths_of_millivolts);
+    TEST_EQUAL(spectrum_sound(&spectrum), rows[row].tenths_of_millivolts);
   }
 }
 
@@ -1101,12 +1103,149 @@ static void the_sound_chip_runs_at_half_the_clock(void) {
   TEST_EQUAL(spectrum.psg.divider, (before + 1) % 8);
 }
 
-/* There is no loudspeaker on a +2. */
-static void a_plus2_has_no_loudspeaker(void) {
+/* The +2's sound worked out afresh from what spectrum.c takes it from, along
+   the route it describes, so that the table and figures written there are
+   held to their sources. Couriersud's measurement of the sound chip's output
+   at each level into four loads and open, in volts (MAME's ay8910.cpp, cited
+   in spectrum.h): */
+static const double couriersud_loads[4] = {983.0, 9830.0, 99500.0, 1001000.0};
+static const double couriersud_volts[16][5] = {
+    {0.0000, 0.0000, 0.0001, 0.0011, 0.0616}, {0.0106, 0.0998, 0.6680, 1.8150, 2.7260},
+    {0.0150, 0.1377, 0.8320, 1.9890, 2.8120}, {0.0222, 0.1960, 1.0260, 2.1740, 2.9000},
+    {0.0320, 0.2708, 1.2320, 2.3360, 2.9760}, {0.0466, 0.3719, 1.4530, 2.4880, 3.0440},
+    {0.0665, 0.4938, 1.6680, 2.6280, 3.1130}, {0.1039, 0.6910, 1.9500, 2.7900, 3.1860},
+    {0.1237, 0.7790, 2.0500, 2.8590, 3.2340}, {0.1986, 1.0660, 2.3320, 3.0090, 3.3090},
+    {0.2803, 1.3010, 2.5050, 3.0850, 3.3380}, {0.3548, 1.4740, 2.6170, 3.1340, 3.3590},
+    {0.4702, 1.6870, 2.7340, 3.1800, 3.3730}, {0.6030, 1.8870, 2.8410, 3.2300, 3.4050},
+    {0.7530, 2.0740, 2.9280, 3.2580, 3.4170}, {0.9250, 2.2510, 3.0040, 3.2940, 3.4380},
+};
+
+/* TR6 and its resistors (Worsley's +2 redraw), the BC239's typical 0.62V at
+   2mA and 25°C (ON Semiconductor's datasheet), the gain spectrum.c takes,
+   and the diode law's thermal voltage at that temperature. */
+#define TR6_SUPPLY 5.0
+#define TR6_BASE_TO_GROUND 180.0
+#define TR6_COLLECTOR_TO_SUPPLY 330.0
+#define TR6_COLLECTOR_TO_BASE 560.0
+#define TR6_GAIN 500.0
+#define CHANNEL_TO_BASE 1800.0
+#define THERMAL_VOLTAGE 0.025693
+
+/* The collector's voltage for a current into the base, and the
+   base-emitter voltage it settles at, solved by iteration. */
+static double tr6_collector(double current, double *base) {
+  double collector_current = 0.002;
+  double collector = 0.0;
+  for (int pass = 0; pass < 200; pass++) {
+    double base_emitter = 0.62 + THERMAL_VOLTAGE * log(collector_current / 0.002);
+    double divisor =
+        1.0 + 1.0 / TR6_GAIN + TR6_COLLECTOR_TO_BASE / (TR6_GAIN * TR6_COLLECTOR_TO_SUPPLY);
+    double feedback =
+        (base_emitter / TR6_BASE_TO_GROUND +
+         (TR6_SUPPLY - base_emitter) / (TR6_GAIN * TR6_COLLECTOR_TO_SUPPLY) - current) /
+        divisor;
+    collector = base_emitter + TR6_COLLECTOR_TO_BASE * feedback;
+    double settled = (TR6_SUPPLY - collector) / TR6_COLLECTOR_TO_SUPPLY - feedback;
+    collector_current = (collector_current + settled) / 2.0;
+    *base = base_emitter;
+  }
+  return collector;
+}
+
+/* A level's current into a base standing at `base`: where the load line of
+   1K8 meets the level's measured curve, taken as straight between its
+   measured points. */
+static double channel_current(int level, double base) {
+  double volts[5];
+  double amps[5];
+  for (int point = 0; point < 5; point++) {
+    volts[point] = couriersud_volts[level][point];
+    amps[point] = point < 4 ? volts[point] / couriersud_loads[point] : 0.0;
+  }
+  for (int point = 0; point < 4; point++) {
+    double here = amps[point] - (volts[point] - base) / CHANNEL_TO_BASE;
+    double next = amps[point + 1] - (volts[point + 1] - base) / CHANNEL_TO_BASE;
+    if (here > 0.0 && next <= 0.0) {
+      double slope = (amps[point + 1] - amps[point]) / (volts[point + 1] - volts[point]);
+      double meeting = (amps[point] - slope * volts[point] + base / CHANNEL_TO_BASE) /
+                       (1.0 / CHANNEL_TO_BASE - slope);
+      return (meeting - base) / CHANNEL_TO_BASE;
+    }
+  }
+  return 0.0;
+}
+
+/* The modulator's input, in tenths of a millivolt, for three levels and the
+   ULA's pin: the stage taken as the straight line through its solutions at
+   no current and at all three channels at their loudest, as spectrum.c
+   takes it, and the three sources weighed by 18K, 68K and 68K. */
+static double plus2_sound(const int levels[3], double sound_pin_volts) {
+  double base = 0.0;
+  double rests = tr6_collector(0.0, &base);
+  double loudest = 3.0 * channel_current(15, base);
+  double ignored = 0.0;
+  double fall = (rests - tr6_collector(loudest, &ignored)) / loudest;
+  double current = 0.0;
+  for (int channel = 0; channel < 3; channel++) {
+    current += channel_current(levels[channel], base);
+  }
+  double gi_sound = rests - fall * current;
+  double gi = 1.0 / 18000.0;
+  double other = 1.0 / 68000.0;
+  double volts = (gi * gi_sound + other * sound_pin_volts + other * 0.0) / (gi + 2.0 * other);
+  return volts * 10000.0;
+}
+
+static uint16_t sound_with(const int levels[3], uint8_t written) {
+  for (int channel = 0; channel < 3; channel++) {
+    spectrum.psg.output[channel] = (uint8_t)levels[channel];
+  }
+  ula_write(&spectrum.ula, written);
+  return spectrum_sound(&spectrum);
+}
+
+/* Every level on its own, a few together, and the pin's four levels, held
+   to within the rounding of the figures spectrum.c writes down. */
+static void the_plus2s_sound_follows_from_the_board_and_its_measurements(void) {
   power_on_plus2();
-  write_port_and_halt(0x00FE, 0x18);
-  TEST_CHECK(spectrum.ula.speaker);
-  TEST_EQUAL(spectrum_sound_speaker(&spectrum), 0);
+  const int sets[][3] = {{15, 15, 15}, {7, 11, 3}, {1, 0, 1}, {8, 8, 0}};
+  const struct {
+    uint8_t written;
+    double volts;
+  } pins[] = {{0x00, 0.34}, {0x08, 0.66}, {0x10, 3.56}, {0x18, 3.70}};
+  for (int level = 0; level < 16; level++) {
+    const int levels[3] = {level, 0, 0};
+    long got = sound_with(levels, 0x00);
+    long want = lround(plus2_sound(levels, 0.34));
+    if (labs(got - want) > 2) {
+      TEST_FAIL("level %d alone gives %ld, worked out %ld", level, got, want);
+    }
+  }
+  for (size_t set = 0; set < sizeof sets / sizeof sets[0]; set++) {
+    for (size_t pin = 0; pin < sizeof pins / sizeof pins[0]; pin++) {
+      long got = sound_with(sets[set], pins[pin].written);
+      long want = lround(plus2_sound(sets[set], pins[pin].volts));
+      if (labs(got - want) > 2) {
+        TEST_FAIL("levels %d,%d,%d with &%02X give %ld, worked out %ld", sets[set][0], sets[set][1],
+                  sets[set][2], pins[pin].written, got, want);
+      }
+    }
+  }
+}
+
+/* The sound chip "significantly quieter than the beeper audio from the
+   ULA" (Wilson, cited in spectrum.h), as a +2 left the factory: bit 4 moves
+   the modulator's input more than twice as far as a channel at its
+   loudest, which is how "significantly" is read here. */
+static void the_plus2s_beeper_outweighs_a_channel_at_its_loudest(void) {
+  power_on_plus2();
+  const int silent[3] = {0, 0, 0};
+  const int loudest[3] = {15, 0, 0};
+  int rest = sound_with(silent, 0x00);
+  int beeper = sound_with(silent, 0x10) - rest;
+  int channel = rest - sound_with(loudest, 0x00);
+  TEST_CHECK(channel > 0);
+  TEST_CHECK(beeper > 2 * channel);
 }
 
 int main(void) {
@@ -1155,6 +1294,7 @@ int main(void) {
   TEST_RUN(the_sound_chip_outshouts_the_ula_on_an_even_port);
   TEST_RUN(port_a_reads_high_with_nothing_plugged_in);
   TEST_RUN(the_sound_chip_runs_at_half_the_clock);
-  TEST_RUN(a_plus2_has_no_loudspeaker);
+  TEST_RUN(the_plus2s_sound_follows_from_the_board_and_its_measurements);
+  TEST_RUN(the_plus2s_beeper_outweighs_a_channel_at_its_loudest);
   return TEST_REPORT("spectrum");
 }

@@ -90,7 +90,7 @@ A few functions exist anyway, because each encodes something a host would otherw
 
 `cpc_sound_socket` turns the sound chip's three levels into voltages, by a measurement of one output into about a CPC's load, applies the board's resistors to them and gives the stereo socket's two sides in tenths of a millivolt. The chip's outputs are levels from 0 to 15, as its pins are switched; what a level comes to in volts depends on what the pin drives, and that is the board's.
 
-`spectrum_sound_speaker` does the same for a 48K's loudspeaker; a +2 has none, and gives 0 there. The ULA keeps the last write's bits 4 and 3 as it was given them; the function turns them into the voltage across the speaker, by a measurement of the ULA's pin less the textbook drop of the two silicon junctions between it and the speaker, in tenths of a millivolt.
+`spectrum_sound` does the same for a Spectrum, wherever its board sends the sound to be heard, in tenths of a millivolt. On a 48K that is the loudspeaker: the ULA keeps the last write's bits 4 and 3 as it was given them, and the function turns them into the voltage across the speaker, by a measurement of the ULA's pin less the textbook drop of the two silicon junctions between it and the speaker. A +2 has no loudspeaker, and its sound goes to the television: the function gives the voltage at the modulator's audio input, where the sound chip's channels, by way of the transistor that sums them, are mixed with the ULA's MIC and EAR pins through the board's resistors.
 
 A host that sets the registers behind the memory map from outside — restoring a snapshot, say — owes the machine a `cpc_remap` afterwards.
 

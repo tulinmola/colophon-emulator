@@ -487,6 +487,15 @@ static void a_program_loads_off_a_tape_and_runs(void) {
   }
 }
 
+static void type_beep_1_0(void) {
+  type_key(SPECTRUM_CAPS_SHIFT, SPECTRUM_SYMBOL_SHIFT); /* the E cursor */
+  type_key(SPECTRUM_KEY(0, 1), SPECTRUM_SYMBOL_SHIFT);  /* BEEP */
+  type_key(SPECTRUM_KEY(3, 0), KEYBOARD_NO_KEY);        /* 1 */
+  type_key(SPECTRUM_KEY(7, 3), SPECTRUM_SYMBOL_SHIFT);  /* , */
+  type_key(SPECTRUM_KEY(4, 0), KEYBOARD_NO_KEY);        /* 0 */
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+}
+
 /* "the pitch is given in semitones above middle C" (Steven Vickers, ZX
    Spectrum BASIC Programming, chapter 19,
    https://worldofspectrum.org/ZXBasicManual/zxmanchap19.html), so BEEP 1,0
@@ -497,28 +506,18 @@ static void a_program_loads_off_a_tape_and_runs(void) {
    a whole cycle is 13,372, 261.74Hz against 261.63Hz. An OUT to the ULA is
    charged up to six T-states inside the picture, once and ahead of its
    write every time, so an interval between two rising edges holds two
-   OUTs' charges and can be up to twelve longer. */
-static void beep_1_0_plays_middle_c(void) {
-  if (!power_on_48k()) {
-    return;
-  }
-  run_frames(FRAMES_TO_PROMPT);
-  type_key(SPECTRUM_CAPS_SHIFT, SPECTRUM_SYMBOL_SHIFT); /* the E cursor */
-  type_key(SPECTRUM_KEY(0, 1), SPECTRUM_SYMBOL_SHIFT);  /* BEEP */
-  type_key(SPECTRUM_KEY(3, 0), KEYBOARD_NO_KEY);        /* 1 */
-  type_key(SPECTRUM_KEY(7, 3), SPECTRUM_SYMBOL_SHIFT);  /* , */
-  type_key(SPECTRUM_KEY(4, 0), KEYBOARD_NO_KEY);        /* 0 */
-  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
-
-  /* The note lasts a second and has begun. */
-  uint16_t level = spectrum_sound_speaker(&spectrum);
+   OUTs' charges and can be up to twelve longer. A hundred cycles of the
+   note, once it has begun, are heard where the board sends its sound,
+   which bit 4 raises on either model. */
+static void hear_middle_c(void) {
+  uint16_t level = spectrum_sound(&spectrum);
   long since_rising = -1;
   long shortest = 0;
   int cycles = 0;
   for (long tick = 0; tick < 50 * (long)spectrum.ula.frame.ticks_per_frame && cycles < 100;
        tick++) {
     spectrum_tick(&spectrum);
-    uint16_t now = spectrum_sound_speaker(&spectrum);
+    uint16_t now = spectrum_sound(&spectrum);
     if (since_rising >= 0) {
       since_rising++;
     }
@@ -536,6 +535,15 @@ static void beep_1_0_plays_middle_c(void) {
   }
   TEST_EQUAL(cycles, 100);
   TEST_EQUAL(shortest, 13372);
+}
+
+static void beep_1_0_plays_middle_c(void) {
+  if (!power_on_48k()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  type_beep_1_0();
+  hear_middle_c();
 }
 
 /* Whether a line of the screen, read off the display file, holds what is
@@ -654,7 +662,8 @@ static void the_plus2s_48_basic_locks_the_paging(void) {
    a tone period of 0x01A8, 424 (Farrow: "Octave 5, Note 60 - C ... C4
    Middle C"). A tone channel's wave lasts 16 clocks of the sound chip a
    period (ay38910.h), and the chip runs at half the processor's clock, so
-   the wave is 2·16·424 = 13,568 T-states. */
+   the wave is 2·16·424 = 13,568 T-states. It is heard where the +2 sends its
+   sound, the modulator's input, which rises as the channel falls. */
 static void play_c_sounds_middle_c_through_the_sound_chip(void) {
   if (!power_on_plus2()) {
     return;
@@ -669,12 +678,12 @@ static void play_c_sounds_middle_c_through_the_sound_chip(void) {
   keyboard_release_all(&spectrum.keyboard);
 
   TEST_EQUAL(spectrum.psg.registers[0] | spectrum.psg.registers[1] << 8, 424);
-  uint8_t level = spectrum.psg.output[0];
+  uint16_t level = spectrum_sound(&spectrum);
   long since_rising = -1;
   int waves = 0;
   for (long tick = 0; tick < 10 * (long)spectrum.ula.frame.ticks_per_frame && waves < 20; tick++) {
     spectrum_tick(&spectrum);
-    uint8_t now = spectrum.psg.output[0];
+    uint16_t now = spectrum_sound(&spectrum);
     if (since_rising >= 0) {
       since_rising++;
     }
@@ -688,6 +697,24 @@ static void play_c_sounds_middle_c_through_the_sound_chip(void) {
     level = now;
   }
   TEST_EQUAL(waves, 20);
+}
+
+/* BEEP in the +2's 48 BASIC is the 48K's BEEPER: compared byte for byte,
+   the +2's second ROM differs from the 48K's at the 128's patches, its tape
+   message and its copyright, none of them near the routine. It plays on the
+   ULA's MIC pin, by bit 4. */
+static void beep_1_0_plays_middle_c_on_the_plus2(void) {
+  if (!power_on_plus2()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  for (int item = 0; item < 3; item++) {
+    type_key(SPECTRUM_KEY(4, 4), SPECTRUM_CAPS_SHIFT);
+  }
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);
+  run_frames(FRAMES_TO_PROMPT);
+  type_beep_1_0();
+  hear_middle_c();
 }
 
 int main(int argc, char **argv) {
@@ -708,5 +735,6 @@ int main(int argc, char **argv) {
   TEST_RUN(the_plus2s_128_basic_does_arithmetic_typed_letter_by_letter);
   TEST_RUN(the_plus2s_48_basic_locks_the_paging);
   TEST_RUN(play_c_sounds_middle_c_through_the_sound_chip);
+  TEST_RUN(beep_1_0_plays_middle_c_on_the_plus2);
   return TEST_REPORT("spectrum firmware");
 }

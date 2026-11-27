@@ -280,7 +280,7 @@ typedef struct {
   uint8_t drawn_attribute;
 
   uint8_t border;  /* port 0xFE bits 2-0 */
-  bool speaker;    /* bit 4: a 48K's loudspeaker, and the EAR line */
+  bool speaker;    /* bit 4: the sound, on a 48K's loudspeaker or not */
   bool microphone; /* bit 3 */
 } ula_t;
 

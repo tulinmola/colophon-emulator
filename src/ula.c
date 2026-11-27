@@ -210,7 +210,8 @@ uint8_t ula_contention(const ula_t *ula, uint32_t frame_tick) {
 }
 
 /* The lowest three bits are the border, bit 3 the MIC socket and bit 4 the
-   loudspeaker; the top three reach nothing (comp.sys.sinclair FAQ). */
+   sound, the loudspeaker on a 48K; the top three reach nothing
+   (comp.sys.sinclair FAQ). */
 void ula_write(ula_t *ula, uint8_t data) {
   ula->border = data & 0x07;
   ula->microphone = (data & 0x08) != 0;

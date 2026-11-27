@@ -195,7 +195,7 @@ $(BUILD)/ula_test: $(call OBJECTS_OF,$(ULA_C) $(ULA_TEST_C))
 	$(CC) $(CFLAGS) $^ -o $@
 
 $(BUILD)/spectrum_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_TEST_C))
-	$(CC) $(CFLAGS) $^ -o $@
+	$(CC) $(CFLAGS) $^ -lm -o $@
 
 $(BUILD)/spectrum_snapshot_test: $(call OBJECTS_OF,$(SPECTRUM_CORE_C) $(SPECTRUM_SNAPSHOT_TEST_C))
 	$(CC) $(CFLAGS) $^ -o $@

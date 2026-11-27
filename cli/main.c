@@ -787,9 +787,9 @@ static bool cpc_type_text(cpc_t *cpc, const char *text) {
   return true;
 }
 
-/* The speaker, heard and written every tick: any of them can move it. */
+/* The sound, heard and written every tick: any of them can move it. */
 static void spectrum_record_sound(const spectrum_t *spectrum) {
-  const int32_t levels[RESAMPLER_CHANNELS] = {spectrum_sound_speaker(spectrum)};
+  const int32_t levels[RESAMPLER_CHANNELS] = {spectrum_sound(spectrum)};
   recorder_hear(recording, levels);
   recorder_step(recording);
 }
@@ -992,7 +992,7 @@ static int run_spectrum(const options_t *options) {
     }
   }
   if (status == 0 && (options->sound_path != NULL || options->sound_steps_path != NULL)) {
-    const int32_t levels[RESAMPLER_CHANNELS] = {spectrum_sound_speaker(spectrum)};
+    const int32_t levels[RESAMPLER_CHANNELS] = {spectrum_sound(spectrum)};
     recording = recorder_open(options, 1, spectrum_clock_hertz(spectrum),
                               spectrum_clock_hertz(spectrum), levels);
     if (recording == NULL) {
