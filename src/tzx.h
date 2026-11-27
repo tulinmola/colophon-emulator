@@ -12,12 +12,15 @@
  * What comes out is pulses, which is all a deck wants. Nothing here turns
  * the reel or knows what a level means.
  *
- * Every timing in the format is a Spectrum's T-state, whatever machine the
- * tape was made for, so a CPC's are scaled on the way out: its clock is 4MHz
- * where the format's is 3.5. Two blocks also mean different things on the
- * two machines, which is why the reader is told which one it is feeding: a
- * pause asking for none stops a Spectrum where a CPC reads it as no pause
- * at all, and the block that stops a 48K is one a CPC must ignore.
+ * Every timing in the format is a 48K Spectrum's T-state, whatever machine
+ * the tape was made for, so on another clock they are scaled on the way out:
+ * a CPC's is 4MHz and a +2's 3.546895MHz, where the format's is 3.5. Two
+ * blocks also mean different things on different machines, which is why the
+ * reader is told which one it is feeding: a pause asking for none stops a
+ * Spectrum where a CPC reads it as no pause at all, and the block that stops
+ * a Spectrum in 48K mode is one a CPC must ignore. Whether a Spectrum is in
+ * that mode can change while the tape plays, so the reader asks as it reaches
+ * the block.
  *
  * Not every block can be played. The ones that record a waveform sample by
  * sample or build their data from a table of symbols, and the ones that send
@@ -63,15 +66,22 @@
  *   none "SHOULD NOT 'Stop the Tape'" but is "treated as 'no pause'"; and
  *   the block that stops a 48K Spectrum, which "Amstrad emulator's MUST
  *   ignore ... and it MUST NOT have any effect".
- * - "TZX format" v1.13 (Tomaz Kac, maintained by Martijn van der Heide),
+ * - "TZX format" v1.20 (begun by Tomaz Kac, revised to 1.20 by Ramsoft),
  *   https://worldofspectrum.net/TZXformat.html — the signature and version
- *   bytes, every block's length so an unplayable one can be stepped over,
- *   the standard ROM timings in block ID 11's curly brackets, and that the
- *   level starts low and each pulse turns it over. A loop asks for a "Number
- *   of repetitions (greater than 1)" and its end will "jump back to the start
- *   of the loop if it hasn't been run for the specified number of times";
- *   "don't nest loop blocks!". A pause's millisecond "of the opposite level"
- *   is there "to ensure that the last edge produced is properly finished".
+ *   bytes; that "1 T state = (1/3500000)s"; that the format "has ALL timings
+ *   written according to a 3.5MHz clock (the standard Spectrum 16/48K clock),
+ *   so if the tape should be used on an Amstrad CPC with 4MHz clock then you
+ *   should multiply ALL timings with 4/3.5"; every block's length so an
+ *   unplayable one can be stepped over; block 0x2A, with which "the tape will
+ *   stop ONLY if the machine is an 48K Spectrum", for "multiloading games
+ *   that load one level at a time in 48K mode, but load the entire tape at
+ *   once if in 128K mode"; the standard ROM timings in block ID 11's curly
+ *   brackets, and that the level starts low and each pulse turns it over. A
+ *   loop asks for a "Number of repetitions (greater than 1)" and its end will
+ *   "jump back to the start of the loop if it hasn't been run for the
+ *   specified number of times"; "don't nest loop blocks!". A pause's
+ *   millisecond "of the opposite level" is there "to ensure that the last
+ *   edge produced is properly finished".
  * - GOST 20492-87,
  *   https://files.stroyinf.ru/Data/289/28917.pdf
  *   and the NAB cassette standard (1976),
@@ -99,12 +109,31 @@
 typedef enum {
   TZX_SPECTRUM,
   TZX_AMSTRAD,
+} tzx_rules;
+
+/* Whether the Spectrum a tape is feeding stands in 48K mode now, which the
+   host answers for its machine. */
+typedef bool (*tzx_48k_mode_question)(const void *machine);
+
+/* The machine a tape is fed to, as far as the reader needs it: whose rules
+ * it is read under, how fast its clock runs, and, on a Spectrum, whom to ask
+ * whether it is in 48K mode as the tape reaches block 0x2A, which stops the
+ * tape in that mode and no other. The format names a machine in one place
+ * and a mode in another, and what is asked is the host's reading of the
+ * two. A Spectrum's reader with no question stops at the block, the lesser
+ * of the two mistakes: a tape stopped too soon can be played on, and one
+ * that ran past its stop has played the next part to a machine not yet
+ * listening for it. */
+typedef struct {
+  tzx_rules rules;
+  uint32_t clock_hertz; /* the machine's T-states a second */
+  tzx_48k_mode_question in_48k_mode;
+  const void *asked; /* what the question is put about; the host's to keep */
 } tzx_machine;
 
 typedef struct {
   const uint8_t *image; /* the host's bytes, which must outlive the reader */
   uint32_t image_length;
-  uint32_t ticks_per_millisecond;
   tzx_machine machine;
   bool has_block_ids; /* a .tzx names every block; a .tap is bare bytes */
 
@@ -142,10 +171,14 @@ typedef struct {
   uint32_t leader_ticks_left;
 } tzx_t;
 
-/* Take up an image. Returns false having pointed `problem` at a sentence
- * saying what is wrong with the bytes or which block cannot be played. */
-bool tzx_open(tzx_t *tzx, const uint8_t *image, uint32_t length, uint32_t ticks_per_millisecond,
-              tzx_machine machine, const char **problem);
+/* Take up an image for a machine; the reader keeps its own copy of the
+ * machine's description, and not of the image. Returns false having pointed
+ * `problem` at a sentence saying what is wrong with the bytes, which block
+ * cannot be played, or that the clock is under a megahertz: a Spectrum and a
+ * CPC both run at several, and a count of T-states a millisecond given in
+ * the clock's place would otherwise play every pulse a thousandth as long. */
+bool tzx_open(tzx_t *tzx, const uint8_t *image, uint32_t length, tzx_machine machine,
+              const char **problem);
 
 /* A tape_source: the next pulse, or false at the end of the tape and where a
  * block marks it to stop. Playing on past a stop carries on from the next

@@ -692,7 +692,8 @@ static void the_464_loads_a_tape_whose_image_kept_no_silence(void) {
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, length, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem)) {
+  if (!tzx_open(&reader, image, length,
+                (tzx_machine){.rules = TZX_AMSTRAD, .clock_hertz = CPC_CLOCK_HERTZ}, &problem)) {
     TEST_FAIL("the tape was refused: %s", problem);
     return;
   }

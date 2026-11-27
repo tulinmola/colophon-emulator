@@ -99,9 +99,10 @@
    callers want, not because the machine guarantees it. */
 #define CPC_TICKS_PER_STANDARD_FRAME (312L * 64L * 4L)
 
-/* The board's clock is 4MHz, which is what a tape's timings are read
-   against: the format counts them in a Spectrum's T-states. */
-#define CPC_TICKS_PER_MILLISECOND 4000
+/* The board's clock, 4MHz. A tape counts its timings in a 48K Spectrum's
+   T-states, and the reader scales them to this (tzx.h). */
+#define CPC_CLOCK_HERTZ 4000000
+#define CPC_TICKS_PER_MILLISECOND (CPC_CLOCK_HERTZ / 1000)
 
 /* A key, as the line that selects it and the bit that reads it. Ten lines of
    eight, numbered as the CPC's own documentation numbers its key codes;

@@ -927,6 +927,10 @@ static bool spectrum_save_snapshot(const spectrum_t *spectrum, const char *path)
   return ok;
 }
 
+static bool spectrum_answers_about_48k_mode(const void *machine) {
+  return spectrum_in_48k_mode(machine);
+}
+
 static int run_spectrum(const options_t *options) {
   if (spectrum_refuses(options)) {
     return 1;
@@ -961,8 +965,12 @@ static int run_spectrum(const options_t *options) {
     const char *problem = NULL;
     if (tape_image == NULL) {
       status = 1;
-    } else if (!tzx_open(&reader, tape_image, (uint32_t)size, spectrum_clock_hertz(spectrum) / 1000,
-                         TZX_SPECTRUM, &problem)) {
+    } else if (!tzx_open(&reader, tape_image, (uint32_t)size,
+                         (tzx_machine){.rules = TZX_SPECTRUM,
+                                       .clock_hertz = spectrum_clock_hertz(spectrum),
+                                       .in_48k_mode = spectrum_answers_about_48k_mode,
+                                       .asked = spectrum},
+                         &problem)) {
       fprintf(stderr, "%s %s\n", options->tape_path, problem);
       status = 1;
     } else {
@@ -1124,8 +1132,9 @@ static int run_cpc(const options_t *options) {
     const char *problem = NULL;
     if (tape_image == NULL) {
       status = 1;
-    } else if (!tzx_open(&reader, tape_image, (uint32_t)size, CPC_TICKS_PER_MILLISECOND,
-                         TZX_AMSTRAD, &problem)) {
+    } else if (!tzx_open(&reader, tape_image, (uint32_t)size,
+                         (tzx_machine){.rules = TZX_AMSTRAD, .clock_hertz = CPC_CLOCK_HERTZ},
+                         &problem)) {
       fprintf(stderr, "%s %s\n", options->tape_path, problem);
       status = 1;
     } else {
@@ -1184,8 +1193,7 @@ static int run_cpc(const options_t *options) {
     uint16_t right = 0;
     cpc_sound_socket(cpc, &left, &right);
     const int32_t levels[RESAMPLER_CHANNELS] = {left, right};
-    recording = recorder_open(options, 2, CPC_TICKS_PER_MILLISECOND * 1000,
-                              CPC_SOUND_STEPS_PER_SECOND, levels);
+    recording = recorder_open(options, 2, CPC_CLOCK_HERTZ, CPC_SOUND_STEPS_PER_SECOND, levels);
     if (recording == NULL) {
       status = 1;
     }

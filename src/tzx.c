@@ -6,8 +6,9 @@
 #include <string.h>
 
 /* The clock every timing in the format is written in, whichever machine the
-   tape is for. */
-#define TICKS_PER_MILLISECOND 3500
+   tape is for: "1 T state = (1/3500000)s". */
+#define FORMAT_HERTZ 3500000
+#define SLOWEST_HERTZ 1000000
 
 /* The ROM's own timings, which a .tap is replayed at and a .tzx standard
    block asks for by name; the pause is the one block ID 10 defaults to. */
@@ -251,11 +252,15 @@ static bool walk_tap(const uint8_t *image, uint32_t length, const char **problem
 
 static uint32_t leader_still_wanted(const tzx_t *tzx);
 
-bool tzx_open(tzx_t *tzx, const uint8_t *image, uint32_t length, uint32_t ticks_per_millisecond,
-              tzx_machine machine, const char **problem) {
+bool tzx_open(tzx_t *tzx, const uint8_t *image, uint32_t length, tzx_machine machine,
+              const char **problem) {
+  if (machine.clock_hertz < SLOWEST_HERTZ) {
+    *problem = "cannot be played to a clock under a megahertz";
+    return false;
+  }
   const bool has_block_ids =
       length >= HEADER_SIZE && memcmp(image, signature, sizeof signature) == 0;
-  if (!has_block_ids && machine == TZX_AMSTRAD) {
+  if (!has_block_ids && machine.rules == TZX_AMSTRAD) {
     *problem = "carries no .cdt signature, and a bare .tap is a Spectrum's alone";
     return false;
   }
@@ -265,13 +270,19 @@ bool tzx_open(tzx_t *tzx, const uint8_t *image, uint32_t length, uint32_t ticks_
   memset(tzx, 0, sizeof *tzx);
   tzx->image = image;
   tzx->image_length = length;
-  tzx->ticks_per_millisecond = ticks_per_millisecond;
   tzx->machine = machine;
   tzx->has_block_ids = has_block_ids;
   tzx->block_at = has_block_ids ? HEADER_SIZE : 0;
   tzx->phase = PHASE_BETWEEN_BLOCKS;
   tzx->leader_ticks_left = leader_still_wanted(tzx);
   return true;
+}
+
+static bool stops_in_48k_mode(const tzx_t *tzx) {
+  if (tzx->machine.rules == TZX_AMSTRAD) {
+    return false;
+  }
+  return tzx->machine.in_48k_mode == NULL || tzx->machine.in_48k_mode(tzx->machine.asked);
 }
 
 /* Where a data block's bytes are, and how much of its last one goes out. */
@@ -361,7 +372,7 @@ static void take_up_block(tzx_t *tzx) {
       if (tzx->pause_milliseconds > 0) {
         tzx->phase = PHASE_PAUSE;
       } else {
-        tzx->phase = tzx->machine == TZX_AMSTRAD ? PHASE_BETWEEN_BLOCKS : PHASE_STOPPED;
+        tzx->phase = tzx->machine.rules == TZX_AMSTRAD ? PHASE_BETWEEN_BLOCKS : PHASE_STOPPED;
       }
       break;
     case 0x24: /* the head of a loop; its first pass starts with the block behind */
@@ -383,7 +394,7 @@ static void take_up_block(tzx_t *tzx) {
       tzx->phase = PHASE_BETWEEN_BLOCKS;
       break;
     case 0x2A: /* "stop the tape if in 48K mode", which an Amstrad ignores */
-      tzx->phase = tzx->machine == TZX_AMSTRAD ? PHASE_BETWEEN_BLOCKS : PHASE_STOPPED;
+      tzx->phase = stops_in_48k_mode(tzx) ? PHASE_STOPPED : PHASE_BETWEEN_BLOCKS;
       break;
     case 0x2B: /* the level, said outright rather than turned over */
       if (four_bytes_at(body, 0) >= 1) {
@@ -402,13 +413,20 @@ static uint8_t bits_of_this_byte(const tzx_t *tzx) {
   return tzx->data_at + 1 == tzx->data_end ? tzx->bits_in_the_last_byte : 8;
 }
 
-/* Every timing in the format is a Spectrum's T-state, so a machine with
-   another clock holds each pulse proportionally longer or shorter. */
+/* Every timing in the format is a 48K Spectrum's T-state, so a machine with
+   another clock holds each pulse for proportionally more or fewer of its
+   own. Each is rounded down on its own, and what it loses, less than one of
+   the machine's T-states, is not carried to the next. */
 static uint32_t in_machine_ticks(const tzx_t *tzx, uint32_t ticks) {
-  if (tzx->ticks_per_millisecond == TICKS_PER_MILLISECOND) {
+  if (tzx->machine.clock_hertz == FORMAT_HERTZ) {
     return ticks;
   }
-  return ticks * tzx->ticks_per_millisecond / TICKS_PER_MILLISECOND;
+  return (uint32_t)((uint64_t)ticks * tzx->machine.clock_hertz / FORMAT_HERTZ);
+}
+
+/* A span in milliseconds, scaled whole and rounded down once, as a pulse is. */
+static uint32_t milliseconds_in_ticks(const tzx_t *tzx, uint32_t milliseconds) {
+  return (uint32_t)((uint64_t)milliseconds * tzx->machine.clock_hertz / 1000);
 }
 
 /* One pulse, holding the level the tape stands at and then turning it over.
@@ -535,7 +553,7 @@ static bool walk_to_next_pulse(tzx_t *tzx, tape_pulse_t *pulse) {
         if (tzx->level) {
           tzx->pause_milliseconds--;
           pulse->level = true;
-          pulse->ticks = tzx->ticks_per_millisecond;
+          pulse->ticks = milliseconds_in_ticks(tzx, 1);
           return true;
         }
         break;
@@ -549,7 +567,7 @@ static bool walk_to_next_pulse(tzx_t *tzx, tape_pulse_t *pulse) {
           break;
         }
         pulse->level = false;
-        pulse->ticks = tzx->pause_milliseconds * tzx->ticks_per_millisecond;
+        pulse->ticks = milliseconds_in_ticks(tzx, tzx->pause_milliseconds);
         return true;
 
       case PHASE_STOPPED:
@@ -561,7 +579,7 @@ static bool walk_to_next_pulse(tzx_t *tzx, tape_pulse_t *pulse) {
         if (tzx->level) {
           tzx->level = false;
           pulse->level = true;
-          pulse->ticks = tzx->ticks_per_millisecond;
+          pulse->ticks = milliseconds_in_ticks(tzx, 1);
           return true;
         }
         if (tzx->phase == PHASE_STOPPED) {
@@ -603,8 +621,12 @@ bool tzx_next_pulse(void *reader, tape_pulse_t *pulse) {
 }
 
 static uint32_t leader_still_wanted(const tzx_t *tzx) {
-  const uint32_t leader = LEADER_MILLISECONDS * tzx->ticks_per_millisecond;
+  const uint32_t leader = milliseconds_in_ticks(tzx, LEADER_MILLISECONDS);
   tzx_t ahead = *tzx;
+  /* Block 0x2A's question is put as the tape reaches the block, not ahead
+     of it, so a Spectrum's walk takes the block as a stop, as a reader with
+     no question does. */
+  ahead.machine.in_48k_mode = NULL;
   uint32_t silent = 0;
   tape_pulse_t pulse = {0, false};
   while (silent < leader && next_pulse_of_the_image(&ahead, &pulse) && !pulse.level) {

@@ -750,7 +750,8 @@ static void the_tape_runs_on_while_the_clock_is_held(void) {
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  TEST_CHECK(tzx_open(&reader, image, sizeof image, SPECTRUM_48K_CLOCK_HERTZ / 1000, TZX_SPECTRUM,
+  TEST_CHECK(tzx_open(&reader, image, sizeof image,
+                      (tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = SPECTRUM_48K_CLOCK_HERTZ},
                       &problem));
   tape_init(&tape);
   tape_insert(&tape, tzx_next_pulse, &reader);
@@ -775,7 +776,8 @@ static void a_tape_in_the_deck_is_what_bit_6_reads(void) {
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  TEST_CHECK(tzx_open(&reader, image, sizeof image, SPECTRUM_48K_CLOCK_HERTZ / 1000, TZX_SPECTRUM,
+  TEST_CHECK(tzx_open(&reader, image, sizeof image,
+                      (tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = SPECTRUM_48K_CLOCK_HERTZ},
                       &problem));
   tape_init(&tape);
   tape_insert(&tape, tzx_next_pulse, &reader);
@@ -1073,6 +1075,20 @@ static void the_sound_chip_answers_at_fffd_and_bffd(void) {
   TEST_EQUAL(spectrum.bank_register, 0x00);
 }
 
+/* A 48K is always in 48K mode, as spectrum.h reads the mode a tape's block
+   0x2A stops in, and a +2 only once its paging is locked: unlocked, it is
+   in 128K mode even with the 48K ROM paged in. */
+static void a_plus2_is_in_48k_mode_once_its_paging_is_locked(void) {
+  power_on_48k(SPECTRUM_RAM_48K);
+  TEST_CHECK(spectrum_in_48k_mode(&spectrum));
+  power_on_plus2();
+  TEST_CHECK(!spectrum_in_48k_mode(&spectrum));
+  write_port_and_halt(0x7FFD, 0x10); /* the 48K ROM, unlocked */
+  TEST_CHECK(!spectrum_in_48k_mode(&spectrum));
+  write_port_and_halt(0x7FFD, 0x30);
+  TEST_CHECK(spectrum_in_48k_mode(&spectrum));
+}
+
 /* Where the ULA and the sound chip both answer, the processor is taken to
    read the chip, which sits on its side of the resistors in Worsley's
    redraw; nothing found measures it. */
@@ -1291,6 +1307,7 @@ int main(void) {
   TEST_RUN(a_port_in_an_odd_bank_is_contended_even_when_locked);
   TEST_RUN(the_ula_fetches_from_the_screen_bit_3_chooses);
   TEST_RUN(the_sound_chip_answers_at_fffd_and_bffd);
+  TEST_RUN(a_plus2_is_in_48k_mode_once_its_paging_is_locked);
   TEST_RUN(the_sound_chip_outshouts_the_ula_on_an_even_port);
   TEST_RUN(port_a_reads_high_with_nothing_plugged_in);
   TEST_RUN(the_sound_chip_runs_at_half_the_clock);

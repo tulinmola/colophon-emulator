@@ -1129,8 +1129,9 @@ static void the_cassette_motor_turns_the_tape_and_port_b_reads_it(void) {
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  TEST_CHECK(
-      tzx_open(&reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem));
+  TEST_CHECK(tzx_open(&reader, image, sizeof image,
+                      (tzx_machine){.rules = TZX_AMSTRAD, .clock_hertz = CPC_CLOCK_HERTZ},
+                      &problem));
   tape_init(&tape);
   tape_insert(&tape, tzx_next_pulse, &reader);
   cpc_insert_tape(&cpc, &tape);
@@ -1357,8 +1358,9 @@ static void a_tape_put_in_under_a_running_motor_starts_from_rest(void) {
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  TEST_CHECK(
-      tzx_open(&reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem));
+  TEST_CHECK(tzx_open(&reader, image, sizeof image,
+                      (tzx_machine){.rules = TZX_AMSTRAD, .clock_hertz = CPC_CLOCK_HERTZ},
+                      &problem));
   tape_init(&tape);
   tape_insert(&tape, tzx_next_pulse, &reader);
   cpc_insert_tape(&cpc, &tape);

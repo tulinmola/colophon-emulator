@@ -236,7 +236,8 @@ static bool load_program(const char *name, const char *showing) {
     return false;
   }
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, (uint32_t)length, SPECTRUM_48K_CLOCK_HERTZ / 1000, TZX_SPECTRUM,
+  if (!tzx_open(&reader, image, (uint32_t)length,
+                (tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = SPECTRUM_48K_CLOCK_HERTZ},
                 &problem)) {
     TEST_FAIL("%s was refused: %s", name, problem);
     return false;

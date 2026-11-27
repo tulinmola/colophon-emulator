@@ -645,9 +645,11 @@ static void the_reel_stands_as_the_motor_line_says(void) {
   load_a_running_program();
   power_on(&cpc, ram, sizeof ram);
   power_on(&restored, other_ram, sizeof other_ram);
-  TEST_CHECK(
-      tzx_open(&reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD, &problem));
-  TEST_CHECK(tzx_open(&other_reader, image, sizeof image, CPC_TICKS_PER_MILLISECOND, TZX_AMSTRAD,
+  TEST_CHECK(tzx_open(&reader, image, sizeof image,
+                      (tzx_machine){.rules = TZX_AMSTRAD, .clock_hertz = CPC_CLOCK_HERTZ},
+                      &problem));
+  TEST_CHECK(tzx_open(&other_reader, image, sizeof image,
+                      (tzx_machine){.rules = TZX_AMSTRAD, .clock_hertz = CPC_CLOCK_HERTZ},
                       &problem));
   tape_init(&tape);
   tape_insert(&tape, tzx_next_pulse, &reader);

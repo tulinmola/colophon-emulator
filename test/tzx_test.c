@@ -6,7 +6,7 @@
  * against its own arithmetic and would agree with any mistake in it.
  *
  * Sources:
- * - "TZX format" v1.13 (Tomaz Kac, maintained by Martijn van der Heide),
+ * - "TZX format" v1.20 (begun by Tomaz Kac, revised to 1.20 by Ramsoft),
  *   https://worldofspectrum.net/TZXformat.html — the signature, each block's
  *   layout, and the standard ROM timings tabulated in block ID 11: pilot
  *   pulses of 2168 T-states, 8063 of them before a header and 3223 before
@@ -24,8 +24,11 @@
 #include "test.h"
 #include "tzx.h"
 
-/* A Spectrum's, so a pause in milliseconds lands where a Spectrum puts it. */
-#define TICKS_PER_MILLISECOND 3500
+/* The format's own clock, a 48K Spectrum's, at which a pulse comes out as
+   the image gives it; and an Amstrad's. */
+#define FORMAT_HERTZ 3500000
+#define AMSTRAD_HERTZ 4000000
+#define TICKS_PER_MILLISECOND (FORMAT_HERTZ / 1000)
 #define MOST_PILOT_PULSES 20000
 
 /* The cassette's leader tape, restated here rather than read from tzx.c:
@@ -35,10 +38,12 @@
 #define LEADER_MILLISECONDS 5700
 
 static tzx_t reader;
+static const tzx_machine a_spectrum = {.rules = TZX_SPECTRUM, .clock_hertz = FORMAT_HERTZ};
+static const tzx_machine an_amstrad = {.rules = TZX_AMSTRAD, .clock_hertz = AMSTRAD_HERTZ};
 
-static bool opened(const uint8_t *image, uint32_t length, uint32_t clock, tzx_machine machine) {
+static bool opened(const uint8_t *image, uint32_t length, const tzx_machine *machine) {
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, length, clock, machine, &problem)) {
+  if (!tzx_open(&reader, image, length, *machine, &problem)) {
     TEST_FAIL("refused: %s", problem);
     memset(&reader, 0, sizeof reader); /* so the rest of the test reads an empty tape */
     return false;
@@ -50,24 +55,23 @@ static bool opened(const uint8_t *image, uint32_t length, uint32_t clock, tzx_ma
    image wherever the image has not kept that much silence of its own. The
    tests of the leader grade it; every other test steps over it, low and no
    longer than the leader is, to the image behind. */
-static void open_image_for(const uint8_t *image, uint32_t length, uint32_t clock,
-                           tzx_machine machine) {
-  if (!opened(image, length, clock, machine)) {
+static void open_image_for(const uint8_t *image, uint32_t length, const tzx_machine *machine) {
+  if (!opened(image, length, machine)) {
     return;
   }
   tape_pulse_t leader = {0, true};
   TEST_CHECK(tzx_next_pulse(&reader, &leader));
   TEST_CHECK(!leader.level);
-  TEST_CHECK(leader.ticks <= LEADER_MILLISECONDS * clock);
+  TEST_CHECK(leader.ticks <= (uint64_t)LEADER_MILLISECONDS * machine->clock_hertz / 1000);
 }
 
 static void open_image(const uint8_t *image, uint32_t length) {
-  open_image_for(image, length, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  open_image_for(image, length, &a_spectrum);
 }
 
 static const char *refusal_of(const uint8_t *image, uint32_t length) {
   const char *problem = NULL;
-  if (tzx_open(&reader, image, length, TICKS_PER_MILLISECOND, TZX_SPECTRUM, &problem)) {
+  if (tzx_open(&reader, image, length, a_spectrum, &problem)) {
     return NULL;
   }
   return problem;
@@ -389,9 +393,21 @@ static void another_clock_holds_each_pulse_for_longer(void) {
   const uint8_t image[] = {TZX_HEAD, 0x12, 0x78, 0x08, 0x02, 0x00};
   open_image(image, sizeof image);
   TEST_EQUAL(next(), 2168);
-  open_image_for(image, sizeof image, 4000, TZX_AMSTRAD);
+  open_image_for(image, sizeof image, &an_amstrad);
   TEST_EQUAL(next(), 2477);
   TEST_EQUAL(next(), 2477);
+
+  /* A +2's clock runs at 3,546,895 T-states a second, and each pulse is
+     rounded down on its own: 2168 of the format's T-states are 2197.05 of
+     the +2's, and a pause of 100 milliseconds 354,689.5. */
+  open_image_for(image, sizeof image,
+                 &(tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = 3546895});
+  TEST_EQUAL(next(), 2197);
+  TEST_EQUAL(next(), 2197);
+  const uint8_t pause[] = {TZX_HEAD, 0x20, 0x64, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  open_image_for(pause, sizeof pause,
+                 &(tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = 3546895});
+  TEST_EQUAL(next(), 354689);
 
   /* A slower board holds each for less, and a pulse short enough to come to
      nothing at that clock is passed over like any other element the block has
@@ -399,15 +415,16 @@ static void another_clock_holds_each_pulse_for_longer(void) {
      would outrun the walk and end the tape where it stands. */
   const uint8_t slow[] = {TZX_HEAD, 0x11, 0x01, 0x00, 0x9B, 0x02, 0xDF, 0x02, 0x57, 0x03, 0xAE,
                           0x06,     0xFF, 0xFF, 0x08, 0x00, 0x00, 0x01, 0x00, 0x00, 0x80};
-  open_image_for(slow, sizeof slow, 1000, TZX_SPECTRUM);
-  TEST_EQUAL(next(), 190); /* 667 T-states at a thousand ticks a millisecond */
+  open_image_for(slow, sizeof slow, &(tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = 1000000});
+  TEST_EQUAL(next(), 190); /* 667 T-states at a million a second */
   TEST_EQUAL(next(), 210); /* and 735 */
   TEST_EQUAL(next(), 488); /* then &80's top bit, 1710 */
 
   /* A tone is counted the same way, and passed over the same way. */
   const uint8_t slow_tone[] = {TZX_HEAD, 0x12, 0x01, 0x00, 0xFF, 0xFF,
                                0x12,     0xE8, 0x03, 0x01, 0x00};
-  open_image_for(slow_tone, sizeof slow_tone, 1000, TZX_SPECTRUM);
+  open_image_for(slow_tone, sizeof slow_tone,
+                 &(tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = 1000000});
   TEST_EQUAL(next(), 285); /* 1000 T-states, and the tone in front came to none */
 }
 
@@ -449,19 +466,19 @@ static void an_amstrad_reads_two_blocks_differently(void) {
   const uint8_t bare_pause[] = {TZX_HEAD, 0x20, 0x00, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00};
   open_image(bare_pause, sizeof bare_pause);
   TEST_EQUAL(next(), 0); /* a pause of none stops a Spectrum */
-  open_image_for(bare_pause, sizeof bare_pause, 4000, TZX_AMSTRAD);
+  open_image_for(bare_pause, sizeof bare_pause, &an_amstrad);
   TEST_EQUAL(next(), 1142); /* and is no pause at all on a CPC */
 
   const uint8_t stop_48k[] = {TZX_HEAD, 0x2A, 0, 0, 0, 0, 0x12, 0xE8, 0x03, 0x01, 0x00};
   open_image(stop_48k, sizeof stop_48k);
   TEST_EQUAL(next(), 0);
-  open_image_for(stop_48k, sizeof stop_48k, 4000, TZX_AMSTRAD);
+  open_image_for(stop_48k, sizeof stop_48k, &an_amstrad);
   TEST_EQUAL(next(), 1142);
 
   /* Both were added after the format's version 1.10, so both are stepped over
      by the length they carry rather than by the one their row gives. */
   const uint8_t padded[] = {TZX_HEAD, 0x2A, 2, 0, 0, 0, 0xDE, 0xAD, 0x12, 0xE8, 0x03, 0x01, 0x00};
-  open_image_for(padded, sizeof padded, 4000, TZX_AMSTRAD);
+  open_image_for(padded, sizeof padded, &an_amstrad);
   TEST_EQUAL(next(), 1142);
 }
 
@@ -493,8 +510,23 @@ static void a_tap_as_long_as_a_header_is_still_a_tap(void) {
   /* And it is a Spectrum's, so an Amstrad is not handed one: replaying the
      ROM's timings at 4MHz gives a tape its firmware could never read. */
   const char *problem = NULL;
-  TEST_CHECK(!tzx_open(&reader, tap, sizeof tap, 4000, TZX_AMSTRAD, &problem));
+  TEST_CHECK(!tzx_open(&reader, tap, sizeof tap, an_amstrad, &problem));
   TEST_CHECK(problem != NULL && strstr(problem, ".tap") != NULL);
+}
+
+/* A Spectrum and a CPC both run at several megahertz, so a clock under one
+   is refused: a count of T-states a millisecond given in its place would
+   otherwise play every pulse a thousandth as long. */
+static void a_clock_under_a_megahertz_is_refused(void) {
+  const uint8_t image[] = {TZX_HEAD, 0x12, 0x78, 0x08, 0x02, 0x00};
+  const char *problem = NULL;
+  TEST_CHECK(!tzx_open(&reader, image, sizeof image,
+                       (tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = 3500}, &problem));
+  TEST_CHECK(problem != NULL && strstr(problem, "megahertz") != NULL);
+  TEST_CHECK(
+      !tzx_open(&reader, image, sizeof image, (tzx_machine){.rules = TZX_AMSTRAD}, &problem));
+  TEST_CHECK(tzx_open(&reader, image, sizeof image,
+                      (tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = 1000000}, &problem));
 }
 
 /* A block the reader knows, cut short by the end of the file, is a truncated
@@ -640,6 +672,51 @@ static void a_stopped_tape_carries_on_when_it_is_played_again(void) {
   TEST_EQUAL(next(), 0);
 }
 
+static bool in_48k_mode_now = false;
+static int times_asked = 0;
+static const void *asked_about = NULL;
+
+static bool answer_whether_in_48k_mode(const void *machine) {
+  times_asked++;
+  asked_about = machine;
+  return in_48k_mode_now;
+}
+
+/* Block 0x2A stops a Spectrum only in 48K mode, and a +2 can enter that
+   mode while its tape plays, so the reader asks the host as the tape
+   reaches the block, about the machine it was given, and not before. */
+static void the_48k_stop_asks_as_the_tape_reaches_it(void) {
+  static const int machine = 0;
+  const tzx_machine asking = {.rules = TZX_SPECTRUM,
+                              .clock_hertz = FORMAT_HERTZ,
+                              .in_48k_mode = answer_whether_in_48k_mode,
+                              .asked = &machine};
+  const uint8_t stop_48k[] = {TZX_HEAD, 0x2A, 0, 0, 0, 0, 0x12, 0xE8, 0x03, 0x01, 0x00};
+  times_asked = 0;
+  in_48k_mode_now = false;
+  open_image_for(stop_48k, sizeof stop_48k, &asking);
+  TEST_EQUAL(times_asked, 0);
+  TEST_EQUAL(next(), 1000); /* in 128K mode the tape plays straight through */
+  TEST_EQUAL(times_asked, 1);
+  TEST_CHECK(asked_about == &machine);
+
+  open_image_for(stop_48k, sizeof stop_48k, &asking);
+  in_48k_mode_now = true;
+  TEST_EQUAL(next(), 0); /* in 48K mode it stops */
+  TEST_EQUAL(next(), 1000);
+
+  /* An Amstrad is never asked. */
+  times_asked = 0;
+  in_48k_mode_now = true;
+  open_image_for(stop_48k, sizeof stop_48k,
+                 &(tzx_machine){.rules = TZX_AMSTRAD,
+                                .clock_hertz = AMSTRAD_HERTZ,
+                                .in_48k_mode = answer_whether_in_48k_mode,
+                                .asked = &machine});
+  TEST_EQUAL(next(), 1142); /* 1000 of the format's T-states at 4MHz */
+  TEST_EQUAL(times_asked, 0);
+}
+
 /* The deck lets the line fall low when there is no next pulse, so a low last
    pulse would never see the edge that ends it, and a loader timing edges
    would never read its last bit. The millisecond a pause begins with is held
@@ -670,7 +747,7 @@ static void a_stop_finishes_the_last_edge_first(void) {
 
   /* An Amstrad's tape ends the same way, at its own clock. */
   const uint8_t low_then_end[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00};
-  open_image_for(low_then_end, sizeof low_then_end, 4000, TZX_AMSTRAD);
+  open_image_for(low_then_end, sizeof low_then_end, &an_amstrad);
   TEST_EQUAL(next(), 1142);
   TEST_EQUAL(next(), 4000);
   TEST_EQUAL(next(), 0);
@@ -910,10 +987,9 @@ static void a_data_block_asking_for_no_pause_runs_straight_on(void) {
 
 /* The pulse the reader gives first, which a test of the leader reads itself
    rather than stepping over. */
-static tape_pulse_t first_pulse(const uint8_t *image, uint32_t length, uint32_t clock,
-                                tzx_machine machine) {
+static tape_pulse_t first_pulse(const uint8_t *image, uint32_t length, const tzx_machine *machine) {
   tape_pulse_t pulse = {0, true};
-  if (opened(image, length, clock, machine)) {
+  if (opened(image, length, machine)) {
     TEST_CHECK(tzx_next_pulse(&reader, &pulse));
   }
   return pulse;
@@ -925,7 +1001,7 @@ static tape_pulse_t first_pulse(const uint8_t *image, uint32_t length, uint32_t 
    that much shorter, and the first edge falls where the leader ends. */
 static void the_leader_passes_before_a_tape_that_opens_with_sound(void) {
   const uint8_t image[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x03, 0x00};
-  const tape_pulse_t leader = first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  const tape_pulse_t leader = first_pulse(image, sizeof image, &a_spectrum);
   TEST_CHECK(!leader.level);
   TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND - 1000);
   TEST_EQUAL(next(), 1000); /* and the tone behind it, all three pulses, as written */
@@ -937,7 +1013,7 @@ static void the_leader_passes_before_a_tape_that_opens_with_sound(void) {
    leader goes first, and the image's own silence after it as written. */
 static void an_image_that_kept_some_silence_gets_the_rest(void) {
   const uint8_t image[] = {TZX_HEAD, 0x20, 0xE8, 0x03, 0x12, 0xE8, 0x03, 0x01, 0x00};
-  const tape_pulse_t leader = first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  const tape_pulse_t leader = first_pulse(image, sizeof image, &a_spectrum);
   TEST_CHECK(!leader.level);
   TEST_EQUAL(leader.ticks, (LEADER_MILLISECONDS - 1000) * TICKS_PER_MILLISECOND - 1000);
   tape_pulse_t silence = {0, true};
@@ -952,8 +1028,7 @@ static void an_image_that_kept_its_silence_plays_as_it_is(void) {
   const uint32_t kept = LEADER_MILLISECONDS + 1000;
   const uint8_t image[] = {TZX_HEAD, 0x20, (uint8_t)kept, (uint8_t)(kept >> 8), 0x12, 0xE8,
                            0x03,     0x01, 0x00};
-  const tape_pulse_t silence =
-      first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  const tape_pulse_t silence = first_pulse(image, sizeof image, &a_spectrum);
   TEST_CHECK(!silence.level);
   TEST_EQUAL(silence.ticks, kept * TICKS_PER_MILLISECOND);
   TEST_EQUAL(next(), 1000);
@@ -963,7 +1038,7 @@ static void an_image_that_kept_its_silence_plays_as_it_is(void) {
    its milliseconds are the machine's, like a pause's. */
 static void the_leader_lasts_as_long_on_a_cpc(void) {
   const uint8_t image[] = {TZX_HEAD, 0x12, 0xE8, 0x03, 0x01, 0x00};
-  const tape_pulse_t leader = first_pulse(image, sizeof image, 4000, TZX_AMSTRAD);
+  const tape_pulse_t leader = first_pulse(image, sizeof image, &an_amstrad);
   TEST_CHECK(!leader.level);
   TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * 4000 - 1142); /* 1000 of the format's T-states */
   TEST_EQUAL(next(), 1142);
@@ -972,7 +1047,7 @@ static void the_leader_lasts_as_long_on_a_cpc(void) {
 /* A .tap was a cassette too. */
 static void a_tap_has_the_leader_in_front_of_it(void) {
   const uint8_t tap[] = {0x02, 0x00, 0x00, 0xAA};
-  const tape_pulse_t leader = first_pulse(tap, sizeof tap, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  const tape_pulse_t leader = first_pulse(tap, sizeof tap, &a_spectrum);
   TEST_CHECK(!leader.level);
   TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND - 2168);
   TEST_EQUAL(next(), 2168); /* the pilot's first pulse, whole */
@@ -983,7 +1058,7 @@ static void a_tap_has_the_leader_in_front_of_it(void) {
    stop, and played on it does not have it again. */
 static void the_leader_passes_once(void) {
   const uint8_t image[] = {TZX_HEAD, 0x20, 0x00, 0x00, 0x12, 0xE8, 0x03, 0x01, 0x00};
-  const tape_pulse_t leader = first_pulse(image, sizeof image, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  const tape_pulse_t leader = first_pulse(image, sizeof image, &a_spectrum);
   TEST_CHECK(!leader.level);
   TEST_EQUAL(leader.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND);
   TEST_EQUAL(next(), 0);    /* the stop */
@@ -991,7 +1066,7 @@ static void the_leader_passes_once(void) {
 
   /* A tape with no sound on it at all is a leader and then its end. */
   const uint8_t empty[] = {TZX_HEAD};
-  const tape_pulse_t only = first_pulse(empty, sizeof empty, TICKS_PER_MILLISECOND, TZX_SPECTRUM);
+  const tape_pulse_t only = first_pulse(empty, sizeof empty, &a_spectrum);
   TEST_CHECK(!only.level);
   TEST_EQUAL(only.ticks, LEADER_MILLISECONDS * TICKS_PER_MILLISECOND);
   TEST_EQUAL(next(), 0);
@@ -1016,10 +1091,12 @@ int main(void) {
   TEST_RUN(the_walk_reaches_the_end_of_the_widest_block);
   TEST_RUN(an_amstrad_reads_two_blocks_differently);
   TEST_RUN(a_tap_as_long_as_a_header_is_still_a_tap);
+  TEST_RUN(a_clock_under_a_megahertz_is_refused);
   TEST_RUN(a_block_cut_short_is_told_from_one_this_reader_does_not_know);
   TEST_RUN(the_bits_in_a_last_byte_are_one_to_eight);
   TEST_RUN(an_element_of_no_length_is_passed_over);
   TEST_RUN(a_stopped_tape_carries_on_when_it_is_played_again);
+  TEST_RUN(the_48k_stop_asks_as_the_tape_reaches_it);
   TEST_RUN(a_stop_finishes_the_last_edge_first);
   TEST_RUN(a_loop_plays_its_blocks_as_many_times_as_it_asks);
   TEST_RUN(a_loop_the_format_forbids_is_refused);

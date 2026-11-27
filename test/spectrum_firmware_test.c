@@ -331,7 +331,9 @@ static void the_rom_loads_the_block_from(const uint8_t *image, uint32_t length) 
   static tape_t tape;
   static tzx_t reader;
   const char *problem = NULL;
-  if (!tzx_open(&reader, image, length, SPECTRUM_48K_CLOCK_HERTZ / 1000, TZX_SPECTRUM, &problem)) {
+  if (!tzx_open(&reader, image, length,
+                (tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = SPECTRUM_48K_CLOCK_HERTZ},
+                &problem)) {
     TEST_FAIL("the tape was refused: %s", problem);
     return;
   }
@@ -415,59 +417,73 @@ static void a_block_ending_low_before_a_stop_loads_through_the_roms_own_loader(v
   the_rom_loads_the_block_from(image, sizeof image);
 }
 
+/* A header naming a BASIC program that autostarts at line 10, and the
+   program: 10 PRINT "TAPE OK". Both blocks carry the flag and checksum a
+   tape carries. */
+static uint8_t program_tape[] = {
+    0x13, 0x00, 0x00,                                            /* block, flag: a header */
+    0x00,                                                        /* type 0: a program */
+    't',  'a',  'p',  'e',  ' ', ' ', ' ', ' ', ' ', ' ',        /* its name */
+    0x0F, 0x00,                                                  /* the program is 15 bytes */
+    0x0A, 0x00,                                                  /* autostart at line 10 */
+    0x0F, 0x00,                                                  /* and no variables after it */
+    0x00,                                                        /* checksum, filled in below */
+    0x11, 0x00, 0xFF,                                            /* block, flag: data */
+    0x00, 0x0A, 0x0B, 0x00,                                      /* line 10, eleven bytes of it */
+    0xF5, 0x22, 'T',  'A',  'P', 'E', ' ', 'O', 'K', 0x22, 0x0D, /* PRINT "TAPE OK" */
+    0x00,                                                        /* checksum, filled in below */
+};
+
+/* A block's checksum is every byte of it from the flag onwards, exclusive
+   or'd together, and it is the last byte of the block. */
+static void sum_the_program_tape(void) {
+  static const size_t header_at = 2, header_checksum_at = 20;
+  static const size_t data_at = 23, data_checksum_at = 39;
+  program_tape[header_checksum_at] = 0;
+  program_tape[data_checksum_at] = 0;
+  for (size_t index = header_at; index < header_checksum_at; index++) {
+    program_tape[header_checksum_at] ^= program_tape[index];
+  }
+  for (size_t index = data_at; index < data_checksum_at; index++) {
+    program_tape[data_checksum_at] ^= program_tape[index];
+  }
+}
+
+static tape_t program_deck;
+static tzx_t program_reader;
+
+/* The program's tape in the machine's deck, at the machine's own clock. */
+static bool insert_the_program_tape(void) {
+  sum_the_program_tape();
+  const char *problem = NULL;
+  if (!tzx_open(
+          &program_reader, program_tape, (uint32_t)sizeof program_tape,
+          (tzx_machine){.rules = TZX_SPECTRUM, .clock_hertz = spectrum_clock_hertz(&spectrum)},
+          &problem)) {
+    TEST_FAIL("the tape was refused: %s", problem);
+    return false;
+  }
+  tape_init(&program_deck);
+  tape_insert(&program_deck, tzx_next_pulse, &program_reader);
+  spectrum_insert_tape(&spectrum, &program_deck);
+  return true;
+}
+
 /* The whole path a person takes: type LOAD "" at the prompt, press PLAY,
    and let the firmware find a program on the tape and run it. Nothing here
    reaches into the machine — the header is read by the ROM, the block is
    loaded by the ROM, and BASIC runs what arrives. */
 static void a_program_loads_off_a_tape_and_runs(void) {
-  if (!power_on_48k()) {
+  if (!power_on_48k() || !insert_the_program_tape()) {
     return;
   }
-  /* A header naming a BASIC program that autostarts at line 10, and the
-     program: 10 PRINT "TAPE OK". Both blocks carry the flag and checksum a
-     tape carries. */
-  static uint8_t image[] = {
-      0x13, 0x00, 0x00,                                            /* block, flag: a header */
-      0x00,                                                        /* type 0: a program */
-      't',  'a',  'p',  'e',  ' ', ' ', ' ', ' ', ' ', ' ',        /* its name */
-      0x0F, 0x00,                                                  /* the program is 15 bytes */
-      0x0A, 0x00,                                                  /* autostart at line 10 */
-      0x0F, 0x00,                                                  /* and no variables after it */
-      0x00,                                                        /* checksum, filled in below */
-      0x11, 0x00, 0xFF,                                            /* block, flag: data */
-      0x00, 0x0A, 0x0B, 0x00,                                      /* line 10, eleven bytes of it */
-      0xF5, 0x22, 'T',  'A',  'P', 'E', ' ', 'O', 'K', 0x22, 0x0D, /* PRINT "TAPE OK" */
-      0x00,                                                        /* checksum, filled in below */
-  };
-  /* A block's checksum is every byte of it from the flag onwards, exclusive
-     or'd together, and it is the last byte of the block. */
-  static const size_t header_at = 2, header_checksum_at = 20;
-  static const size_t data_at = 23, data_checksum_at = 39;
-  for (size_t index = header_at; index < header_checksum_at; index++) {
-    image[header_checksum_at] ^= image[index];
-  }
-  for (size_t index = data_at; index < data_checksum_at; index++) {
-    image[data_checksum_at] ^= image[index];
-  }
-
-  static tape_t tape;
-  static tzx_t reader;
-  const char *problem = NULL;
-  if (!tzx_open(&reader, image, (uint32_t)sizeof image, SPECTRUM_48K_CLOCK_HERTZ / 1000,
-                TZX_SPECTRUM, &problem)) {
-    TEST_FAIL("the tape was refused: %s", problem);
-    return;
-  }
-  tape_init(&tape);
-  tape_insert(&tape, tzx_next_pulse, &reader);
-  spectrum_insert_tape(&spectrum, &tape);
-
+  tape_t *tape = &program_deck;
   run_frames(FRAMES_TO_PROMPT);
   type_key(SPECTRUM_KEY(6, 3), KEYBOARD_NO_KEY);       /* J, which is LOAD */
   type_key(SPECTRUM_KEY(5, 0), SPECTRUM_SYMBOL_SHIFT); /* " */
   type_key(SPECTRUM_KEY(5, 0), SPECTRUM_SYMBOL_SHIFT); /* " again, which the ROM */
   type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY);           /*   only takes if it saw the */
-  tape_play(&tape);                                    /*   first one let go */
+  tape_play(tape);                                     /*   first one let go */
   run_frames(MOST_FRAMES_TO_LOAD);
 
   char text[ULA_ROWS][ULA_COLUMNS + 1];
@@ -717,6 +733,28 @@ static void beep_1_0_plays_middle_c_on_the_plus2(void) {
   hear_middle_c();
 }
 
+/* The +2's menu's Tape Loader loads the same program off the same tape,
+   played at the +2's own clock, and the program prints for itself. The
+   option copies LOAD "" into the line editing area and executes it, as the
+   128's L1AF1 does in Farrow's disassembly. */
+static void the_plus2s_tape_loader_loads_a_program_and_runs_it(void) {
+  if (!power_on_plus2() || !insert_the_program_tape()) {
+    return;
+  }
+  run_frames(FRAMES_TO_PROMPT);
+  type_key(SPECTRUM_ENTER, KEYBOARD_NO_KEY); /* the menu's first item */
+  tape_play(&program_deck);
+  run_frames(MOST_FRAMES_TO_LOAD);
+  char text[ULA_ROWS][ULA_COLUMNS + 1];
+  screen_from_memory(text);
+  for (int row = 0; row < ULA_ROWS; row++) {
+    if (strncmp(text[row], "TAPE OK", 7) == 0) {
+      return;
+    }
+  }
+  TEST_FAIL("nothing on the screen reads TAPE OK; its top line reads |%s|", text[0]);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
@@ -736,5 +774,6 @@ int main(int argc, char **argv) {
   TEST_RUN(the_plus2s_48_basic_locks_the_paging);
   TEST_RUN(play_c_sounds_middle_c_through_the_sound_chip);
   TEST_RUN(beep_1_0_plays_middle_c_on_the_plus2);
+  TEST_RUN(the_plus2s_tape_loader_loads_a_program_and_runs_it);
   return TEST_REPORT("spectrum firmware");
 }

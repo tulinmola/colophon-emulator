@@ -228,6 +228,10 @@
  * - General Instrument, "AY-3-8910/8912 Programmable Sound Generator Data
  *   Manual", February 1979, p. 10, cited in ay38910.h — the I/O ports "are
  *   provided with internal pull-ups on each pin".
+ * - Paul Farrow's disassembly of the 128's ROMs, cited in ula.h — the 48
+ *   BASIC option at L1B47, which sets up 0x20 with the note "Force 48 mode"
+ *   and leaves it to SWAP to write with the 48K ROM's bit as 0x30; and the
+ *   ROMs' own flag, bit 4 of FLAGS, "1=128K Mode, 0=48K Mode".
  */
 #ifndef COLOPHON_SPECTRUM_H
 #define COLOPHON_SPECTRUM_H
@@ -407,6 +411,17 @@ void spectrum_connect_monitor(spectrum_t *spectrum, uint8_t *framebuffer);
 
 /* Put a tape in the deck, or take it out with NULL. */
 void spectrum_insert_tape(spectrum_t *spectrum, tape_t *tape);
+
+/* Whether the machine is in 48K mode, which a tape's block 0x2A stops in
+ * and the format describes by machine in one place and by mode in another
+ * (tzx.h). It is read here as a machine that cannot page: a 48K always, and
+ * a +2 once its bank register is locked. 48 BASIC locks it, writing 0x30
+ * from a value Farrow notes as "Force 48 mode" (Sources), and a program that
+ * tested for the 128's memory by paging would find none. Unlocked, a +2 is
+ * taken to be in 128K mode whichever ROM it has paged in. The ROMs keep a
+ * flag of their own for the mode, bit 4 of FLAGS, and this reading is not
+ * that flag. */
+bool spectrum_in_48k_mode(const spectrum_t *spectrum);
 
 /* Advance the machine one T-state. The ULA runs every time; the processor
  * runs unless the ULA is holding its clock, and a held tick returns the

@@ -335,6 +335,10 @@ static void run_processor(spectrum_t *spectrum) {
 
 void spectrum_insert_tape(spectrum_t *spectrum, tape_t *tape) { spectrum->tape = tape; }
 
+bool spectrum_in_48k_mode(const spectrum_t *spectrum) {
+  return spectrum->model == SPECTRUM_48K || (spectrum->bank_register & SPECTRUM_BANK_LOCK) != 0;
+}
+
 uint64_t spectrum_tick(spectrum_t *spectrum) {
   paint(spectrum);
   if (spectrum->tape != NULL) {

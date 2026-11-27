@@ -16,7 +16,7 @@ static spectrum_t restored;
 static uint8_t rom[SPECTRUM_PLUS2_ROM_SIZE]; /* room for either model's */
 static uint8_t saved_ram[SPECTRUM_RAM_48K];
 static uint8_t restored_ram[SPECTRUM_RAM_48K];
-static uint8_t bytes[SPECTRUM_SNAPSHOT_SIZE];
+static uint8_t bytes[SPECTRUM_SNAPSHOT_48K_SIZE];
 
 /* Where the program below counts its interrupts, as an index into the RAM. */
 #define COUNTER (0x8000 - SPECTRUM_RAM_BASE)
@@ -68,33 +68,32 @@ static void run_to_the_wait_loop(spectrum_t *machine, long frames) {
   }
 }
 
-static void a_snapshot_is_the_one_length_it_can_be(void) {
+static void a_48k_snapshot_is_the_one_length_it_can_be(void) {
   power_on(&saved, saved_ram, SPECTRUM_RAM_48K);
-  TEST_EQUAL(SPECTRUM_SNAPSHOT_SIZE, 49179);
+  TEST_EQUAL(SPECTRUM_SNAPSHOT_48K_SIZE, 49179);
   TEST_EQUAL(spectrum_snapshot_size(&saved), 49179);
 
   const char *problem = NULL;
-  TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_SIZE - 1, &problem));
+  TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_48K_SIZE - 1, &problem));
   TEST_CHECK(problem != NULL);
-  TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_SIZE + 1, &problem));
+  TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_48K_SIZE + 1, &problem));
 
   /* A 16K machine is not one of these, in either direction. */
   static uint8_t small[SPECTRUM_RAM_16K];
   power_on(&saved, small, SPECTRUM_RAM_16K);
   TEST_EQUAL(spectrum_snapshot_size(&saved), 0);
   TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
-  TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
 
-  /* Nor is a +2, whose bank register and sound chip the format has no room
-     for, even one handed no more RAM than a 48K. */
+  /* Nor is a +2, which has the 128K format instead and refuses this one;
+     and a +2 handed no more RAM than a 48K fits neither. */
   static uint8_t banks[SPECTRUM_RAM_128K];
-  const uint32_t sizes[] = {SPECTRUM_RAM_128K, SPECTRUM_RAM_48K};
-  for (size_t index = 0; index < sizeof sizes / sizeof sizes[0]; index++) {
-    spectrum_init(&saved, SPECTRUM_PLUS2, banks, sizes[index], rom);
-    TEST_EQUAL(spectrum_snapshot_size(&saved), 0);
-    TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
-    TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
-  }
+  spectrum_init(&saved, SPECTRUM_PLUS2, banks, SPECTRUM_RAM_128K, rom);
+  TEST_EQUAL(spectrum_snapshot_size(&saved), SPECTRUM_SNAPSHOT_128K_SIZE);
+  TEST_CHECK(!spectrum_snapshot_load(&saved, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
+  spectrum_init(&saved, SPECTRUM_PLUS2, banks, SPECTRUM_RAM_48K, rom);
+  TEST_EQUAL(spectrum_snapshot_size(&saved), 0);
+  TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
 }
 
 static void a_half_done_instruction_cannot_be_saved(void) {
@@ -155,7 +154,7 @@ static void a_hold_does_not_survive_a_load(void) {
   }
   TEST_CHECK(restored.held_ticks > 0);
 
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_EQUAL(restored.held_ticks, 0);
 }
 
@@ -167,7 +166,7 @@ static void a_machine_survives_the_round_trip(void) {
   TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
 
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
 
   TEST_EQUAL(restored.cpu.a, saved.cpu.a);
   TEST_EQUAL(restored.cpu.f, saved.cpu.f);
@@ -210,13 +209,53 @@ static void a_restored_machine_goes_on_running_from_a_fresh_frame(void) {
   TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
 
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  for (int tick = 0; tick < 1000; tick++) {
+    spectrum_tick(&restored);
+  }
+  TEST_EQUAL(restored.ula.frame_tick, 1000); /* loaded into a machine mid-frame */
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_EQUAL(restored.ula.frame_tick, 0); /* and set down at the top of one */
 
   uint8_t counted = restored_ram[COUNTER];
   TEST_CHECK(counted != 0); /* the original had been counting */
   run(&restored, 5);
   TEST_EQUAL(restored_ram[COUNTER], counted + 5); /* one interrupt a frame, still */
+}
+
+/* A machine loaded while it runs draws from then on as one loaded just after
+   it was switched on, wherever in its frame the load finds it. Here that is
+   just after the frame's sync has ended and before the next line's sync,
+   where a monitor left as it was takes the new frame's sync for the rest of
+   the old one and paints the whole first frame a line low; and seventeen
+   frames in, where the count FLASH keeps time by would carry over. */
+static spectrum_t running;
+static uint8_t running_ram[SPECTRUM_RAM_48K];
+static uint8_t running_picture[SPECTRUM_LARGEST_FRAMEBUFFER];
+static uint8_t fresh_picture[SPECTRUM_LARGEST_FRAMEBUFFER];
+
+static void a_load_draws_as_on_a_machine_just_switched_on(void) {
+  power_on(&saved, saved_ram, SPECTRUM_RAM_48K);
+  run_to_the_wait_loop(&saved, 3);
+  const char *problem = NULL;
+  TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+
+  power_on(&running, running_ram, SPECTRUM_RAM_48K);
+  spectrum_connect_monitor(&running, running_picture);
+  run(&running, 17);
+  while (running.ula.frame_tick != 1843) {
+    spectrum_tick(&running);
+  }
+  TEST_CHECK(spectrum_snapshot_load(&running, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
+  TEST_EQUAL(running.ula.frame_count, 0);
+
+  power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
+  memcpy(fresh_picture, running_picture, sizeof fresh_picture); /* the same leftovers */
+  spectrum_connect_monitor(&restored, fresh_picture);
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
+
+  run(&running, 1);
+  run(&restored, 1);
+  TEST_CHECK(memcmp(running_picture, fresh_picture, sizeof fresh_picture) == 0);
 }
 
 /* The format's own defect, declared rather than hidden: the snapshot spends
@@ -248,7 +287,7 @@ static void the_program_counter_costs_two_bytes_of_the_snapshot(void) {
 
   /* And loading pops them straight back off. */
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_EQUAL(restored.cpu.sp, sp);
   TEST_EQUAL(restored.cpu.pc, pc);
 }
@@ -262,6 +301,17 @@ static void a_stack_at_the_bottom_of_memory_cannot_be_written(void) {
   TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
   saved.cpu.sp = SPECTRUM_RAM_BASE + 2;
   TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+
+  /* With SP at 0x0000 the push wraps round to 0xFFFF and 0xFFFE, which are
+     RAM; at 0x0001 its high byte would land on the ROM at 0x0000. */
+  saved.cpu.sp = 0x0001;
+  TEST_CHECK(!spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+  saved.cpu.sp = 0x0000;
+  TEST_CHECK(spectrum_snapshot_save(&saved, bytes, sizeof bytes, &problem));
+  power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
+  TEST_EQUAL(restored.cpu.sp, 0x0000);
+  TEST_EQUAL(restored.cpu.pc, saved.cpu.pc);
 }
 
 /* Interrupts come back through RETN's own rule rather than from a field. */
@@ -274,14 +324,14 @@ static void the_header_carries_one_interrupt_flag_and_restores_both(void) {
   TEST_EQUAL(bytes[0x13] & 0x04, 0x04);
 
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_CHECK(restored.cpu.iff1);
   TEST_CHECK(restored.cpu.iff2);
 
   /* And a machine caught with interrupts disabled comes back disabled. */
   bytes[0x13] = 0x00;
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_CHECK(!restored.cpu.iff1);
   TEST_CHECK(!restored.cpu.iff2);
 }
@@ -312,13 +362,13 @@ static void the_interrupt_flag_is_written_where_mame_reads_it_too(void) {
      before bit 0 was, carries bit 2 alone and resumes enabled. */
   bytes[0x13] = 0x04;
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_CHECK(restored.cpu.iff1);
   TEST_CHECK(restored.cpu.iff2);
 
   bytes[0x13] = 0x01;
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_CHECK(!restored.cpu.iff1);
   TEST_CHECK(!restored.cpu.iff2);
 }
@@ -373,7 +423,7 @@ static void the_header_is_laid_out_as_the_format_says(void) {
   TEST_EQUAL(bytes[0x17] | (bytes[0x18] << 8), 0xC000); /* SP, pushed  */
   TEST_EQUAL(bytes[0x19], 2);                           /* IntMode     */
   TEST_EQUAL(bytes[0x1A], 5);                           /* BorderColor */
-  TEST_EQUAL(0x1B + SPECTRUM_RAM_48K, SPECTRUM_SNAPSHOT_SIZE);
+  TEST_EQUAL(0x1B + SPECTRUM_RAM_48K, SPECTRUM_SNAPSHOT_48K_SIZE);
 }
 
 /* A file is not trusted about where its stack was: the program counter has
@@ -389,14 +439,14 @@ static void a_stack_the_program_counter_could_not_reach_is_refused(void) {
     bytes[0x17] = (uint8_t)impossible[index];
     bytes[0x18] = (uint8_t)(impossible[index] >> 8);
     problem = NULL;
-    TEST_CHECK(!spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+    TEST_CHECK(!spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
     TEST_CHECK(problem != NULL);
   }
 
   /* The lowest one that works is the bottom of the RAM itself. */
   bytes[0x17] = (uint8_t)SPECTRUM_RAM_BASE;
   bytes[0x18] = (uint8_t)(SPECTRUM_RAM_BASE >> 8);
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
 }
 
 /* The border byte is three bits wide. The bits above it are the microphone
@@ -408,14 +458,166 @@ static void the_border_byte_cannot_drive_the_speaker(void) {
   bytes[0x17] = (uint8_t)0x00; /* a stack at &C000 */
   bytes[0x18] = (uint8_t)0xC0;
   bytes[0x1A] = 0xFF;
-  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_SIZE, &problem));
+  TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_EQUAL(restored.ula.border, 7);
   TEST_CHECK(!restored.ula.microphone);
   TEST_CHECK(!restored.ula.speaker);
 }
 
+static uint8_t plus2_saved_ram[SPECTRUM_RAM_128K];
+static uint8_t plus2_restored_ram[SPECTRUM_RAM_128K];
+static uint8_t plus2_bytes[SPECTRUM_SNAPSHOT_128K_REPEATING_SIZE];
+
+/* A +2 running the same program from its first ROM, with every bank of its
+   RAM filled with a pattern of its own so that a bank in the wrong place
+   shows, and the bank register set as given. */
+static void power_on_plus2_paging(spectrum_t *machine, uint8_t *ram, uint8_t bank_register) {
+  power_on(machine, ram, SPECTRUM_RAM_48K); /* the ROM's program */
+  for (size_t at = 0; at < SPECTRUM_RAM_128K; at++) {
+    ram[at] = (uint8_t)(at / SPECTRUM_BANK_SIZE * 0x11 + at % 7);
+  }
+  spectrum_init(machine, SPECTRUM_PLUS2, ram, SPECTRUM_RAM_128K, rom);
+  machine->bank_register = bank_register;
+}
+
+static void a_plus2_survives_the_round_trip_whole(void) {
+  power_on_plus2_paging(&saved, plus2_saved_ram, 0x03);
+  run_to_the_wait_loop(&saved, 3);
+  const char *problem = NULL;
+  TEST_EQUAL(spectrum_snapshot_size(&saved), SPECTRUM_SNAPSHOT_128K_SIZE);
+  TEST_CHECK(spectrum_snapshot_save(&saved, plus2_bytes, sizeof plus2_bytes, &problem));
+
+  power_on_plus2_paging(&restored, plus2_restored_ram, 0x00);
+  memset(plus2_restored_ram, 0xEE, sizeof plus2_restored_ram);
+  /* A write to the register the machine was still to latch is not carried
+     over the load, where it would latch whatever the bus held. */
+  restored.latching_bank_register = true;
+  restored.pins = z80_set_data(restored.pins, 0x10);
+  TEST_CHECK(spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
+  TEST_EQUAL(restored.cpu.pc, saved.cpu.pc);
+  TEST_EQUAL(restored.cpu.sp, saved.cpu.sp); /* nothing pushed: the PC has a field */
+  TEST_EQUAL((restored.cpu.b << 8) | restored.cpu.c, 0x1234);
+  TEST_EQUAL(restored.cpu.hl_, 0x2211);
+  TEST_CHECK(restored.cpu.iff1 == saved.cpu.iff1);
+  TEST_EQUAL(restored.bank_register, 0x03);
+  TEST_EQUAL(restored.ula.border, 2);
+  /* Every bank comes back where it was, and no byte is spent. */
+  TEST_CHECK(memcmp(plus2_restored_ram, plus2_saved_ram, SPECTRUM_RAM_128K) == 0);
+  spectrum_tick(&restored);
+  TEST_EQUAL(restored.bank_register, 0x03);
+
+  /* The banks are laid out as the format says: 5, 2 and the paged one, then
+     the rest in ascending order. */
+  const unsigned order[] = {5, 2, 3, 0, 1, 4, 6, 7};
+  for (size_t index = 0; index < 8; index++) {
+    size_t at = 27 + index * SPECTRUM_BANK_SIZE + (index >= 3 ? 4 : 0);
+    if (memcmp(plus2_bytes + at, plus2_saved_ram + (size_t)order[index] * SPECTRUM_BANK_SIZE,
+               SPECTRUM_BANK_SIZE) != 0) {
+      TEST_FAIL("block %zu of the snapshot is not bank %u", index, order[index]);
+    }
+  }
+  TEST_EQUAL(plus2_bytes[49181], 0x03);
+  TEST_EQUAL(plus2_bytes[49182], 0);
+  TEST_EQUAL(plus2_bytes[49179] | plus2_bytes[49180] << 8, saved.cpu.pc);
+}
+
+/* Paged at 0xC000, bank 5 or 2 is written a second time in third place, and
+   the snapshot is a bank longer. A snapshot whose two copies differ
+   contradicts itself, and is refused. */
+static void a_plus2_paging_bank_5_or_2_holds_it_twice(void) {
+  const uint8_t repeated[] = {5, 2};
+  for (size_t index = 0; index < 2; index++) {
+    const uint8_t paged = repeated[index];
+    const size_t copy = 27 + (size_t)(paged == 5 ? 0 : 1) * SPECTRUM_BANK_SIZE;
+    const size_t third = 27 + (size_t)2 * SPECTRUM_BANK_SIZE;
+    power_on_plus2_paging(&saved, plus2_saved_ram, paged);
+    run_to_the_wait_loop(&saved, 1);
+    const char *problem = NULL;
+    TEST_EQUAL(spectrum_snapshot_size(&saved), SPECTRUM_SNAPSHOT_128K_REPEATING_SIZE);
+    TEST_CHECK(spectrum_snapshot_save(&saved, plus2_bytes, sizeof plus2_bytes, &problem));
+    TEST_CHECK(memcmp(plus2_bytes + copy, plus2_bytes + third, SPECTRUM_BANK_SIZE) == 0);
+    power_on_plus2_paging(&restored, plus2_restored_ram, 0x00);
+    TEST_CHECK(spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_REPEATING_SIZE,
+                                      &problem));
+    TEST_CHECK(memcmp(plus2_restored_ram, plus2_saved_ram, SPECTRUM_RAM_128K) == 0);
+
+    plus2_bytes[third + 100] ^= 0xFF;
+    problem = NULL;
+    TEST_CHECK(!spectrum_snapshot_load(&restored, plus2_bytes,
+                                       SPECTRUM_SNAPSHOT_128K_REPEATING_SIZE, &problem));
+    TEST_CHECK(problem != NULL && strstr(problem, "differ") != NULL);
+  }
+}
+
+/* A locked register comes back locked, and the byte's top two bits, which
+   reach no flip-flop, come back as nothing. */
+static void a_plus2s_lock_comes_back(void) {
+  power_on_plus2_paging(&saved, plus2_saved_ram, 0x21);
+  run_to_the_wait_loop(&saved, 1);
+  const char *problem = NULL;
+  TEST_CHECK(spectrum_snapshot_save(&saved, plus2_bytes, sizeof plus2_bytes, &problem));
+  plus2_bytes[49181] |= 0xC0;
+  power_on_plus2_paging(&restored, plus2_restored_ram, 0x00);
+  TEST_CHECK(spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
+  TEST_EQUAL(restored.bank_register, 0x21);
+  TEST_CHECK(spectrum_in_48k_mode(&restored));
+}
+
+/* The format holds no register of the sound chip, so it comes back as reset
+   leaves it, with what the board presents to port A still presented. */
+static void a_plus2s_sound_chip_comes_back_reset(void) {
+  power_on_plus2_paging(&saved, plus2_saved_ram, 0x00);
+  run_to_the_wait_loop(&saved, 1);
+  const char *problem = NULL;
+  TEST_CHECK(spectrum_snapshot_save(&saved, plus2_bytes, sizeof plus2_bytes, &problem));
+  power_on_plus2_paging(&restored, plus2_restored_ram, 0x00);
+  ay38910_access(&restored.psg, AY38910_SELECT, 8);
+  ay38910_access(&restored.psg, AY38910_WRITE, 0x0F);
+  TEST_EQUAL(restored.psg.registers[8], 0x0F);
+  ay38910_present_port_a(&restored.psg, 0x5A);
+  TEST_CHECK(spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
+  TEST_EQUAL(restored.psg.registers[8], 0x00);
+  TEST_EQUAL(restored.psg.output[0], 0);
+  TEST_EQUAL(restored.psg.port_a_input, 0x5A);
+}
+
+/* A 128K snapshot that contradicts itself, or asks for what a +2 has not
+   got, is refused; and a 48K refuses every 128K snapshot. */
+static void a_128k_snapshot_that_cannot_be_a_plus2s_is_refused(void) {
+  power_on_plus2_paging(&saved, plus2_saved_ram, 0x00);
+  run_to_the_wait_loop(&saved, 1);
+  const char *problem = NULL;
+  TEST_CHECK(spectrum_snapshot_save(&saved, plus2_bytes, sizeof plus2_bytes, &problem));
+  power_on_plus2_paging(&restored, plus2_restored_ram, 0x00);
+
+  /* A length that is neither of the two. */
+  TEST_CHECK(
+      !spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE - 1, &problem));
+  /* The register naming bank 5 in a file too short to hold it twice. */
+  plus2_bytes[49181] = 0x05;
+  TEST_CHECK(
+      !spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
+  /* And a file long enough to hold a bank twice naming a bank it need not. */
+  plus2_bytes[49181] = 0x00;
+  TEST_CHECK(!spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_REPEATING_SIZE,
+                                     &problem));
+  /* TR-DOS paged in. */
+  plus2_bytes[49182] = 1;
+  problem = NULL;
+  TEST_CHECK(
+      !spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
+  TEST_CHECK(problem != NULL && strstr(problem, "TR-DOS") != NULL);
+  plus2_bytes[49182] = 0;
+  TEST_CHECK(spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
+
+  /* A 48K refuses a 128K snapshot by its length alone. */
+  power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
+  TEST_CHECK(
+      !spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
+}
+
 int main(void) {
-  TEST_RUN(a_snapshot_is_the_one_length_it_can_be);
+  TEST_RUN(a_48k_snapshot_is_the_one_length_it_can_be);
   TEST_RUN(the_header_is_laid_out_as_the_format_says);
   TEST_RUN(a_stack_the_program_counter_could_not_reach_is_refused);
   TEST_RUN(the_border_byte_cannot_drive_the_speaker);
@@ -424,9 +626,15 @@ int main(void) {
   TEST_RUN(a_machine_survives_the_round_trip);
   TEST_RUN(a_hold_does_not_survive_a_load);
   TEST_RUN(a_restored_machine_goes_on_running_from_a_fresh_frame);
+  TEST_RUN(a_load_draws_as_on_a_machine_just_switched_on);
   TEST_RUN(the_program_counter_costs_two_bytes_of_the_snapshot);
   TEST_RUN(a_stack_at_the_bottom_of_memory_cannot_be_written);
   TEST_RUN(the_header_carries_one_interrupt_flag_and_restores_both);
   TEST_RUN(the_interrupt_flag_is_written_where_mame_reads_it_too);
+  TEST_RUN(a_plus2_survives_the_round_trip_whole);
+  TEST_RUN(a_plus2_paging_bank_5_or_2_holds_it_twice);
+  TEST_RUN(a_plus2s_lock_comes_back);
+  TEST_RUN(a_plus2s_sound_chip_comes_back_reset);
+  TEST_RUN(a_128k_snapshot_that_cannot_be_a_plus2s_is_refused);
   return TEST_REPORT("spectrum snapshot");
 }
