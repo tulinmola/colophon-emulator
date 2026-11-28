@@ -2,12 +2,13 @@
  * command_line_test — the emulator's command line, run as a user runs it.
  *
  * The binary under test is the one the build made, given firmware this test
- * writes: a Spectrum ROM that does nothing, and a CPC ROM whose program reads
- * the CRTC's two ports as a program does to learn which CRTC it has
- * (Compendium ch. 28.1.8, 28.1.9), leaves the answers in RAM for a snapshot
- * to carry out, then changes an ink's colour twice a line, for a screenshot
- * to show wherever a change falls in the display. Everything it reads and
- * writes is in the directory it is handed.
+ * writes: a CPC ROM whose program reads the CRTC's two ports as a program
+ * does to learn which CRTC it has (Compendium ch. 28.1.8, 28.1.9), leaves
+ * the answers in RAM for a snapshot to carry out, then changes an ink's
+ * colour twice a line, for a screenshot to show wherever a change falls in
+ * the display; a 48K ROM and a second CPC ROM that record every key pressed
+ * while they run; and a +2's two images, which show in RAM which of them
+ * ran. Everything it reads and writes is in the directory it is handed.
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -273,12 +274,107 @@ static void write_cpc_roms(void) {
   TEST_CHECK(write_file("amsdos.rom", amsdos, sizeof amsdos));
 }
 
-/* DI and JR to itself, for a run that is meant to succeed. */
+/* Where the key recorders below keep what they read: a byte for each of a
+   Spectrum's eight half-rows, from A8's to A15's, or each of a CPC's ten
+   lines, each the AND of every reading, so a bit clear is a key that was
+   down at some time. */
+#define KEYS_SEEN 0x8000
+#define SPECTRUM_HALF_ROWS 8
+#define CPC_KEY_LINES 10
+
+/* A 48K ROM that records every key pressed while it runs, reading each
+   half-row through port &FE. */
 static void write_spectrum_rom(void) {
   static uint8_t rom[0x4000];
-  const uint8_t program[] = {0xF3, 0x18, 0xFE};
-  memcpy(rom, program, sizeof program);
+  const uint8_t start[] = {0xF3, 0x21, 0x00, 0x80}; /* DI : LD HL,KEYS_SEEN */
+  size_t length = append(rom, 0, start, sizeof start);
+  for (int row = 0; row < SPECTRUM_HALF_ROWS; row++) {
+    const uint8_t clear[] = {0x36, 0xFF, 0x23}; /* LD (HL),&FF : INC HL */
+    length = append(rom, length, clear, sizeof clear);
+  }
+  size_t loop = length;
+  const uint8_t restart[] = {0x21, 0x00, 0x80}; /* LD HL,KEYS_SEEN */
+  length = append(rom, length, restart, sizeof restart);
+  for (int row = 0; row < SPECTRUM_HALF_ROWS; row++) {
+    /* LD BC,port : IN A,(C) : AND (HL) : LD (HL),A : INC HL, the port's
+       high byte low on the half-row's one address line */
+    const uint8_t read[] = {0x01, 0xFE, (uint8_t)~(1 << row), 0xED, 0x78, 0xA6, 0x77, 0x23};
+    length = append(rom, length, read, sizeof read);
+  }
+  const uint8_t jump[] = {0xC3, (uint8_t)loop, (uint8_t)(loop >> 8)}; /* JP to the loop */
+  append(rom, length, jump, sizeof jump);
   TEST_CHECK(write_file("spectrum48.rom", rom, sizeof rom));
+}
+
+/* A +2's two ROM images: the first pages in the second, with bank 0 at
+   &C000, and the second writes &2B to &8000 where the first would write
+   &0A, so that which one ran shows in RAM, and loops a byte further on. */
+static void write_plus2_roms(void) {
+  static uint8_t first[0x4000];
+  static uint8_t second[0x4000];
+  const uint8_t pages[] = {
+      0xF3,             /* DI */
+      0x01, 0xFD, 0x7F, /* LD BC,&7FFD */
+      0x3E, 0x10,       /* LD A,&10: the second ROM, bank 0, unlocked */
+      0xED, 0x79,       /* OUT (C),A; the next fetch, at 8, is the second's */
+  };
+  const uint8_t marks_first[] = {0x3E, 0x0A, 0x32, 0x00, 0x80, 0x18, 0xFE};
+  /* the same, with a NOP in front of its loop, so that where it loops
+     tells the two apart as well */
+  const uint8_t marks_second[] = {0x3E, 0x2B, 0x32, 0x00, 0x80, 0x00, 0x18, 0xFE};
+  memcpy(first, pages, sizeof pages);
+  memcpy(first + 8, marks_first, sizeof marks_first);
+  memcpy(second + 8, marks_second, sizeof marks_second);
+  TEST_CHECK(write_file("spectrumplus2-0.rom", first, sizeof first));
+  TEST_CHECK(write_file("spectrumplus2-1.rom", second, sizeof second));
+}
+
+/* A CPC ROM that records every key pressed while it runs, reading each of
+   the ten lines through the 8255 and the sound chip's register 14 as the
+   firmware reads them. It is written as the 664's, a ROM the other tests
+   leave alone. */
+static void write_cpc_key_recorder(void) {
+  static uint8_t rom[0x8000];
+  const uint8_t start[] = {
+      0xF3,                         /* DI */
+      0x01, 0x82, 0xF7, 0xED, 0x49, /* LD BC,&F782 : OUT (C),C: A and C out */
+      0x21, 0x00, 0x80,             /* LD HL,KEYS_SEEN */
+  };
+  size_t length = append(rom, 0, start, sizeof start);
+  for (int line = 0; line < CPC_KEY_LINES; line++) {
+    const uint8_t clear[] = {0x36, 0xFF, 0x23}; /* LD (HL),&FF : INC HL */
+    length = append(rom, length, clear, sizeof clear);
+  }
+  size_t loop = length;
+  const uint8_t select[] = {
+      0x21, 0x00, 0x80,             /* LD HL,KEYS_SEEN */
+      0x01, 0x0E, 0xF4, 0xED, 0x49, /* LD BC,&F40E : OUT (C),C: register 14 */
+      0x01, 0xC0, 0xF6, 0xED, 0x49, /* LD BC,&F6C0 : OUT (C),C: select it */
+      0x01, 0x00, 0xF6, 0xED, 0x49, /* LD BC,&F600 : OUT (C),C: inactive */
+      0x01, 0x92, 0xF7, 0xED, 0x49, /* LD BC,&F792 : OUT (C),C: A in */
+  };
+  length = append(rom, length, select, sizeof select);
+  for (int line = 0; line < CPC_KEY_LINES; line++) {
+    const uint8_t read[] = {
+        0x01, (uint8_t)(0x40 + line),
+        0xF6, 0xED,
+        0x49, /* LD BC,&F64n : OUT (C),C: read line n */
+        0x06, 0xF4,
+        0xED, 0x78, /* LD B,&F4 : IN A,(C) */
+        0xA6, 0x77,
+        0x23, /* AND (HL) : LD (HL),A : INC HL */
+    };
+    length = append(rom, length, read, sizeof read);
+  }
+  const uint8_t release[] = {
+      0x01, 0x82,          0xF7,
+      0xED, 0x49, /* LD BC,&F782 : OUT (C),C: A out */
+      0x01, 0x00,          0xF6,
+      0xED, 0x49,                                /* LD BC,&F600 : OUT (C),C: inactive */
+      0xC3, (uint8_t)loop, (uint8_t)(loop >> 8), /* JP to the loop */
+  };
+  append(rom, length, release, sizeof release);
+  TEST_CHECK(write_file("cpc664.rom", rom, sizeof rom));
 }
 
 static bool files_agree(const char *name, const char *other) {
@@ -495,6 +591,126 @@ static void run_builds_the_type_named(void) {
   type_3s_colours_come_half_a_byte_before_type_4s("run3.png", "run4.png");
 }
 
+/* The bytes a snapshot holds from `at`, or false having said why not. */
+static bool snapshot_bytes(const char *name, size_t size, size_t at, uint8_t *bytes, size_t count) {
+  size_t read = 0;
+  uint8_t *contents = read_file(name, &read);
+  bool whole = contents != NULL && read == size;
+  if (!whole) {
+    TEST_FAIL("%s is missing or not %zu bytes", name, size);
+  } else {
+    memcpy(bytes, contents + at, count);
+  }
+  free(contents);
+  return whole;
+}
+
+/* A 48K snapshot is its 27-byte header and then the RAM from &4000
+   (the World of Spectrum FAQ's "Emulator file formats"); a 128K one lays
+   bank 5 there and bank 2, which a +2 shows at &8000, after it, and holds
+   its program counter at 49179 and its bank register at 49181. */
+#define SPECTRUM_HEADER 27
+#define SPECTRUM_48K_SNAPSHOT (SPECTRUM_HEADER + 0xC000)
+#define PLUS2_SNAPSHOT 131103
+#define PLUS2_PC 49179
+#define PLUS2_BANK_REGISTER 49181
+
+/* The +2 runs its second ROM from the second image it is given, and a
+   snapshot of it resumes there. */
+static void a_plus2_pages_in_its_second_image(void) {
+  const char *boot[] = {"boot", "--machine", "spectrumplus2", "--frames", "2", NULL};
+  if (!exits_with("plus2", boot, 0)) {
+    return;
+  }
+  char snapshot[1024];
+  path_to(snapshot, sizeof snapshot, "plus2.sna");
+  const char *resumed[] = {"run", snapshot, "--machine", "spectrumplus2", "--frames", "1", NULL};
+  if (!exits_with("plus2again", resumed, 0)) {
+    return;
+  }
+  const char *names[] = {"plus2.sna", "plus2again.sna"};
+  for (size_t index = 0; index < 2; index++) {
+    uint8_t marked = 0;
+    uint8_t fields[3];
+    if (snapshot_bytes(names[index], PLUS2_SNAPSHOT, SPECTRUM_HEADER + 0x4000, &marked, 1) &&
+        snapshot_bytes(names[index], PLUS2_SNAPSHOT, PLUS2_PC, fields, 3)) {
+      TEST_EQUAL(marked, 0x2B);                     /* the second image's mark */
+      TEST_EQUAL(fields[0] | fields[1] << 8, 0x0E); /* the second image's loop */
+      TEST_EQUAL(fields[PLUS2_BANK_REGISTER - PLUS2_PC], 0x10);
+    }
+  }
+}
+
+/* Each escape for a Spectrum's key that prints nothing holds it down with
+   CAPS SHIFT, as the legends above a 48K's keys read: the arrows over 5 to
+   8, DELETE over 0 and BREAK over SPACE; and no other key. Half-row 0 holds
+   CAPS SHIFT, 3 the keys 1 to 5, 4 the keys 0 to 6 and 7 SPACE. */
+static void each_spectrum_escape_holds_its_key_with_caps_shift(void) {
+  static const struct {
+    const char *typed;
+    size_t row;
+    uint8_t bit;
+  } escapes[] = {
+      {"\\l", 3, 0x10}, /* 5 */
+      {"\\d", 4, 0x10}, /* 6 */
+      {"\\u", 4, 0x08}, /* 7 */
+      {"\\r", 4, 0x04}, /* 8 */
+      {"\\b", 4, 0x01}, /* 0 */
+      {"\\e", 7, 0x01}, /* SPACE */
+  };
+  for (size_t index = 0; index < sizeof escapes / sizeof escapes[0]; index++) {
+    const char *arguments[] = {"boot", "--machine", "spectrum48",         "--frames",
+                               "1",    "--type",    escapes[index].typed, NULL};
+    uint8_t seen[SPECTRUM_HALF_ROWS];
+    if (!exits_with("keys", arguments, 0) ||
+        !snapshot_bytes("keys.sna", SPECTRUM_48K_SNAPSHOT, SPECTRUM_HEADER + KEYS_SEEN - 0x4000,
+                        seen, SPECTRUM_HALF_ROWS)) {
+      return;
+    }
+    for (size_t row = 0; row < SPECTRUM_HALF_ROWS; row++) {
+      uint8_t expected = 0x1F;
+      expected &= (uint8_t)~(row == escapes[index].row ? escapes[index].bit : 0);
+      expected &= (uint8_t)~(row == 0 ? 0x01 : 0); /* CAPS SHIFT */
+      if ((seen[row] & 0x1F) != expected) {
+        TEST_FAIL("%s left half-row %zu at %02X, expected %02X", escapes[index].typed, row,
+                  seen[row] & 0x1F, expected);
+      }
+    }
+  }
+}
+
+/* A CPC's cursor escapes press its cursor keys, which are line 0's first
+   three bits and line 1's first (cpc.h), and no other key. */
+static void each_cpc_cursor_escape_presses_its_key(void) {
+  static const struct {
+    const char *typed;
+    size_t line;
+    uint8_t bit;
+  } escapes[] = {
+      {"\\u", 0, 0x01},
+      {"\\r", 0, 0x02},
+      {"\\d", 0, 0x04},
+      {"\\l", 1, 0x01},
+  };
+  for (size_t index = 0; index < sizeof escapes / sizeof escapes[0]; index++) {
+    const char *arguments[] = {"boot",   "--machine",          "cpc664", "--frames", "1",
+                               "--type", escapes[index].typed, NULL};
+    uint8_t seen[CPC_KEY_LINES];
+    if (!exits_with("cursor", arguments, 0) ||
+        !snapshot_bytes("cursor.sna", SNAPSHOT_HEADER_SIZE + 0x10000,
+                        SNAPSHOT_HEADER_SIZE + KEYS_SEEN, seen, CPC_KEY_LINES)) {
+      return;
+    }
+    for (size_t line = 0; line < CPC_KEY_LINES; line++) {
+      uint8_t expected = line == escapes[index].line ? (uint8_t)~escapes[index].bit : 0xFF;
+      if (seen[line] != expected) {
+        TEST_FAIL("%s left line %zu at %02X, expected %02X", escapes[index].typed, line, seen[line],
+                  expected);
+      }
+    }
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc != 3) {
     fprintf(stderr, "usage: command_line_test EMULATOR DIRECTORY\n");
@@ -503,11 +719,16 @@ int main(int argc, char **argv) {
   emulator = argv[1];
   directory = argv[2];
   write_cpc_roms();
+  write_cpc_key_recorder();
   write_spectrum_rom();
+  write_plus2_roms();
   TEST_RUN(a_type_outside_0_to_4_is_refused);
   TEST_RUN(a_spectrum_refuses_any_type);
   TEST_RUN(each_type_answers_as_its_own);
   TEST_RUN(no_type_builds_a_type_0);
   TEST_RUN(run_builds_the_type_named);
+  TEST_RUN(a_plus2_pages_in_its_second_image);
+  TEST_RUN(each_spectrum_escape_holds_its_key_with_caps_shift);
+  TEST_RUN(each_cpc_cursor_escape_presses_its_key);
   return TEST_REPORT("command line");
 }

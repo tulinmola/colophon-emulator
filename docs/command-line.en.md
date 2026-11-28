@@ -15,7 +15,7 @@ build/emulator boot --machine NAME [options]
 build/emulator run SNAPSHOT.sna --machine NAME [options]
 ```
 
-`boot` starts a machine from reset. `run` picks one up from a snapshot, fitting the ROMs first so that the snapshot lands in a machine of the right shape. Both then run their frames, type, and write.
+`boot` starts a machine from reset. `run` picks one up from a snapshot, fitting the ROMs first so that the snapshot lands in a machine of the right shape. Both then run their frames, type and wait as they are told, in the order given, and write.
 
 Which machine must always be said. There is no default and there is not going to be one: the emulator holds several machines and none of them is the ordinary case, so a command that does not name one is a question rather than an instruction. Asked without it, the tool lists what it has.
 
@@ -32,27 +32,35 @@ build/emulator boot --machine spectrum48 --screenshot sinclair.png
 build/emulator boot --machine spectrum48 --type 'p2+2\n' --wait 10 --screenshot sum.png
 build/emulator boot --machine spectrum48 --save state.sna
 build/emulator run state.sna --machine spectrum48 --screenshot resumed.png
+build/emulator boot --machine spectrumplus2 --screenshot menu.png
+build/emulator boot --machine spectrumplus2 --type '\d\n' --wait 18 --type 'print 2+2\n' --wait 10 --screenshot sum.png
+build/emulator boot --machine spectrumplus2 --type '\d\d\d\n' --wait 117 --type 'p2+2\n' --wait 10 --screenshot sum48.png
+build/emulator boot --machine spectrumplus2 --tape game.tzx --type '\n' --wait 3000 --screenshot loaded.png
+build/emulator boot --machine spectrumplus2 --type '\d\n' --wait 18 --save plus2.sna
+build/emulator run plus2.sna --machine spectrumplus2 --screenshot resumed.png
 ```
 
-That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry upwards of two hundred meanings between them, and at the start of a line a letter is a keyword — so `p` is PRINT. `--type` holds keys down; what they mean is the firmware's business.
+The `spectrum48` lines are a 48K, and the `p` is not a typo. Its forty keys carry upwards of two hundred meanings between them, and at the start of a line a letter is a keyword — so `p` is PRINT. `--type` holds keys down; what they mean is the firmware's business.
+
+The `spectrumplus2` lines are a +2, which boots to a menu that moves on the cursor keys and chooses on ENTER: `\n` alone chooses the Tape Loader, `\d\n` moves down to 128 BASIC, and `\d\d\d\n` to 48 BASIC. 128 BASIC spells its keywords out letter by letter — "you type each word in full, letter by letter", as Sinclair's [Spectrum 128 Introduction](https://jacekmatulewski.fizyka.umk.pl/zx/doc/man128.txt) puts it — and 48 BASIC is a 48K's, keywords and all. Each takes a moment before it reads the keyboard, which a `--wait` between two `--type`s gives it. A tape for a +2 goes in with `--tape` and is loaded by choosing the Tape Loader, which waits for it.
 
 ## The options
 
 | Option | Effect |
 | --- | --- |
-| `--machine NAME` | Which machine to build: `cpc6128`, `cpc664`, `cpc464` or `spectrum48`. Required. |
+| `--machine NAME` | Which machine to build: `cpc6128`, `cpc664`, `cpc464`, `spectrum48` or `spectrumplus2`. Required. |
 | `--crtc-type N` | A CPC's. Which of the five CRTCs to build it with, 0 to 4. The default is 0, the one type that behaves as itself here; the other four are type 0 with the exceptions [the machine](machine.en.md) sets out. A snapshot given to `run` goes into a machine of the type given here, or a type 0 without it, whatever it was taken on. |
 | `--roms DIRECTORY` | Where the ROM images are. The default is `roms`. |
-| `--frames N` | Frames to run before typing. The default is each machine's own: 78 on a CPC, 128 on a Spectrum. |
-| `--type TEXT` | Type this once the machine has booted. Keys are held down, not characters injected, so what arrives is whatever the firmware makes of the keypress — on a Spectrum, where forty keys carry two hundred meanings, `p` at the start of a line is the PRINT keyword and not a letter. |
-| `--wait N` | Frames to run after typing, for a machine that has been given something to do. The default is 0. |
+| `--frames N` | Frames to run before typing. The default is each machine's own: 78 on a CPC, 128 on a 48K, 89 on a +2. |
+| `--type TEXT` | Type this once the machine has booted. Keys are held down, not characters injected, so what arrives is whatever the firmware makes of the keypress — on a 48K, where forty keys carry two hundred meanings, `p` at the start of a line is the PRINT keyword and not a letter. May be given more than once: up to 64 `--type`s and `--wait`s together. |
+| `--wait N` | Run this many frames more, for a machine that has been given something to do or needs time before the next thing typed. May be given more than once; `--type` and `--wait` are done in the order given, after the frames. |
 | `--sixty-hz` | A CPC's. Wire the refresh link for 60Hz. The firmware reads it and programs the 6845 from a different table. |
 | `--screenshot PATH` | Write the screen here as a PNG. |
-| `--tape PATH` | Put this TZX, CDT or TAP image in the deck. A TAP is a Spectrum's alone: it carries that ROM's timings and nothing else, so a CPC is not handed one. A CPC turns its own motor; a Spectrum has none, so its tape starts once the typing is done. Either way the cassette's leader tape passes first, 5.7 seconds of silence (about 285 frames) less whatever the image kept of its own, which a `--wait` has to allow for. |
+| `--tape PATH` | Put this TZX, CDT or TAP image in the deck. A TAP is a Spectrum's alone: it carries that ROM's timings and nothing else, so a CPC is not handed one. A CPC turns its own motor; a Spectrum has none, so its tape starts when the machine is first left to run after something is typed, or as soon as the boot's frames have run if nothing is. Either way the cassette's leader tape passes first, 5.7 seconds of silence (about 285 frames) less whatever the image kept of its own, which a `--wait` has to allow for. |
 | `--writes PATH` | A CPC's. Write a map of memory writes here as a PNG. |
-| `--sound PATH` | Write the sound here as a 48kHz WAV: a CPC's stereo socket, a Spectrum's speaker. |
-| `--sound-steps PATH` | Write the sound here as it stands at each step of it, unfiltered: 125kHz on a CPC, 3.5MHz on a Spectrum. |
-| `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
+| `--sound PATH` | Write the sound here as a 48kHz WAV: a CPC's stereo socket, a 48K's speaker, a +2's television modulator input. |
+| `--sound-steps PATH` | Write the sound here as it stands at each step of it, unfiltered: 125kHz on a CPC, and every T-state on a Spectrum, 3.5MHz on a 48K and 3.546895MHz on a +2. |
+| `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format — a CPC's, a 48K's and a +2's 128K one: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
 | `--disc PATH` | A CPC's. Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
 | `--disc-b PATH` | A CPC's. And this one in drive B. |
 | `--save-disc PATH` | A CPC's. Write drive A's disc here when the run is done, in the extended layout. Nothing is ever written back to the image that was given. |
@@ -63,7 +71,7 @@ That last pair is a Spectrum, and the `p` is not a typo. Its forty keys carry up
 
 An option marked a CPC's is refused on a Spectrum rather than ignored, and the machine says which one it will not do.
 
-`--type` takes five escapes on a CPC: `\n` for Return, `\t` for Tab, `\e` for Escape, `\b` for Del, and `\\` for a backslash itself. A Spectrum has keys for none of the middle three and takes `\n` and `\\` alone. A character the machine's keyboard cannot produce is refused rather than dropped.
+`--type` takes escapes for the keys that print nothing, and for the backslash that begins them. On every machine: `\n` for Return or ENTER, `\b` for Del or DELETE, and `\u`, `\d`, `\l` and `\r` for the cursor up, down, left and right. `\e` is Escape on a CPC and BREAK on a Spectrum. A CPC also takes `\t` for Tab, a key a Spectrum has not got, and `\\` for a backslash, which a Spectrum keeps in its extended mode, where `--type` does not go. On a Spectrum all but `\n` are a key held with CAPS SHIFT, as the legends above a 48K's keys read: the arrows over 5 to 8, DELETE over 0 and BREAK over SPACE. A character or an escape the machine's keyboard cannot produce is refused rather than dropped.
 
 A disc is read whole into memory, with room after it for every track to be formatted once more, and the medium borrows the buffer for the run. What the machine writes lands in that copy, and reaches a file only through `--save-disc`; the image named by `--disc` is never touched.
 
@@ -77,11 +85,13 @@ Wait states moved that number only from 39. The firmware's boot waits on the 300
 
 A Spectrum also wants the keyboard clear for longer than a CPC before it will take the same key twice — six frames of release rather than three, because its ROM holds a key for five before letting it be pressed again, measured by typing `""` and counting the quotes that arrive.
 
-A Spectrum shows its copyright message by frame 50 and its cursor by 65, but takes no keystroke until 85 — measured by typing `p2+2` one frame later each time and reading the answer back off the screen. Before that the first key is dropped and the rest arrive as nonsense, which is the failure a screenshot alone will not show. Its default of 128 is half again as long as the number that works.
+A 48K shows its copyright message by frame 50 and its cursor by 65, but takes no keystroke until 85 — measured by typing `p2+2` one frame later each time and reading the answer back off the screen. Before that the first key is dropped and the rest arrive as nonsense, which is the failure a screenshot alone will not show. Its default of 128 is half again as long as the number that works.
+
+A +2 tests its eight banks of memory and shows its menu by frame 62, and takes a key held from frame 59, one still down when the menu begins to read — measured by typing `\d\n` one frame later each time and looking for 128 BASIC. A frame sooner, the cursor is dropped and the ENTER opens the Tape Loader instead. Its default of 89 is half again as long. From the menu, 128 BASIC reads the keyboard once a `--wait` of 12 frames has followed the `--type` that chose it, and 48 BASIC once one of 78 has — about as long as a 48K takes from reset, which is what 48 BASIC begins with; the waits above are half again as long, as the defaults are.
 
 ## The picture
 
-By default the screenshot is the window a monitor shows, cropped to each machine's own: 768 by 544 on a CPC, 352 by 264 on a Spectrum. The picture with a border around it, and the frame flyback left out. A CPC's raster lines are drawn twice so the image stands at the proportions a screen had; a Spectrum's are not, because at two samples to a T-state they already do. `--no-double` gives a CPC's raster its true height instead, 768 by 272. `--full-raster` crops nothing at all — the whole beam path, sync and blanking and the corner the flyback never sweeps: 1024 samples by 312 lines on a CPC, doubled to 624 unless `--no-double` says otherwise, and 448 by 312 on a Spectrum.
+By default the screenshot is the window a monitor shows, cropped to each machine's own: 768 by 544 on a CPC, 352 by 264 on both Spectrums. The picture with a border around it, and the frame flyback left out. A CPC's raster lines are drawn twice so the image stands at the proportions a screen had; a Spectrum's are not, because at two samples to a T-state they already do. `--no-double` gives a CPC's raster its true height instead, 768 by 272. `--full-raster` crops nothing at all — the whole beam path, sync and blanking and the corner the flyback never sweeps: 1024 samples by 312 lines on a CPC, doubled to 624 unless `--no-double` says otherwise, 448 by 312 on a 48K and 456 by 311 on a +2.
 
 The PNGs are uncompressed. The format allows it, and it saves us a compressor to get wrong.
 
@@ -103,9 +113,11 @@ The machine is told nothing about any of this. See [observation](observation.en.
 
 `--sound` and `--sound-steps` are both in tenths of a millivolt. A CPC's are the stereo socket, channel A's side on the left as cpcwiki has it: A or C alone at full volume swings its side between 0 and 636mV, 6359 in the file, about a fifth of full scale and quiet beside a modern recording; B alone gives each side 289mV. The socket has no capacitor, so a side carries its DC, and so do the files.
 
-A Spectrum's are one channel, the voltage across its speaker: 2.16V, 21600 in the file, while bit 4 of the last write to port &FE is set, 2.30V while bit 3 is set beside it, and nothing otherwise, so the beeper swings across about seven tenths of full scale. A tape playing is not heard; [the machine](machine.en.md) says why.
+A 48K's are one channel, the voltage across its speaker: 2.16V, 21600 in the file, while bit 4 of the last write to port &FE is set, 2.30V while bit 3 is set beside it, and nothing otherwise, so the beeper swings across about seven tenths of full scale. A tape playing is not heard; [the machine](machine.en.md) says why.
 
-`--sound-steps` is the sound as it stands at each of the machine's steps, and nothing more: integers from integers, the same bytes on every compiler, and the file to measure a game's sound with. A CPC's step is its sound chip's, 125,000 a second. A Spectrum's is the T-state, 3,500,000 a second, because a write can move the speaker on any of them; that costs seven megabytes for every second the machine runs, and a WAV holds 4GiB, about ten minutes of it. Few players will open a WAV at either rate.
+A +2's are one channel too, the voltage at the audio input of the modulator that sends its sound to the television, where the beeper and the sound chip are mixed. It rests at 1.77V, 17702 in the file. Bit 4 lifts it to 2.33V, 2.35V with bit 3 beside it, and bit 3 alone to 1.83V; the sound chip pulls it down, by 0.19V for one channel at its loudest and 0.56V for all three, as far as the beeper lifts it. Every source reaches that input through a capacitor, which the file leaves out, so it carries a DC the modulator never sees; [the machine](machine.en.md) says what else is left out.
+
+`--sound-steps` is the sound as it stands at each of the machine's steps, and nothing more: integers from integers, the same bytes on every compiler, and the file to measure a game's sound with. A CPC's step is its sound chip's, 125,000 a second. A Spectrum's is the T-state, 3,500,000 a second on a 48K and 3,546,895 on a +2, because a write can move the sound on any of them; that costs about seven megabytes for every second the machine runs, and a WAV holds 4GiB, about ten minutes of it. Few players will open a WAV at any of these rates.
 
 `--sound` is the same sound at 48kHz, to be heard. A step that falls between two samples is not moved to one of them; it is laid down where it fell, as a low-pass filter at 24kHz passes it, so a tone keeps its pitch and whatever folds back below 20kHz is at least 80dB down. A sharp edge rings, as it does through any such filter, and overshoots by about a tenth. The machine's time begins at the file's first sample. Its tests grade it as a filter: flat to a hundredth of a decibel up to 15kHz, and nothing folding back below 20kHz within 80dB of the tone.
 

@@ -31,13 +31,20 @@
    barely shows. */
 #define CPC_DEFAULT_FRAMES 78
 
-/* A Spectrum shows its copyright message by frame 50 and its cursor by 65,
-   but does not take a keystroke until 85 — measured by typing PRINT 2+2 one
+/* A 48K shows its copyright message by frame 50 and its cursor by 65, but
+   does not take a keystroke until 85 — measured by typing PRINT 2+2 one
    frame later each time and reading the answer back off the screen. Before
    that the first key is dropped and the rest arrive as nonsense. This is
    half again as long, which leaves room and still costs under three seconds
    of the machine's own time. */
-#define SPECTRUM_DEFAULT_FRAMES 128
+#define SPECTRUM_48K_DEFAULT_FRAMES 128
+
+/* A +2 tests its eight banks and shows its menu by frame 62, and takes a
+   key held from frame 59, still down when the menu begins reading — the
+   frame at which cursor down and ENTER, typed one frame later each time,
+   first reach 128 BASIC. Before that the cursor is dropped and the ENTER
+   chooses the Tape Loader. Half again, as on the 48K. */
+#define SPECTRUM_PLUS2_DEFAULT_FRAMES 89
 
 /* The window a machine's raster is cropped to: the picture with a border
    around it, and the frame flyback left out. On a CPC the display sits at
@@ -48,12 +55,16 @@
 #define CPC_CROP_WIDTH 768
 #define CPC_CROP_HEIGHT 272
 
-/* The Spectrum's picture sits at samples 144-399 of 448 and, once the frame
-   sync has taken its eight lines, at raster lines 56-247 of 312. This is the
-   whole 24 T-states of border the ULA draws either side, and enough lines
-   above and below to leave the window four across for three down. */
-#define SPECTRUM_CROP_LEFT 96
-#define SPECTRUM_CROP_TOP 20
+/* A 48K's picture sits at samples 144-399 of 448 and, once the frame sync
+   has taken its eight lines, at raster lines 56-247 of 312; a +2's at
+   samples 152-407 of 456 and lines 55-246 of 311. Each window is the whole
+   24 T-states of border the ULA draws either side, and enough lines above
+   and below to leave it four across for three down, the same window on
+   both. */
+#define SPECTRUM_48K_CROP_LEFT 96
+#define SPECTRUM_48K_CROP_TOP 20
+#define SPECTRUM_PLUS2_CROP_LEFT 104
+#define SPECTRUM_PLUS2_CROP_TOP 19
 #define SPECTRUM_CROP_WIDTH 352
 #define SPECTRUM_CROP_HEIGHT 264
 
@@ -65,9 +76,12 @@ typedef enum {
 typedef struct {
   machine_kind kind;
   const char *name;
-  const char *rom_file;
+  /* Its firmware, as the images are fetched: one, or a +2's two, which lie
+     one after the other in its ROM. */
+  const char *rom_files[2];
   uint32_t ram_size;
-  bool disc_interface; /* built in; a 464 gets one plugged in with a disc */
+  spectrum_model spectrum_model; /* a Spectrum's */
+  bool disc_interface;           /* built in; a 464 gets one plugged in with a disc */
   const char *description;
 
   /* The raster this machine's monitor paints, the window a picture is cut
@@ -100,41 +114,67 @@ typedef struct {
   .default_frames = CPC_DEFAULT_FRAMES, .double_lines = true
 #define SPECTRUM_48K_RASTER                                                                        \
   .raster_width = SPECTRUM_48K_RASTER_WIDTH, .raster_height = SPECTRUM_48K_RASTER_HEIGHT,          \
-  .crop_left = SPECTRUM_CROP_LEFT, .crop_top = SPECTRUM_CROP_TOP,                                  \
+  .crop_left = SPECTRUM_48K_CROP_LEFT, .crop_top = SPECTRUM_48K_CROP_TOP,                          \
   .crop_width = SPECTRUM_CROP_WIDTH, .crop_height = SPECTRUM_CROP_HEIGHT, .sample_rgb = ula_rgb,   \
-  .default_frames = SPECTRUM_DEFAULT_FRAMES, .double_lines = false
+  .default_frames = SPECTRUM_48K_DEFAULT_FRAMES, .double_lines = false
+#define SPECTRUM_PLUS2_RASTER                                                                      \
+  .raster_width = SPECTRUM_PLUS2_RASTER_WIDTH, .raster_height = SPECTRUM_PLUS2_RASTER_HEIGHT,      \
+  .crop_left = SPECTRUM_PLUS2_CROP_LEFT, .crop_top = SPECTRUM_PLUS2_CROP_TOP,                      \
+  .crop_width = SPECTRUM_CROP_WIDTH, .crop_height = SPECTRUM_CROP_HEIGHT, .sample_rgb = ula_rgb,   \
+  .default_frames = SPECTRUM_PLUS2_DEFAULT_FRAMES, .double_lines = false
 
 /* One machine per name the --machine option accepts. A name earns its place
    here the day the machine behind it boots to its prompt, not before. */
 static const machine_t machines[] = {
     {.kind = MACHINE_CPC,
      .name = "cpc6128",
-     .rom_file = "cpc6128.rom",
+     .rom_files = {"cpc6128.rom"},
      .ram_size = 0x20000,
      .disc_interface = true,
      .description = "Amstrad CPC 6128, 128K, BASIC 1.1",
      CPC_RASTER},
     {.kind = MACHINE_CPC,
      .name = "cpc664",
-     .rom_file = "cpc664.rom",
+     .rom_files = {"cpc664.rom"},
      .ram_size = 0x10000,
      .disc_interface = true,
      .description = "Amstrad CPC 664, 64K, BASIC 1.1",
      CPC_RASTER},
     {.kind = MACHINE_CPC,
      .name = "cpc464",
-     .rom_file = "cpc464.rom",
+     .rom_files = {"cpc464.rom"},
      .ram_size = 0x10000,
      .disc_interface = false,
      .description = "Amstrad CPC 464, 64K, BASIC 1.0",
      CPC_RASTER},
     {.kind = MACHINE_SPECTRUM,
      .name = "spectrum48",
-     .rom_file = "spectrum48.rom",
+     .rom_files = {"spectrum48.rom"},
      .ram_size = SPECTRUM_RAM_48K,
+     .spectrum_model = SPECTRUM_48K,
      .disc_interface = false,
      .description = "Sinclair ZX Spectrum 48K",
      SPECTRUM_48K_RASTER},
+    /* The description carries Sinclair's name, though Amstrad made the
+       machine. The introduction of the manual that Amstrad published for it
+       is headed "Sinclair ZX Spectrum +2" over "128K Home Computer" (printed
+       page 1 of https://archive.org/details/sinclair-zx-spectrum-plus-2-manual;
+       its imprint, printed page 2, reads "Typeset and published by Amstrad").
+       Sinclair User's preview of October 1986
+       (https://oldwww.nvg.ntnu.no/sinclair/computers/zxspectrum/spec_su1086.htm)
+       found "the only physical evidence that this is a machine manufactured
+       by Amstrad (the Sinclair label is the only one used on the outside)" on
+       the machine's ROM chip, "which has the Amstrad name stamped on to it".
+       "grey" in the description is the case's colour, "smart battleship grey"
+       in the same preview, not part of the name. */
+    {.kind = MACHINE_SPECTRUM,
+     .name = "spectrumplus2",
+     .rom_files = {"spectrumplus2-0.rom", "spectrumplus2-1.rom"},
+     .ram_size = SPECTRUM_RAM_128K,
+     .spectrum_model = SPECTRUM_PLUS2,
+     .disc_interface = false,
+     .description = "Sinclair ZX Spectrum +2, grey, 128K",
+     SPECTRUM_PLUS2_RASTER},
 };
 static const size_t machine_count = sizeof machines / sizeof machines[0];
 
@@ -151,6 +191,15 @@ static const size_t machine_count = sizeof machines / sizeof machines[0];
 #define FRAMES_KEY_HELD_SPECTRUM 3
 #define FRAMES_KEY_RELEASED_SPECTRUM 6
 
+/* A --type or a --wait. They are done after the boot's frames, in the order
+   given, so that a machine that must be given time between two things typed
+   at it — a +2 opening 128 BASIC from its menu — can be given it. */
+typedef struct {
+  const char *text; /* to type, or NULL for a wait */
+  long frames;      /* to run, for a wait */
+} step_t;
+#define MOST_STEPS 64
+
 typedef struct {
   const machine_t *machine;
   const char *rom_directory;
@@ -163,16 +212,25 @@ typedef struct {
   const char *save_path;        /* one to write when the frames are done */
   const char *disc_paths[2];    /* images for drives A and B */
   const char *save_disc_path;   /* where drive A's disc goes when done */
-  const char *text;
   /* As given, and judged once the machine is known: a Spectrum refuses any
      value, a good one or not. */
   const char *crtc_type;
   long frames;
-  long frames_after; /* to run once the typing is done */
+  step_t steps[MOST_STEPS];
+  size_t step_count;
   bool full_raster;
   bool double_lines;
   bool fifty_hz;
 } options_t;
+
+static size_t longest_machine_name(void) {
+  size_t longest = 0;
+  for (size_t index = 0; index < machine_count; index++) {
+    size_t length = strlen(machines[index].name);
+    longest = length > longest ? length : longest;
+  }
+  return longest;
+}
 
 static void print_usage(FILE *out) {
   fprintf(out, "usage: emulator boot [options]\n");
@@ -182,25 +240,31 @@ static void print_usage(FILE *out) {
   fprintf(out, "  they are told to, and write out what they are asked for.\n\n");
   fprintf(out, "  --machine NAME      which machine to build; there is no default\n");
   for (size_t index = 0; index < machine_count; index++) {
-    fprintf(out, "                        %-10s %s\n", machines[index].name,
-            machines[index].description);
+    fprintf(out, "                        %-*s %s\n", (int)longest_machine_name(),
+            machines[index].name, machines[index].description);
   }
   fprintf(out, "  --crtc-type N       which CRTC a CPC is built with, 0 to 4 (default 0)\n");
   fprintf(out, "  --roms DIRECTORY    where the ROM images are (default roms)\n");
   fprintf(out, "  --frames N          frames to run before typing (each machine its own)\n");
   fprintf(out, "  --type TEXT         type this once the machine has booted\n");
-  fprintf(out, "                        \\n Return  \\t Tab  \\e Esc  \\b Del  \\\\ backslash\n");
-  fprintf(out, "  --wait N            frames to run after typing (default 0)\n");
+  fprintf(out, "                        --type and --wait may come more than once,\n");
+  fprintf(out, "                        and are done in the order given\n");
+  fprintf(out, "                        \\n Return or ENTER  \\b Del or DELETE\n");
+  fprintf(out, "                        \\u \\d \\l \\r the cursor up, down, left, right\n");
+  fprintf(out, "                        \\e Esc on a CPC, BREAK on a Spectrum\n");
+  fprintf(out, "                        \\t Tab and \\\\ backslash, a CPC's\n");
+  fprintf(out, "  --wait N            run this many frames more\n");
   fprintf(out, "  --sixty-hz          wire the refresh link for 60Hz\n");
   fprintf(out, "  --screenshot PATH   write the screen here as a PNG\n");
   fprintf(out, "  --writes PATH       write a map of memory writes here as a PNG\n");
   fprintf(out, "  --sound PATH        write the sound here as a 48kHz WAV: a CPC's\n");
-  fprintf(out, "                        stereo socket, a Spectrum's speaker\n");
+  fprintf(out, "                        stereo socket, a 48K's speaker, a +2's TV\n");
+  fprintf(out, "                        modulator input\n");
   fprintf(out, "  --sound-steps PATH  and here as it stands at each step of it, 125kHz\n");
-  fprintf(out, "                        on a CPC and 3.5MHz on a Spectrum; both in\n");
-  fprintf(out, "                        tenths of a millivolt\n");
+  fprintf(out, "                        on a CPC and every T-state on a Spectrum; both\n");
+  fprintf(out, "                        in tenths of a millivolt\n");
   fprintf(out, "  --save PATH         write the machine here as an SNA snapshot\n");
-  fprintf(out, "                      each machine writes its own; the two share a name\n");
+  fprintf(out, "                        each machine writes its own; they share a name\n");
   fprintf(out, "  --tape PATH         put this TZX, CDT or TAP image in the deck\n");
   fprintf(out, "                        a TAP carries the Spectrum ROM's timings alone\n");
   fprintf(out, "  --disc PATH         put this DSK image in drive A\n");
@@ -262,8 +326,24 @@ static bool parse_options(int argc, char **argv, int from, options_t *options) {
       options->sound_path = value;
     } else if (strcmp(argument, "--sound-steps") == 0) {
       options->sound_steps_path = value;
-    } else if (strcmp(argument, "--type") == 0) {
-      options->text = value;
+    } else if (strcmp(argument, "--type") == 0 || strcmp(argument, "--wait") == 0) {
+      if (options->step_count == MOST_STEPS) {
+        fprintf(stderr, "--type and --wait are taken %d times at most\n", MOST_STEPS);
+        return false;
+      }
+      step_t *step = &options->steps[options->step_count++];
+      step->text = NULL;
+      step->frames = 0;
+      if (argument[2] == 't') {
+        step->text = value;
+        continue;
+      }
+      char *end = NULL;
+      step->frames = strtol(value, &end, 10);
+      if (end == value || *end != '\0' || step->frames < 0) {
+        fprintf(stderr, "--wait wants a number of frames, not %s\n", value);
+        return false;
+      }
     } else if (strcmp(argument, "--save") == 0) {
       options->save_path = value;
     } else if (strcmp(argument, "--tape") == 0) {
@@ -274,13 +354,6 @@ static bool parse_options(int argc, char **argv, int from, options_t *options) {
       options->disc_paths[1] = value;
     } else if (strcmp(argument, "--save-disc") == 0) {
       options->save_disc_path = value;
-    } else if (strcmp(argument, "--wait") == 0) {
-      char *end = NULL;
-      options->frames_after = strtol(value, &end, 10);
-      if (end == value || *end != '\0' || options->frames_after < 0) {
-        fprintf(stderr, "--wait wants a number of frames, not %s\n", value);
-        return false;
-      }
     } else if (strcmp(argument, "--frames") == 0) {
       char *end = NULL;
       options->frames = strtol(value, &end, 10);
@@ -310,9 +383,11 @@ static bool load_rom(const char *directory, const char *file, uint8_t *rom, size
     return false;
   }
   size_t read = fread(rom, 1, size, handle);
+  bool longer = read == size && fgetc(handle) != EOF;
   fclose(handle);
-  if (read != size) {
-    fprintf(stderr, "%s holds %zu bytes, expected %zu\n", path, read, size);
+  if (read != size || longer) {
+    fprintf(stderr, "%s holds %s%zu bytes, expected %zu\n", path, longer ? "more than " : "", read,
+            size);
     return false;
   }
   return true;
@@ -768,6 +843,18 @@ static bool cpc_type_text(cpc_t *cpc, const char *text) {
         case 'b':
           key = CPC_DELETE;
           break;
+        case 'u':
+          key = CPC_CURSOR_UP;
+          break;
+        case 'd':
+          key = CPC_CURSOR_DOWN;
+          break;
+        case 'l':
+          key = CPC_CURSOR_LEFT;
+          break;
+        case 'r':
+          key = CPC_CURSOR_RIGHT;
+          break;
         case '\\':
           key = cpc_key_for_character('\\', &shifted);
           break;
@@ -807,7 +894,10 @@ static void spectrum_run_frames(spectrum_t *spectrum, long frames) {
 
 /* The screenshot both machines write, from whichever raster they painted. */
 static int write_screenshot(const options_t *options, const uint8_t *framebuffer) {
-  long frames = options->frames + options->frames_after;
+  long frames = options->frames;
+  for (size_t index = 0; index < options->step_count; index++) {
+    frames += options->steps[index].frames;
+  }
   if (options->screenshot_path == NULL) {
     printf("%s: %ld frames\n", options->machine->name, frames);
     return 0;
@@ -840,6 +930,16 @@ static void spectrum_press_and_release(spectrum_t *spectrum, keyboard_key key,
   spectrum_run_frames(spectrum, FRAMES_KEY_RELEASED_SPECTRUM);
 }
 
+/* The keys a Spectrum's escapes stand for that print nothing: each is a
+   key pressed with CAPS SHIFT, as the legends above them read — the arrows
+   over 5 to 8, DELETE over 0 and BREAK over SPACE. */
+static const struct {
+  char escape;
+  char key;
+} spectrum_caps_shifted[] = {
+    {'l', '5'}, {'d', '6'}, {'u', '7'}, {'r', '8'}, {'b', '0'}, {'e', ' '},
+};
+
 static bool spectrum_type_text(spectrum_t *spectrum, const char *text) {
   for (const char *at = text; *at != '\0'; at++) {
     char character = *at;
@@ -852,8 +952,17 @@ static bool spectrum_type_text(spectrum_t *spectrum, const char *text) {
       } else if (character == '\\') {
         key = spectrum_key_for_character('\\', &shift);
       } else {
-        fprintf(stderr, "no such escape: \\%c\n", character);
-        return false;
+        for (size_t index = 0;
+             index < sizeof spectrum_caps_shifted / sizeof spectrum_caps_shifted[0]; index++) {
+          if (spectrum_caps_shifted[index].escape == character) {
+            key = spectrum_key_for_character(spectrum_caps_shifted[index].key, &shift);
+            shift = SPECTRUM_WITH_CAPS_SHIFT;
+          }
+        }
+        if (key == KEYBOARD_NO_KEY) {
+          fprintf(stderr, "no such escape: \\%c\n", character);
+          return false;
+        }
       }
     } else {
       key = spectrum_key_for_character(character, &shift);
@@ -935,9 +1044,14 @@ static int run_spectrum(const options_t *options) {
   if (spectrum_refuses(options)) {
     return 1;
   }
-  static uint8_t rom[SPECTRUM_48K_ROM_SIZE];
-  if (!load_rom(options->rom_directory, options->machine->rom_file, rom, sizeof rom)) {
-    return 1;
+  static uint8_t rom[SPECTRUM_PLUS2_ROM_SIZE];
+  spectrum_model model = options->machine->spectrum_model;
+  size_t image_size = model == SPECTRUM_PLUS2 ? SPECTRUM_PLUS2_ROM_SIZE / 2 : SPECTRUM_48K_ROM_SIZE;
+  for (size_t image = 0; image < 2 && options->machine->rom_files[image] != NULL; image++) {
+    if (!load_rom(options->rom_directory, options->machine->rom_files[image],
+                  rom + image * image_size, image_size)) {
+      return 1;
+    }
   }
 
   size_t raster = (size_t)options->machine->raster_width * options->machine->raster_height;
@@ -951,7 +1065,7 @@ static int run_spectrum(const options_t *options) {
     free(ram);
     return 1;
   }
-  spectrum_init(spectrum, SPECTRUM_48K, ram, options->machine->ram_size, rom);
+  spectrum_init(spectrum, model, ram, options->machine->ram_size, rom);
   spectrum_connect_monitor(spectrum, framebuffer);
 
   int status = 0;
@@ -1010,19 +1124,38 @@ static int run_spectrum(const options_t *options) {
   if (status == 0) {
     spectrum_run_frames(spectrum, options->frames);
   }
-  if (status == 0 && options->text != NULL && !spectrum_type_text(spectrum, options->text)) {
-    status = 1;
-  }
-  /* PLAY is pressed here and not when the tape went in, because a header's
+  /* PLAY is pressed when the machine is first left to run after something
+     was typed at it, and not when the tape went in, because a header's
      pilot runs for five seconds behind the cassette's leader tape, and a
      machine can spend longer than both booting and being typed at. A tape
      started at power-on could play its pilot out before anything asks for
-     it. */
-  if (status == 0) {
-    tape_play(&tape);
+     it. With nothing typed, it is pressed as soon as the boot's frames are
+     done. */
+  size_t play_at = options->step_count;
+  bool typed = false;
+  for (size_t index = 0; index < options->step_count && play_at == options->step_count; index++) {
+    if (options->steps[index].text != NULL) {
+      typed = true;
+    } else if (typed) {
+      play_at = index;
+    }
   }
-  if (status == 0) {
-    spectrum_run_frames(spectrum, options->frames_after);
+  if (!typed) {
+    play_at = 0;
+  }
+  for (size_t index = 0; index <= options->step_count && status == 0; index++) {
+    if (index == play_at) {
+      tape_play(&tape);
+    }
+    if (index == options->step_count) {
+      break;
+    }
+    const step_t *step = &options->steps[index];
+    if (step->text == NULL) {
+      spectrum_run_frames(spectrum, step->frames);
+    } else if (!spectrum_type_text(spectrum, step->text)) {
+      status = 1;
+    }
   }
   if (recording != NULL) {
     if (!recorder_close(recording)) {
@@ -1081,7 +1214,7 @@ static int run_cpc(const options_t *options) {
   }
 
   static uint8_t rom[0x8000];
-  if (!load_rom(options->rom_directory, options->machine->rom_file, rom, sizeof rom)) {
+  if (!load_rom(options->rom_directory, options->machine->rom_files[0], rom, sizeof rom)) {
     return 1;
   }
   /* The disc interface brings its own ROM, as upper ROM 7. */
@@ -1201,11 +1334,13 @@ static int run_cpc(const options_t *options) {
   if (status == 0) {
     cpc_run_frames(cpc, options->frames);
   }
-  if (status == 0 && options->text != NULL && !cpc_type_text(cpc, options->text)) {
-    status = 1;
-  }
-  if (status == 0) {
-    cpc_run_frames(cpc, options->frames_after);
+  for (size_t index = 0; index < options->step_count && status == 0; index++) {
+    const step_t *step = &options->steps[index];
+    if (step->text == NULL) {
+      cpc_run_frames(cpc, step->frames);
+    } else if (!cpc_type_text(cpc, step->text)) {
+      status = 1;
+    }
   }
   if (recording != NULL) {
     if (!recorder_close(recording)) {
@@ -1272,14 +1407,13 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
       .rom_directory = "roms",
       .screenshot_path = NULL,
       .writes_path = NULL,
-      .text = NULL,
       .crtc_type = NULL,
       .snapshot_path = NULL,
       .save_path = NULL,
       .disc_paths = {NULL, NULL},
       .save_disc_path = NULL,
       .frames = -1,
-      .frames_after = 0,
+      .step_count = 0,
       .full_raster = false,
       .double_lines = true,
       .fifty_hz = true,
@@ -1299,7 +1433,8 @@ static int run_machine(int argc, char **argv, bool from_snapshot) {
   if (options.machine == NULL) {
     fprintf(stderr, "which machine? --machine takes one of:\n");
     for (size_t index = 0; index < machine_count; index++) {
-      fprintf(stderr, "  %-10s %s\n", machines[index].name, machines[index].description);
+      fprintf(stderr, "  %-*s %s\n", (int)longest_machine_name(), machines[index].name,
+              machines[index].description);
     }
     return 1;
   }

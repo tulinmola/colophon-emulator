@@ -635,8 +635,8 @@ static void the_plus2s_menu_reads_the_same_through_the_beam(void) {
 }
 
 /* "In 128 BASIC none of these special key entries apply. Instead, you type
-   each word in full, letter by letter" (Spectrum 128 Introduction, Amstrad,
-   1986, transcribed by Damien Burke,
+   each word in full, letter by letter" (Spectrum 128 Introduction, Sinclair
+   Research, 1986, transcribed by Damien Burke,
    https://jacekmatulewski.fizyka.umk.pl/zx/doc/man128.txt). The menu moves
    on CAPS SHIFT and 6, the cursor down. */
 static void the_plus2s_128_basic_does_arithmetic_typed_letter_by_letter(void) {

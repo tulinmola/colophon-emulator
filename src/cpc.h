@@ -119,14 +119,19 @@
 typedef char cpc_keyboard_fits_the_matrix[CPC_KEYBOARD_LINES <= KEYBOARD_MAX_LINES ? 1 : -1];
 
 /* The keys a caller needs by name; the rest it finds through
-   cpc_key_for_character, which cannot reach the last four — three of them
-   print nothing at all, and the fourth repeats a character it already returns. */
+   cpc_key_for_character, which reaches only SPACE among these: the rest
+   print nothing, but for FUNCTION_0, which repeats the 0 it already
+   returns. */
 #define CPC_RETURN CPC_KEY(2, 2)
 #define CPC_SHIFT CPC_KEY(2, 5)
 #define CPC_SPACE CPC_KEY(5, 7)
 #define CPC_TAB CPC_KEY(8, 4)
 #define CPC_ESCAPE CPC_KEY(8, 2)
 #define CPC_DELETE CPC_KEY(9, 7)
+#define CPC_CURSOR_UP CPC_KEY(0, 0)
+#define CPC_CURSOR_RIGHT CPC_KEY(0, 1)
+#define CPC_CURSOR_DOWN CPC_KEY(0, 2)
+#define CPC_CURSOR_LEFT CPC_KEY(1, 0)
 #define CPC_CONTROL CPC_KEY(2, 7)
 #define CPC_COPY CPC_KEY(1, 1)
 #define CPC_CAPS_LOCK CPC_KEY(8, 6)
