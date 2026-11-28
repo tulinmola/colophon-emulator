@@ -178,19 +178,26 @@
  *   World of Spectrum forum, 2014,
  *   https://worldofspectrum.org/forums/discussion/comment/759591/#Comment_759591
  *   — the first line of the picture still drawn from the screen shown
- *   before the OUT for none of its width when the OUT to 0x7FFD begins at
- *   14358, sixteen pixels from 14359 to 14360, thirty-two from 14361 to
- *   14368, and so on in steps of eight T-states, "identical" on the +2.
- *   That the OUT begins where ptime says is Rak's word: he had made the test
- *   so "it always starts the OUT cycle exactly at the advertised T cycle
- *   even on 128k, despite the contention",
- *   https://worldofspectrum.org/forums/discussion/comment/757618/#Comment_757618.
+ *   before the OUT for none of its width when ptime prints 14358, sixteen
+ *   pixels from 14359 to 14360, thirty-two from 14361 to 14368, and so on in
+ *   steps of eight T-states, and on the +2, run with a Zilog, "results are
+ *   again identical to the toastrack".
+ *   Rak had made the test so "it always starts the OUT cycle exactly at the
+ *   advertised T cycle even on 128k, despite the contention",
+ *   https://worldofspectrum.org/forums/discussion/comment/757618/#Comment_757618;
+ *   on this machine it does not, its loop settling up to three T-states
+ *   later, and the same follows, by inference, on a real +2 whose contention
+ *   is what Iborra's photographs of the Timing Test record
+ *   (spectrum_programs_test, which runs ptime and reads Alford's bars).
  *   Of Alford's first run, the day before, Rak wrote that "this already shows
  *   that the OUT really happens during T3, not earlier", the datasheet's T3,
  *   which is the access's last,
  *   https://worldofspectrum.org/forums/discussion/comment/759529/#Comment_759529;
  *   and his table of 2019 gives the row "(early timings, add +1 for late)",
- *   https://worldofspectrum.org/forums/discussion/comment/958908/#Comment_958908.
+ *   https://worldofspectrum.org/forums/discussion/comment/958908/#Comment_958908,
+ *   where this machine, a late one, shows ptime's bars at the T-states the
+ *   row gives an early one, its ptime loop beginning the OUT a T-state after
+ *   the one printed at each of them.
  * - "Please test your ZX128+2 (grey model)", World of Spectrum forum,
  *   2011-2016,
  * https://worldofspectrum.org/forums/discussion/35523/please-test-your-zx128-2-grey-model — +2

@@ -21,6 +21,13 @@
  *   architectural pattern: pin-mask bus, CPU as an ordinary tickable chip. We
  *   follow its pin-layout convention (address bits 0-15, data bits 16-23) and
  *   its tick API.
+ * - Fuse (Philip Kendall and others), its Z80 core,
+ *   https://sourceforge.net/p/fuse-emulator/fuse/ci/master/tree/z80/ — z80.pl
+ *   generates HALT as "z80.halted=1;" and "PC--;", and z80.c takes an
+ *   interrupt with "if( z80.halted ) { PC++; z80.halted = 0; }".
+ * - CPCEC (Cesar Nicolas-Gonzalez), http://cngsoft.no-ip.org/cpcec.htm,
+ *   CPCEC-Z8.H in cpcec-20261030 — the same for a maskable interrupt: HALT
+ *   does "--z80_pc.w", and the interrupt "++z80_pc.w; // skip!".
  */
 #ifndef COLOPHON_Z80_H
 #define COLOPHON_Z80_H
@@ -157,6 +164,21 @@ typedef enum {
 
 /* Which of those the next tick begins. */
 z80_cycle z80_next_cycle(const z80_t *cpu);
+
+/* Where to resume, for a record with no room to say the processor is
+ * halted. While the processor is halted, this core keeps PC on the byte
+ * after the HALT, where its idle fetches go, and `halted` alone says it has
+ * stopped. Fuse and CPCEC keep PC on the HALT itself and step it past when a
+ * maskable interrupt is taken (Sources), so a snapshot of theirs holds the
+ * HALT's own address, and the HALT runs again on restore and halts the
+ * processor where it was. This answers that address while halted, and PC
+ * otherwise. A processor resumed there differs by a single fetch from the
+ * one caught: it fetches the HALT itself, without the HALT pin, where the
+ * halted one would fetch the byte after with the pin held. A machine whose
+ * hold on a fetch depends on its address may hold that one for a different
+ * time, where the HALT is the last byte of one region and the byte after it
+ * the first of another. */
+uint16_t z80_resume_address(const z80_t *cpu);
 
 /* True while the memory read under way takes one of the instruction's own
  * bytes after its opcode fetch: an immediate, an address, a displacement, or

@@ -267,7 +267,7 @@ static bool save_48k(const spectrum_t *spectrum, uint8_t *bytes, const char **pr
   memset(bytes, 0, SPECTRUM_SNAPSHOT_48K_SIZE);
   write_header(spectrum, bytes, stack);
   memcpy(bytes + AT_RAM, spectrum->ram, SPECTRUM_RAM_48K);
-  write16(bytes, AT_RAM + (size_t)(stack - SPECTRUM_RAM_BASE), cpu->pc);
+  write16(bytes, AT_RAM + (size_t)(stack - SPECTRUM_RAM_BASE), z80_resume_address(cpu));
   return true;
 }
 
@@ -279,7 +279,7 @@ static void save_128k(const spectrum_t *spectrum, uint8_t *bytes) {
   memcpy(bytes + AT_BANK_5, bank(spectrum, 5), SPECTRUM_BANK_SIZE);
   memcpy(bytes + AT_BANK_2, bank(spectrum, 2), SPECTRUM_BANK_SIZE);
   memcpy(bytes + AT_PAGED_BANK, bank(spectrum, paged), SPECTRUM_BANK_SIZE);
-  write16(bytes, AT_PC, cpu->pc);
+  write16(bytes, AT_PC, z80_resume_address(cpu));
   bytes[AT_BANK_REGISTER] = spectrum->bank_register;
   bytes[AT_TR_DOS] = 0;
   size_t at = AT_REMAINING_BANKS;

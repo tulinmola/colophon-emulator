@@ -248,7 +248,7 @@ bool cpc_snapshot_save(const cpc_t *cpc, uint8_t *bytes, size_t capacity, const 
   bytes[AT_IY] = cpc->cpu.iyl;
   bytes[AT_IY + 1] = cpc->cpu.iyh;
   write16(bytes, AT_SP, cpc->cpu.sp);
-  write16(bytes, AT_PC, cpc->cpu.pc);
+  write16(bytes, AT_PC, z80_resume_address(&cpc->cpu));
   bytes[AT_INTERRUPT_MODE] = cpc->cpu.im;
   bytes[AT_SHADOW_F] = (uint8_t)cpc->cpu.af_;
   bytes[AT_SHADOW_A] = (uint8_t)(cpc->cpu.af_ >> 8);

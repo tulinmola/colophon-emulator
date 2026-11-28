@@ -518,6 +518,28 @@ static void save_and_restore_running(const uint8_t *program, size_t length) {
   run(&restored, 2000);
 }
 
+/* The format cannot say the processor is halted, so a machine caught
+   halted is written with its program counter on its HALT, as CPCEC writes
+   one (z80.h), and comes back running the HALT again: halted where it was,
+   and not past the HALT.
+   Interrupts are off here, so nothing but the snapshot could move it on. */
+static void a_halted_machine_comes_back_halted(void) {
+  static const uint8_t program[] = {
+      0xF3,             /* DI          */
+      0x31, 0x00, 0xC0, /* LD SP,&C000 */
+      0x76,             /* HALT        */
+      0x3E, 0x42,       /* LD A,&42    */
+      0x18, 0xFE,       /* JR $        */
+  };
+  save_and_restore_running(program, sizeof program);
+  TEST_CHECK(cpc.cpu.halted);
+  TEST_EQUAL(cpc.cpu.pc, 0x0005); /* where its idle fetches go */
+  TEST_EQUAL(bytes[0x23] | bytes[0x24] << 8, 0x0004);
+  TEST_CHECK(restored.cpu.halted);
+  TEST_EQUAL(restored.cpu.pc, 0x0005);
+  TEST_EQUAL(restored.cpu.a, cpc.cpu.a); /* LD A,&42 never ran */
+}
+
 /* A machine saved while port C still gives the PSG a function goes on
    giving it, at every access to the PPI, what port A holds. Here port C
    gives SELECT with &13 on port A, after register 5 was selected, and a
@@ -708,5 +730,6 @@ int main(void) {
   TEST_RUN(a_64k_snapshot_loads_into_a_64k_machine);
   TEST_RUN(a_64k_machine_refuses_a_banked_snapshot);
   TEST_RUN(the_reel_stands_as_the_motor_line_says);
+  TEST_RUN(a_halted_machine_comes_back_halted);
   return TEST_REPORT("cpc snapshot");
 }

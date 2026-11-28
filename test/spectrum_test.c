@@ -972,19 +972,18 @@ static int bytes_fetched_from_the_first_screen(uint32_t io_cycle_begins) {
   return ULA_COLUMNS - second_screen;
 }
 
-/* Alford's run of ptime on a toastrack and a grey +2: the bar of the first
-   screen is none of the line for an OUT whose cycle begins at 14358, two
-   bytes from 14359 to 14360, four from 14361 to 14368, six from 14369 to
-   14376 and eight at 14377 — an early machine's, a T-state later on a late
-   one. That the OUT's cycle begins where ptime says is Rak's: he made the
-   test so "it always starts the OUT cycle exactly at the advertised T cycle
-   even on 128k, despite the contention" (World of Spectrum forum, 2014,
-   https://worldofspectrum.org/forums/discussion/comment/757618/#Comment_757618).
-   Port 0x7FFD is charged on all four of its T-states, Rak's "C:1x4"
-   (spectrum.h). A register that latches on the last of them, after its
-   hold, gives this staircase; one that latched a T-state sooner, as the
-   processor puts the byte out, gives a step a T-state early at four of its
-   eight rows. */
+/* Alford's run of ptime on a toastrack and a grey +2: the bar of the screen
+   shown before the OUT is none of the line for an OUT ptime prints as
+   14358, two bytes from 14359 to 14360, four from 14361 to 14368, six from
+   14369 to 14376 and eight at 14377. Run on this machine, ptime's own loop
+   begins the OUT a T-state after the one it prints at each of those eight
+   T-states, and from none to three after it elsewhere (spectrum.h,
+   spectrum_programs_test); here each OUT begins where that loop begins it,
+   a T-state after the one printed. Port 0x7FFD is
+   charged on all four of its T-states, Rak's "C:1x4" (spectrum.h). A
+   register that latches on the last of them, after its hold, gives this
+   staircase; one that latched a T-state sooner, as the processor puts the
+   byte out, gives a step a T-state early at four of its eight rows. */
 static void the_screen_switches_where_ptime_finds_it(void) {
   const struct {
     uint32_t begins;

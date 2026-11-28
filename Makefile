@@ -334,8 +334,10 @@ test-firmware: $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
 	@$(BUILD)/spectrum_firmware_test roms
 
 # Programs written by others to test a Spectrum's timing, each judged by
-# what a real machine showed: a floating bus self test, a suite of timing
-# tests, and the border and screen tests a table of measurements records.
+# what a real machine showed: on the 48K Floating Spy's floating bus self
+# test, a suite of timing tests, and the border and screen tests a table of
+# measurements records; on the +2 that self test again, two programs held
+# to photographs of a grey +2, and a screen switch held to a recorded run.
 test-spectrum-programs: $(BUILD)/spectrum_programs_test
 	@sh tools/fetch-roms.sh
 	@sh tools/fetch-tapes.sh

@@ -20,7 +20,10 @@
  * holds is put where it rests. Nor where the cassette's reel stands, which
  * follows the motor line late (cpc.c): a load puts it at speed if the line
  * is high and still if it is low, so a snapshot taken while the reel ran on
- * after the line fell comes back with it stopped.
+ * after the line fell comes back with it stopped. Nor whether the
+ * processor is halted: a machine caught halted is written with its program
+ * counter on the HALT, as CPCEC writes one (z80.h), so it comes back
+ * running the HALT again and halts where it was.
  *
  * One field departs from the format's notes. Note 17 asks for the PSG's
  * selected register at &5A to be 0 to 15, "For CPCEMU compatibility", but a

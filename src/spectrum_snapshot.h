@@ -73,6 +73,11 @@
  * bit 2, which is what the RETN would have put in IFF1, so that MAME and
  * this reader resume the same machine; reading ignores it.
  *
+ * Neither format has a bit for a halted processor. A machine caught
+ * halted is written with its program counter on the HALT, as Fuse writes
+ * one (z80.h), so it comes back running the HALT again and halts where it
+ * was.
+ *
  * There is no file handling here: bytes in, bytes out, like everything else
  * in this directory.
  *

@@ -21,6 +21,11 @@ static uint8_t bytes[SPECTRUM_SNAPSHOT_48K_SIZE];
 /* Where the program below counts its interrupts, as an index into the RAM. */
 #define COUNTER (0x8000 - SPECTRUM_RAM_BASE)
 
+/* Where the program below halts to wait for an interrupt. A machine caught
+   waiting there is written with its program counter on the HALT, which runs
+   again on restore. */
+#define WAIT_HALT 0x001D
+
 /* A program in the ROM that counts frames into RAM, so a resumed machine has
    something to keep doing and somewhere for the difference to show. */
 static void power_on(spectrum_t *machine, uint8_t *ram, uint32_t ram_size) {
@@ -36,7 +41,7 @@ static void power_on(spectrum_t *machine, uint8_t *ram, uint32_t ram_size) {
       0xD9,                   /* EXX         */
       0x3E, 0x02, 0xD3, 0xFE, /* LD A,2 : OUT (&FE),A — border 2 */
       0xFB,                   /* EI          */
-      0x76,                   /* HALT        */
+      0x76,                   /* HALT, at WAIT_HALT */
       0x18, 0xFD,             /* JR -3       */
   };
   static const uint8_t handler[] = {0x34, 0xFB, 0xED, 0x4D}; /* INC (HL) : EI : RETI */
@@ -175,7 +180,7 @@ static void a_machine_survives_the_round_trip(void) {
   TEST_EQUAL((restored.cpu.ixh << 8) | restored.cpu.ixl, 0xBBAA);
   TEST_EQUAL((restored.cpu.iyh << 8) | restored.cpu.iyl, 0xDDCC);
   TEST_EQUAL(restored.cpu.hl_, 0x2211);
-  TEST_EQUAL(restored.cpu.pc, saved.cpu.pc);
+  TEST_EQUAL(restored.cpu.pc, WAIT_HALT);
   TEST_EQUAL(restored.cpu.sp, saved.cpu.sp); /* the push is undone by the pop */
   TEST_EQUAL(restored.cpu.i, saved.cpu.i);
   TEST_EQUAL(restored.cpu.r, saved.cpu.r);
@@ -279,17 +284,18 @@ static void the_program_counter_costs_two_bytes_of_the_snapshot(void) {
   TEST_EQUAL(spectrum_peek(&saved, (uint16_t)(sp - 1)), below[1]);
 
   /* The snapshot is not: its stack pointer is two lower, and where those
-     bytes were it holds the program counter. */
+     bytes were it holds the program counter, on the HALT the machine waits
+     at. */
   uint32_t at = 0x1B + (uint32_t)(sp - 2 - SPECTRUM_RAM_BASE);
   TEST_EQUAL(bytes[0x17] | (bytes[0x18] << 8), (uint16_t)(sp - 2));
-  TEST_EQUAL(bytes[at], (uint8_t)pc);
-  TEST_EQUAL(bytes[at + 1], (uint8_t)(pc >> 8));
+  TEST_EQUAL(bytes[at], (uint8_t)WAIT_HALT);
+  TEST_EQUAL(bytes[at + 1], (uint8_t)(WAIT_HALT >> 8));
 
   /* And loading pops them straight back off. */
   power_on(&restored, restored_ram, SPECTRUM_RAM_48K);
   TEST_CHECK(spectrum_snapshot_load(&restored, bytes, SPECTRUM_SNAPSHOT_48K_SIZE, &problem));
   TEST_EQUAL(restored.cpu.sp, sp);
-  TEST_EQUAL(restored.cpu.pc, pc);
+  TEST_EQUAL(restored.cpu.pc, WAIT_HALT);
 }
 
 /* A stack with no room beneath it cannot be written down at all. */
@@ -494,7 +500,7 @@ static void a_plus2_survives_the_round_trip_whole(void) {
   restored.latching_bank_register = true;
   restored.pins = z80_set_data(restored.pins, 0x10);
   TEST_CHECK(spectrum_snapshot_load(&restored, plus2_bytes, SPECTRUM_SNAPSHOT_128K_SIZE, &problem));
-  TEST_EQUAL(restored.cpu.pc, saved.cpu.pc);
+  TEST_EQUAL(restored.cpu.pc, WAIT_HALT);
   TEST_EQUAL(restored.cpu.sp, saved.cpu.sp); /* nothing pushed: the PC has a field */
   TEST_EQUAL((restored.cpu.b << 8) | restored.cpu.c, 0x1234);
   TEST_EQUAL(restored.cpu.hl_, 0x2211);
@@ -518,7 +524,55 @@ static void a_plus2_survives_the_round_trip_whole(void) {
   }
   TEST_EQUAL(plus2_bytes[49181], 0x03);
   TEST_EQUAL(plus2_bytes[49182], 0);
-  TEST_EQUAL(plus2_bytes[49179] | plus2_bytes[49180] << 8, saved.cpu.pc);
+  TEST_EQUAL(plus2_bytes[49179] | plus2_bytes[49180] << 8, WAIT_HALT);
+}
+
+/* Neither format can say the processor is halted, so a machine caught
+   halted is written with its program counter on its HALT, as Fuse writes
+   one (z80.h), and comes back running the HALT again: halted where it was,
+   and not past the HALT.
+   Interrupts are off here, so nothing but the snapshot could move it on. */
+static void a_halted_machine_comes_back_halted(void) {
+  static const uint8_t program[] = {
+      0xF3,             /* DI          */
+      0x31, 0x00, 0x80, /* LD SP,&8000 */
+      0x76,             /* HALT        */
+      0x3E, 0x42,       /* LD A,&42    */
+      0x18, 0xFE,       /* JR $        */
+  };
+  const spectrum_model models[] = {SPECTRUM_48K, SPECTRUM_PLUS2};
+  const uint32_t ram_sizes[] = {SPECTRUM_RAM_48K, SPECTRUM_RAM_128K};
+  for (size_t index = 0; index < 2; index++) {
+    memset(rom, 0, sizeof rom);
+    memcpy(rom, program, sizeof program);
+    spectrum_init(&saved, models[index], plus2_saved_ram, ram_sizes[index], rom);
+    const char *problem = NULL;
+
+    /* Not halted, it is written where it stands: here past the DI. */
+    spectrum_tick(&saved);
+    spectrum_finish_instruction(&saved);
+    TEST_EQUAL(saved.cpu.pc, 0x0001);
+    TEST_CHECK(!saved.cpu.halted);
+    TEST_CHECK(spectrum_snapshot_save(&saved, plus2_bytes, sizeof plus2_bytes, &problem));
+    spectrum_init(&restored, models[index], plus2_restored_ram, ram_sizes[index], rom);
+    TEST_CHECK(
+        spectrum_snapshot_load(&restored, plus2_bytes, spectrum_snapshot_size(&saved), &problem));
+    TEST_EQUAL(restored.cpu.pc, saved.cpu.pc);
+
+    run_to_the_wait_loop(&saved, 1);
+    TEST_CHECK(saved.cpu.halted);
+    TEST_EQUAL(saved.cpu.pc, 0x0005); /* where its idle fetches go */
+    TEST_CHECK(spectrum_snapshot_save(&saved, plus2_bytes, sizeof plus2_bytes, &problem));
+
+    spectrum_init(&restored, models[index], plus2_restored_ram, ram_sizes[index], rom);
+    TEST_CHECK(
+        spectrum_snapshot_load(&restored, plus2_bytes, spectrum_snapshot_size(&saved), &problem));
+    TEST_EQUAL(restored.cpu.pc, 0x0004);
+    run(&restored, 2);
+    TEST_CHECK(restored.cpu.halted);
+    TEST_EQUAL(restored.cpu.pc, 0x0005);
+    TEST_EQUAL(restored.cpu.a, saved.cpu.a); /* LD A,&42 never ran */
+  }
 }
 
 /* Paged at 0xC000, bank 5 or 2 is written a second time in third place, and
@@ -636,5 +690,6 @@ int main(void) {
   TEST_RUN(a_plus2s_lock_comes_back);
   TEST_RUN(a_plus2s_sound_chip_comes_back_reset);
   TEST_RUN(a_128k_snapshot_that_cannot_be_a_plus2s_is_refused);
+  TEST_RUN(a_halted_machine_comes_back_halted);
   return TEST_REPORT("spectrum snapshot");
 }

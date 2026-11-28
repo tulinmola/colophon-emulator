@@ -1511,6 +1511,10 @@ bool z80_instruction_complete(const z80_t *cpu) {
   return cpu->step == M1_T1 && cpu->prefix == 0 && cpu->accepting == ACCEPT_NONE;
 }
 
+uint16_t z80_resume_address(const z80_t *cpu) {
+  return cpu->halted ? (uint16_t)(cpu->pc - 1) : cpu->pc;
+}
+
 z80_cycle z80_next_cycle(const z80_t *cpu) {
   switch (cpu->step) {
     case M1_T1:
