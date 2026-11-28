@@ -171,8 +171,16 @@
  * falling on a line's end. WinZ80's loader decodes the counter and leaves it
  * unused, and its writer puts the low count one higher than World of Spectrum's
  * page has it, so its files resume a T-state early, and one taken on a
- * quarter's first T-state at the top. Wherever the beam starts, the monitor
- * waits for the next frame's sync, and FLASH begins its count.
+ * quarter's first T-state at the top. Fuse's libspectrum reads the 760 of the
+ * 773 that both take as this reader does — every register, page and sound
+ * register — and puts the beam in the same place wherever the count is in
+ * range, numbering it one lower, as it counts. It differs only where the count
+ * says nothing. A file without one it places at its default T-state of 69664,
+ * whatever the machine: 224 T-states before a 48K's frame ends and 1244 before
+ * a +2's. One whose count is out of range it places where its arithmetic lands,
+ * if that is inside the frame, and otherwise at its T-state 0, a tick after the
+ * top here. Wherever the beam starts, the monitor waits for the next frame's
+ * sync, and FLASH begins its count.
  *
  * Sources:
  * - "Emulator file formats" (World of Spectrum FAQ),
@@ -230,7 +238,9 @@
  *   — its reading of the counter, "( ( ( extra_header[25] + 1 ) % 4 ) + 1 )
  *   * quarter_tstates - ( extra_header[23] + extra_header[24] * 0x100 + 1
  *   )", "correct, even if it does disagree with Z80 v3.05's `z80dump'",
- *   which is the reading here; and that bit 7 is Spectaculator's.
+ *   which is the reading here; and that bit 7 is Spectaculator's. Its
+ *   snap_accessors.txt gives the T-state a snapshot without a count gets,
+ *   "libspectrum_dword tstates 0 69664".
  * - World of Spectrum's archive, its June 2017 mirror,
  *   https://archive.org/details/World_of_Spectrum_June_2017_Mirror — the
  *   773 files of 400 games and 100 utilities drawn at random and of every
