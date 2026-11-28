@@ -12,10 +12,10 @@ A C compiler and `make` are the whole toolchain. `make` builds, `make roms` fetc
 
 ```sh
 build/emulator boot --machine NAME [options]
-build/emulator run SNAPSHOT.sna --machine NAME [options]
+build/emulator run SNAPSHOT --machine NAME [options]
 ```
 
-`boot` starts a machine from reset. `run` picks one up from a snapshot, fitting the ROMs first so that the snapshot lands in a machine of the right shape. Both then run their frames, type and wait as they are told, in the order given, and write.
+`boot` starts a machine from reset. `run` picks one up from a snapshot, fitting the ROMs first so that the snapshot lands in a machine of the right shape. A snapshot is an SNA, or for a Spectrum a `.z80` when its name ends in `.z80`, in capitals or not; the name decides the format, as `--machine` decides the machine, and the file is never sniffed. Both then run their frames, type and wait as they are told, in the order given, and write.
 
 Which machine must always be said. There is no default and there is not going to be one: the emulator holds several machines and none of them is the ordinary case, so a command that does not name one is a question rather than an instruction. Asked without it, the tool lists what it has.
 
@@ -38,6 +38,7 @@ build/emulator boot --machine spectrumplus2 --type '\d\d\d\n' --wait 117 --type 
 build/emulator boot --machine spectrumplus2 --tape game.tzx --type '\n' --wait 3000 --screenshot loaded.png
 build/emulator boot --machine spectrumplus2 --type '\d\n' --wait 18 --save plus2.sna
 build/emulator run plus2.sna --machine spectrumplus2 --screenshot resumed.png
+build/emulator run game.z80 --machine spectrumplus2 --wait 50 --screenshot game.png
 ```
 
 The `spectrum48` lines are a 48K, and the `p` is not a typo. Its forty keys carry upwards of two hundred meanings between them, and at the start of a line a letter is a keyword — so `p` is PRINT. `--type` holds keys down; what they mean is the firmware's business.
@@ -60,7 +61,7 @@ The `spectrumplus2` lines are a +2, which boots to a menu that moves on the curs
 | `--writes PATH` | A CPC's. Write a map of memory writes here as a PNG. |
 | `--sound PATH` | Write the sound here as a 48kHz WAV: a CPC's stereo socket, a 48K's speaker, a +2's television modulator input. |
 | `--sound-steps PATH` | Write the sound here as it stands at each step of it, unfiltered: 125kHz on a CPC, and every T-state on a Spectrum, 3.5MHz on a 48K and 3.546895MHz on a +2. |
-| `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format — a CPC's, a 48K's and a +2's 128K one: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. |
+| `--save PATH` | Write the machine here as an SNA snapshot. Each machine writes its own format — a CPC's, a 48K's and a +2's 128K one: they share the name `.sna` and nothing else, and `--machine` decides which is meant rather than the file being sniffed. A `.z80` is read and never written, and a Spectrum refuses to write an SNA under a name ending in `.z80`, which `run` would read back as a `.z80`. |
 | `--disc PATH` | A CPC's. Put this DSK image in drive A. A 464 gets the disc interface plugged in to take it. |
 | `--disc-b PATH` | A CPC's. And this one in drive B. |
 | `--save-disc PATH` | A CPC's. Write drive A's disc here when the run is done, in the extended layout. Nothing is ever written back to the image that was given. |

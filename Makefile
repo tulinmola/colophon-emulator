@@ -321,9 +321,9 @@ roms:
 discs:
 	@sh tools/fetch-discs.sh
 
-# Every tape image the tiers read, likewise.
-tapes:
-	@sh tools/fetch-tapes.sh
+# Every program the tiers use, tapes and snapshots, likewise.
+programs:
+	@sh tools/fetch-programs.sh
 
 # The machine tier: the real firmware, booted and typed at, and a real disc
 # catalogued. Needs the ROM and disc images, so it fetches them first.
@@ -335,13 +335,15 @@ test-firmware: $(BUILD)/cpc_firmware_test $(BUILD)/spectrum_firmware_test
 
 # Programs written by others to test a Spectrum's timing, each judged by
 # what a real machine showed: on the 48K Floating Spy's floating bus self
-# test, a suite of timing tests, and the border and screen tests a table of
-# measurements records; on the +2 that self test again, two programs held
-# to photographs of a grey +2, and a screen switch held to a recorded run.
+# test, a suite of timing tests, the border and screen tests a table of
+# measurements records, and an interrupt test held to photographs of two
+# 48Ks, from its tape and its .z80; on the +2 that self test again, two
+# programs held to photographs of a grey +2, and a screen switch held to a
+# recorded run. And a +3's .z80, which the +2 must refuse.
 test-spectrum-programs: $(BUILD)/spectrum_programs_test
 	@sh tools/fetch-roms.sh
-	@sh tools/fetch-tapes.sh
-	@$(BUILD)/spectrum_programs_test roms test/data/tapes
+	@sh tools/fetch-programs.sh
+	@$(BUILD)/spectrum_programs_test roms test/data/programs
 
 # Shaker: Longshot's CRTC acid tests, walked module by module, and what they
 # said set against the copy on record in test/, one to a version and a type.
@@ -415,4 +417,4 @@ lint:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all roms discs tapes sources-agree FORCE bench test test-sanitized test-firmware test-spectrum-programs test-shaker test-demos test-single-step test-exerciser test-all format format-check lint clean
+.PHONY: all roms discs programs sources-agree FORCE bench test test-sanitized test-firmware test-spectrum-programs test-shaker test-demos test-single-step test-exerciser test-all format format-check lint clean

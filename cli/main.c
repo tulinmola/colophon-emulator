@@ -6,6 +6,7 @@
  * FILE pointer. Everything here is deterministic: a run is a machine, a ROM
  * and a number of frames, and the same three produce the same bytes.
  */
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -234,10 +235,12 @@ static size_t longest_machine_name(void) {
 
 static void print_usage(FILE *out) {
   fprintf(out, "usage: emulator boot [options]\n");
-  fprintf(out, "       emulator run SNAPSHOT.sna [options]\n\n");
+  fprintf(out, "       emulator run SNAPSHOT [options]\n\n");
   fprintf(out, "  boot starts a machine from reset; run picks one up from a\n");
-  fprintf(out, "  snapshot. Both then run for a number of frames, type what\n");
-  fprintf(out, "  they are told to, and write out what they are asked for.\n\n");
+  fprintf(out, "  snapshot: an SNA, or for a Spectrum a .z80 if its name ends\n");
+  fprintf(out, "  in .z80, in either case. Both then run for a number of frames,\n");
+  fprintf(out, "  type what they are told to, and write out what they are asked\n");
+  fprintf(out, "  for.\n\n");
   fprintf(out, "  --machine NAME      which machine to build; there is no default\n");
   for (size_t index = 0; index < machine_count; index++) {
     fprintf(out, "                        %-*s %s\n", (int)longest_machine_name(),
@@ -284,6 +287,24 @@ static const machine_t *machine_named(const char *name) {
     }
   }
   return NULL;
+}
+
+/* Whether a file's name ends in `extension`, given in lower case, matched
+   whatever the name's case: World of Spectrum's archive names most of its
+   snapshots GAME.Z80 and some game.z80. */
+static bool has_extension(const char *path, const char *extension) {
+  size_t path_length = strlen(path);
+  size_t extension_length = strlen(extension);
+  if (path_length < extension_length) {
+    return false;
+  }
+  const char *tail = path + path_length - extension_length;
+  for (size_t index = 0; index < extension_length; index++) {
+    if (tolower((unsigned char)tail[index]) != extension[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /* Returns false having reported the problem. */
@@ -977,7 +998,8 @@ static bool spectrum_type_text(spectrum_t *spectrum, const char *text) {
 }
 
 /* A Spectrum has no CRTC, no disc and no links to solder, so the options
-   that reach those are refused rather than quietly ignored. */
+   that reach those are refused rather than quietly ignored; and an SNA is
+   not written under a name `run` would read back as a .z80. */
 static bool spectrum_refuses(const options_t *options) {
   if (options->crtc_type != NULL) {
     fprintf(stderr, "%s has no CRTC; --crtc-type is for ", options->machine->name);
@@ -994,6 +1016,11 @@ static bool spectrum_refuses(const options_t *options) {
       }
     }
     fprintf(stderr, "\n");
+    return true;
+  }
+  if (options->save_path != NULL && has_extension(options->save_path, ".z80")) {
+    fprintf(stderr, "--save writes an SNA, and %s would read %s back as a .z80\n",
+            options->machine->name, options->save_path);
     return true;
   }
   const struct {
@@ -1015,7 +1042,7 @@ static bool spectrum_refuses(const options_t *options) {
 }
 
 static bool spectrum_save_snapshot(const spectrum_t *spectrum, const char *path) {
-  size_t size = spectrum_snapshot_size(spectrum);
+  size_t size = spectrum_snapshot_sna_size(spectrum);
   if (size == 0) {
     fprintf(stderr, "no snapshot format describes this machine\n");
     return false;
@@ -1026,7 +1053,7 @@ static bool spectrum_save_snapshot(const spectrum_t *spectrum, const char *path)
     return false;
   }
   const char *problem = NULL;
-  bool ok = spectrum_snapshot_save(spectrum, contents, size, &problem);
+  bool ok = spectrum_snapshot_save_sna(spectrum, contents, size, &problem);
   if (!ok) {
     fprintf(stderr, "this machine %s\n", problem);
   } else {
@@ -1106,7 +1133,10 @@ static int run_spectrum(const options_t *options) {
       status = 1;
     } else {
       const char *problem = NULL;
-      if (!spectrum_snapshot_load(spectrum, contents, size, &problem)) {
+      bool loaded = has_extension(options->snapshot_path, ".z80")
+                        ? spectrum_snapshot_load_z80(spectrum, contents, size, &problem)
+                        : spectrum_snapshot_load_sna(spectrum, contents, size, &problem);
+      if (!loaded) {
         fprintf(stderr, "%s %s\n", options->snapshot_path, problem);
         status = 1;
       }

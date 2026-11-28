@@ -123,9 +123,11 @@ static bool redirect(int descriptor, const char *name) {
 /* Runs the emulator with `arguments`, which end at a NULL, on this test's
    ROMs, asking it for `name`.sna and `name`.png, the whole raster at one
    image line to each raster line, with whatever a run before left under
-   those names removed first. What it prints is kept in stdout.txt and
-   stderr.txt. Returns its exit status, 127 where the binary could not be
-   run, or -1 where it was never started or did not exit. */
+   those names removed first. The asking comes after the command and its
+   snapshot and before the rest of `arguments`, so that an option of the
+   test's own, given later, is the one taken. What it prints is kept in
+   stdout.txt and stderr.txt. Returns its exit status, 127 where the binary
+   could not be run, or -1 where it was never started or did not exit. */
 static int emulate(const char *name, const char *const arguments[]) {
   char snapshot[64];
   char screenshot[64];
@@ -146,15 +148,20 @@ static int emulate(const char *name, const char *const arguments[]) {
   const char *line[32];
   size_t count = 0;
   line[count++] = emulator;
-  for (size_t index = 0; arguments[index] != NULL; index++) {
-    if (count + always_count + 1 >= sizeof line / sizeof line[0]) {
+  size_t index = 0;
+  size_t leading = arguments[0] != NULL && strcmp(arguments[0], "run") == 0 ? 2 : 1;
+  for (; index < leading && arguments[index] != NULL; index++) {
+    line[count++] = arguments[index];
+  }
+  for (size_t always_index = 0; always_index < always_count; always_index++) {
+    line[count++] = always[always_index];
+  }
+  for (; arguments[index] != NULL; index++) {
+    if (count + 1 >= sizeof line / sizeof line[0]) {
       TEST_FAIL("%s is given more arguments than the line holds", name);
       return -1;
     }
     line[count++] = arguments[index];
-  }
-  for (size_t index = 0; index < always_count; index++) {
-    line[count++] = always[index];
   }
   line[count] = NULL;
 
@@ -641,6 +648,61 @@ static void a_plus2_pages_in_its_second_image(void) {
   }
 }
 
+/* A Spectrum's snapshot is read as a .z80 when its name ends so, in either
+   case, and as an SNA otherwise: the same bytes under the two names load
+   once and are refused once. These are a first-version .z80 (Lunter's
+   manual for Z80 3.02, §5.5): thirty bytes of registers, the program
+   counter at byte 6 and interrupts off, then the 48K uncompressed, in
+   which a loop at &C000 keeps the processor off the ROM. */
+static void a_z80_is_read_by_its_name(void) {
+  static uint8_t file[30 + 0xC000];
+  memset(file, 0, sizeof file);
+  file[6] = 0x00; /* PC &C000 */
+  file[7] = 0xC0;
+  file[8] = 0x00; /* SP &BF00 */
+  file[9] = 0xBF;
+  file[29] = 0x01; /* interrupt mode 1 */
+  for (size_t at = 0; at < 0xC000; at++) {
+    file[30 + at] = (uint8_t)(at % 249);
+  }
+  file[30 + 0x8000] = 0x18; /* JR -2, at &C000 */
+  file[30 + 0x8001] = 0xFE;
+  if (!write_file("GAME.Z80", file, sizeof file) || !write_file("game.sna", file, sizeof file)) {
+    TEST_FAIL("could not write the snapshots");
+    return;
+  }
+  char z80[1024];
+  char sna[1024];
+  path_to(z80, sizeof z80, "GAME.Z80");
+  path_to(sna, sizeof sna, "game.sna");
+  const char *as_z80[] = {"run", z80, "--machine", "spectrum48", "--frames", "1", NULL};
+  const char *as_sna[] = {"run", sna, "--machine", "spectrum48", "--frames", "1", NULL};
+  TEST_CHECK(exits_with("fromz80", as_z80, 0));
+  TEST_CHECK(exits_with("fromsna", as_sna, 1));
+  uint8_t ram[0x40];
+  if (snapshot_bytes("fromz80.sna", SPECTRUM_48K_SNAPSHOT, SPECTRUM_HEADER + 0x1000, ram,
+                     sizeof ram)) {
+    for (size_t at = 0; at < sizeof ram; at++) {
+      TEST_EQUAL(ram[at], (0x1000 + at) % 249);
+    }
+  }
+  /* And since the name decides, a Spectrum's SNA is not written under a
+     .z80's; a CPC, which reads any name as an SNA, writes one there. */
+  char saved_as_z80[1024];
+  path_to(saved_as_z80, sizeof saved_as_z80, "saved.Z80");
+  remove_file("saved.Z80");
+  const char *save_as_z80[] = {"boot", "--machine", "spectrum48", "--save", saved_as_z80, NULL};
+  char reason[1200];
+  snprintf(reason, sizeof reason,
+           "--save writes an SNA, and spectrum48 would read %s back as a .z80", saved_as_z80);
+  refused_saying(save_as_z80, reason);
+  TEST_CHECK(!file_exists("saved.Z80"));
+  const char *cpc_save_as_z80[] = {"boot", "--machine", "cpc6128",    "--frames",
+                                   "1",    "--save",    saved_as_z80, NULL};
+  TEST_CHECK(exits_with("cpcz80", cpc_save_as_z80, 0));
+  TEST_CHECK(file_exists("saved.Z80"));
+}
+
 /* Each escape for a Spectrum's key that prints nothing holds it down with
    CAPS SHIFT, as the legends above a 48K's keys read: the arrows over 5 to
    8, DELETE over 0 and BREAK over SPACE; and no other key. Half-row 0 holds
@@ -728,6 +790,7 @@ int main(int argc, char **argv) {
   TEST_RUN(no_type_builds_a_type_0);
   TEST_RUN(run_builds_the_type_named);
   TEST_RUN(a_plus2_pages_in_its_second_image);
+  TEST_RUN(a_z80_is_read_by_its_name);
   TEST_RUN(each_spectrum_escape_holds_its_key_with_caps_shift);
   TEST_RUN(each_cpc_cursor_escape_presses_its_key);
   return TEST_REPORT("command line");

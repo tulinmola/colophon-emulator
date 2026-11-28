@@ -1,23 +1,26 @@
 #!/bin/sh
-# Downloads the tape images the tiers read into test/data/tapes/, pinned by
-# hash the way the firmware and the discs are. Named on the command line,
-# only those images are fetched; named none, every one is.
+# Downloads the programs the tiers run into test/data/programs/, tapes and
+# snapshots, pinned by hash the way the firmware and the discs are. Named on
+# the command line, only those are fetched; named none, every one is.
 #
 # Each is a program for testing a Spectrum whose results on real machines
 # are on record, and each is fetched rather than kept here, as Shaker's disc
 # is: Ramsoft's Floating Spy, Richard and Tim Butler's 48K timing tests,
 # five of the ZXTests, which are GPL — Jan Bobrowski's btime, stime and
 # minfo; atime, Patrik Rak's slight modification of stime; and Rak's
-# ptime — and Rak's Timing Test, GPL too.
+# ptime — Rak's Timing Test, GPL too, and Mark Woodmass's IFF2 Bug, as
+# the tape and as the .z80 snapshot it is released as. Beside them is one
+# program for a machine not built here, Weiv's screen switching test for
+# the +2A and +3, a snapshot a +2 must refuse.
 # All of them are served from zxe.io's depot, which catalogues each release
 # under its title, date and author; Floating Spy, the ZXTests and the Timing
 # Test come as archives, fetched once a run however many tapes are taken
 # out of them, and both the archive and each tape are pinned.
 #
-# Pinned by content on 2026-11-27.
+# Pinned by content on 2026-11-27, the last three on 2026-11-28.
 set -e
 
-tapes_directory="$(cd "$(dirname "$0")/.." && pwd)/test/data/tapes"
+programs_directory="$(cd "$(dirname "$0")/.." && pwd)/test/data/programs"
 depot="https://zxe.io/depot/software/ZX%20Spectrum"
 
 # file|sha256|archive|its sha256|where it is served|its path in the archive,
@@ -30,12 +33,15 @@ stime.tap|b4658848ab96d0fef71b998948b3d46ea4ccd595954ce99a9b77f8bec18559ca|zxtes
 atime.tap|bbba33942da839d747b24c38c6e7762974d8c0922163e386cd558e5254886b60|zxtests.zip|911bffcab0d5c424c7a1e97cb8c179445637117c3c6bf6797f790f34599bb0c0|$depot/ZXTests%20v3p%20%282014-03-20%29%28Rak,%20Patrik%29%5B%21%5D.zip
 minfo.tap|7caff77f607d58e4f3df8b5e69d4cd6803b67d79f19a8298ee2fcc37630c3375|zxtests.zip|911bffcab0d5c424c7a1e97cb8c179445637117c3c6bf6797f790f34599bb0c0|$depot/ZXTests%20v3p%20%282014-03-20%29%28Rak,%20Patrik%29%5B%21%5D.zip
 ptime.tap|b52a7e55ce47b01e3792d40050858918a022d3f4c66871bd6b74c988351cdce7|zxtests.zip|911bffcab0d5c424c7a1e97cb8c179445637117c3c6bf6797f790f34599bb0c0|$depot/ZXTests%20v3p%20%282014-03-20%29%28Rak,%20Patrik%29%5B%21%5D.zip
-timing.tap|da62ba6438af1398b3e1d1bbd3627985373b8cc81a72628421285329f4903962|timingtest.zip|bacff01453a01c14754c167b5b02695ec29a0a5960c2f202b52b26494c2e8dff|$depot/Timing%20Test%20v0.3%20%282013-12-09%29%28Rak,%20Patrik%29%5B%21%5D.zip|timingtest-0.3/timing.tap"
+timing.tap|da62ba6438af1398b3e1d1bbd3627985373b8cc81a72628421285329f4903962|timingtest.zip|bacff01453a01c14754c167b5b02695ec29a0a5960c2f202b52b26494c2e8dff|$depot/Timing%20Test%20v0.3%20%282013-12-09%29%28Rak,%20Patrik%29%5B%21%5D.zip|timingtest-0.3/timing.tap
+iff2bug.tap|b7ad26a273f70d7afcceb1519f2dfd1c9749144c2aa7c76b9d9263871ff216d7|||$depot/IFF2%20Bug%20%282023-04-30%29%28Woodmass%2C%20Mark%29%5B%21%5D.tap
+iff2bug.z80|4a33c94fb79556cbfb8d4213d8c854614f8d8da3e0ce14c7c262b763b50e9c34|||$depot/IFF2%20Bug%20%282023-04-30%29%28Woodmass%2C%20Mark%29%5B%21%5D.z80
+screenswitch.z80|bcb07ade1222e94da4be0e9534b95ff6cada270577426815790bad309c97527e|||$depot/%2B2A-%2B3%20Screen%20Switching%20Test%20%282024-11-30%29%28Weiv%29%5B%21%5D.z80"
 
 asked="$*"
 for name in $asked; do
     if ! echo "$images" | cut -d'|' -f1 | grep -qxF "$name"; then
-        echo "no tape image here is named $name" >&2
+        echo "no program here is named $name" >&2
         exit 1
     fi
 done
@@ -75,7 +81,7 @@ member_of() {
 # half-written file.
 fetch() {
     file="$1" expected="$2" archive="$3" archive_hash="$4" url="$5" member="${6:-$1}"
-    staged="$tapes_directory/$file.$$.incomplete"
+    staged="$programs_directory/$file.$$.incomplete"
     if [ -z "$archive" ]; then
         if ! curl -fsSL "$url" -o "$staged"; then
             rm -f "$staged"
@@ -84,7 +90,7 @@ fetch() {
         fi
     else
         # An archive already fetched and found sound this run is used again.
-        download="$tapes_directory/$archive.$$.incomplete"
+        download="$programs_directory/$archive.$$.incomplete"
         if [ ! -f "$download" ]; then
             if ! curl -fsSL "$url" -o "$download"; then
                 rm -f "$download"
@@ -111,7 +117,7 @@ fetch() {
         return 1
     fi
     # Called on the left of ||, where set -e stands down.
-    mv "$staged" "$tapes_directory/$file" || return 1
+    mv "$staged" "$programs_directory/$file" || return 1
 }
 
 # An image that cannot be had is reported and the others asked for are
@@ -121,14 +127,14 @@ unfetched=""
 
 # Whatever this run staged and did not keep, archives included, goes at
 # its end.
-trap 'rm -f "$tapes_directory"/*."$$".incomplete' EXIT
+trap 'rm -f "$programs_directory"/*."$$".incomplete' EXIT
 
-mkdir -p "$tapes_directory"
+mkdir -p "$programs_directory"
 for image in $images; do
     file="$(echo "$image" | cut -d'|' -f1)"
     expected="$(echo "$image" | cut -d'|' -f2)"
     wanted "$file" || continue
-    destination="$tapes_directory/$file"
+    destination="$programs_directory/$file"
     if [ -f "$destination" ] && [ "$(hash_of "$destination")" = "$expected" ]; then
         continue
     fi
@@ -143,4 +149,4 @@ if [ -n "$unfetched" ]; then
     echo "not fetched:$unfetched" >&2
     exit 1
 fi
-echo "tapes are in $tapes_directory"
+echo "programs are in $programs_directory"

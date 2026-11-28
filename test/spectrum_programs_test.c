@@ -35,13 +35,14 @@
  *
  * Each test below cites its record.
  *
- * Needs the firmware and the programs: run `make roms tapes`.
+ * Needs the firmware and the programs: run `make roms programs`.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "spectrum.h"
+#include "spectrum_snapshot.h"
 #include "tape.h"
 #include "test.h"
 #include "tzx.h"
@@ -61,7 +62,7 @@
 #define FRAMES_BETWEEN_LOOKS 50
 
 static const char *rom_directory = "roms";
-static const char *tape_directory = "test/data/tapes";
+static const char *program_directory = "test/data/programs";
 static uint8_t rom[SPECTRUM_PLUS2_ROM_SIZE]; /* room for either model's */
 static uint8_t ram[SPECTRUM_RAM_128K];
 static uint8_t framebuffer[SPECTRUM_LARGEST_FRAMEBUFFER];
@@ -283,7 +284,7 @@ static bool load_program(spectrum_model model, const char *name, const char *sho
     return false;
   }
   size_t length = 0;
-  if (!read_file(tape_directory, name, image, sizeof image, &length, "make tapes")) {
+  if (!read_file(program_directory, name, image, sizeof image, &length, "make programs")) {
     return false;
   }
   const char *problem = NULL;
@@ -311,6 +312,23 @@ static bool load_program(spectrum_model model, const char *name, const char *sho
   }
   tape_play(&tape);
   return run_until(showing, MOST_FRAMES_TO_LOAD);
+}
+
+/* A program released as a .z80 snapshot, picked up from it. */
+static bool load_snapshot(spectrum_model model, const char *name) {
+  if (!power_on(model)) {
+    return false;
+  }
+  size_t length = 0;
+  if (!read_file(program_directory, name, image, sizeof image, &length, "make programs")) {
+    return false;
+  }
+  const char *problem = NULL;
+  if (!spectrum_snapshot_load_z80(&spectrum, image, length, &problem)) {
+    TEST_FAIL("%s was refused: %s", name, problem);
+    return false;
+  }
+  return true;
 }
 
 /* Change one of a BASIC program's variables and carry on from a line: BREAK
@@ -875,12 +893,79 @@ static void ptime_meets_the_first_line_as_on_alfords_plus2(void) {
   }
 }
 
+/* Mark Woodmass's IFF2 Bug runs LD A,I at T-states either side of the
+   interrupt and prints, for each, the parity flag it found: the flag is
+   IFF2, but an interrupt taken during the instruction clears it. Ricardo
+   Martínez Cantero ran its 2021-09-19 release on a recreated 48K with an ST
+   Z84C00 and its 2012-08-16 release on one with a GoldStar Z8400, and
+   photographed this same table on both
+   (https://github.com/redcode/Z80/wiki/IFF2-Bug, which gives the 2021
+   release's table as the 2023-04-30 release's too, the one run here). */
+static const char *const iff2_bug_table[] = {
+    "12000  PV: 1", "14334  PV: 1", "14335  PV: 1", "14336  PV: 1", "32766  PV: 1", "32767  PV: 1",
+    "32768  PV: 1", "49140  PV: 1", "49141  PV: 1", "49142  PV: 1", "69877  PV: 1", "69878  PV: 1",
+    "69879  PV: 0", "69880  PV: 0", "69881  PV: 0", "69882  PV: 0", "69883  PV: 0", "69884  PV: 0",
+    "69885  PV: 0", "69886  PV: 0", "69887  PV: 0",
+};
+
+#define FRAMES_TO_RUN_IFF2_BUG 1000
+
+static void expect_the_iff2_bug_table(void) {
+  if (!run_until("0 OK, 40:1", FRAMES_TO_RUN_IFF2_BUG)) {
+    return;
+  }
+  for (size_t index = 0; index < sizeof iff2_bug_table / sizeof iff2_bug_table[0]; index++) {
+    if (!row_reads(iff2_bug_table[index])) {
+      TEST_FAIL("no row reads \"%s\"; the screen reads:", iff2_bug_table[index]);
+      report_screen();
+      return;
+    }
+  }
+}
+
+/* The release's .z80 resumes at the prompt with the program in memory, so
+   it is RUN — R at the K cursor — as a person would. The table printed
+   right shows the registers, the RAM and the interrupts restored, with the
+   48K's timing and the processor's IFF2; where the beam stood it cannot
+   show, since the program times itself from the interrupt. */
+static void iff2_bug_from_its_snapshot_reads_as_on_two_real_48ks(void) {
+  if (!load_snapshot(SPECTRUM_48K, "iff2bug.z80") || !type_text("r\n")) {
+    return;
+  }
+  expect_the_iff2_bug_table();
+}
+
+/* And the same release's tape, which runs itself once loaded. */
+static void iff2_bug_from_its_tape_reads_the_same(void) {
+  if (!load_program(SPECTRUM_48K, "iff2bug.tap", "PV:")) {
+    return;
+  }
+  expect_the_iff2_bug_table();
+}
+
+/* Weiv's screen switching test for the +2A and +3, a .z80 that says it is
+   a +3's: its memory is paged by a port a +2 has not got, and a +2 refuses
+   it by name. */
+static void a_plus2_refuses_a_plus3s_snapshot(void) {
+  if (!power_on(SPECTRUM_PLUS2)) {
+    return;
+  }
+  size_t length = 0;
+  if (!read_file(program_directory, "screenswitch.z80", image, sizeof image, &length,
+                 "make programs")) {
+    return;
+  }
+  const char *problem = NULL;
+  TEST_CHECK(!spectrum_snapshot_load_z80(&spectrum, image, length, &problem));
+  TEST_CHECK(problem != NULL && strstr(problem, "+3") != NULL);
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     rom_directory = argv[1];
   }
   if (argc > 2) {
-    tape_directory = argv[2];
+    program_directory = argv[2];
   }
   TEST_RUN(floating_spy_finds_the_bus_where_ramsofts_48k_has_it);
   TEST_RUN(floating_spy_reads_a_contended_port_where_smiths_48k_did);
@@ -892,5 +977,8 @@ int main(int argc, char **argv) {
   TEST_RUN(minfo_reads_the_plus2_as_iborras_did);
   TEST_RUN(the_timing_test_reads_as_on_iborras_plus2);
   TEST_RUN(ptime_meets_the_first_line_as_on_alfords_plus2);
+  TEST_RUN(iff2_bug_from_its_snapshot_reads_as_on_two_real_48ks);
+  TEST_RUN(iff2_bug_from_its_tape_reads_the_same);
+  TEST_RUN(a_plus2_refuses_a_plus3s_snapshot);
   return TEST_REPORT("spectrum programs");
 }
